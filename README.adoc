@@ -13,14 +13,13 @@ Git is far more flexible than existing forges assume.
 Large files can be fetched lazily via partial cloning and promisor remotes.
 New libraries, e.g. https://github.com/GitoxideLabs/gitoxide[Gitoxide], can provide atomic updates across multiple refs.
 Reflection in modern programming languages, such as https://facet.rs[`facet`], allows for more general object storage, diffing, and merging with a single procedural macro.
-// TODO
+We believe that these recent advances have removed the last remaining roadblocks to a technical end that many have tried and failed to reach before: project data stored directly in verifiable Git objects.
 
 == Values
 
-
-In a 2017 Node Summit talk, [https://youtu.be/Xhx970_JKX4?si=eZI1Sk355juRLAq8&t=105[Platform as a Reflection of Values], the following table of values is presented by Bryan Cantrill.
+In a 2017 Node Summit talk, https://youtu.be/Xhx970_JKX4?si=eZI1Sk355juRLAq8&t=105[Platform as a Reflection of Values], the following table of values is presented by Bryan Cantrill.
 He notes that these values are often in tension with one another, and engineering projects must prioritize some over others.
-In the interest of transparency (one of the values this project prioritizes!) the values this project deliberately prioritizes over all others are discussed immediately below.
+In the interest of transparency (one of this project's core values) the values this project deliberately prioritizes over all others are discussed immediately below.
 
 [%autowidth,cols="3*"]
 |===
@@ -36,19 +35,33 @@ In the interest of transparency (one of the values this project prioritizes!) th
 
 === Simplicity
 
-// TODO
+This project aspires to be simple.
+All project metadata – issues, reviews, contributors, repository configurations, releases, etc. – are stored in one databasss: Git's at-rest data model.
+Of course, we will not force the usage of a data model that fundamentally cannot represent modern software projects.
+If we determine the core thesis of this project is false, we will reevaluate.
+As stated above, this project is experimental!
 
 === Extensibility
 
-// TODO
+With all project metadata stored in one data model, there's no reason why projects should be limited by legacy data categories.
+Multiple issue assignees?
+Approvals issued for part of a pull request?
+Reviews entirely outside of pull requests?
+As long as you bring your own schema, we will happily help to track any data that's useful for your project.
 
 === Portability
 
-// TODO
+Your data is yours, and you will never be locked in by platform-specific data formats.
+Want to move to another forge?
+All of your data is one (correctly configured) `git clone` away.
+Our open-source platform and accompanying developer tools will allow you to move your project with ease.
 
 === Transparency
 
-// TODO
+We've all experienced the frustration of platforms changing their policies without warning.
+Worse: too many of us have had to debug failing workflows, only to discover subtle misbehaviors that have no accompanying documentation.
+In this project, as much software as possible will be freely available under permissive open-source licenses.
+Decisions in the development and governance of this project will default to being publicly available, with community input solicited explicitly whenever possible.
 
 == Usage
 
