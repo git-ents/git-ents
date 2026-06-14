@@ -1,0 +1,164 @@
+name: Lint
+
+on:
+  pull_request:
+    types:
+      - opened
+      - review_requested
+      - ready_for_review
+      - reopened
+      - synchronize
+      - edited
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pre-commit:
+    name: Run pre-commit checks
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install pre-commit and hooks
+        run: |
+          uv tool install pre-commit
+          pre-commit install-hooks -c .config/pre-commit.yaml
+
+      - name: Run pre-commit on all files
+        run: pre-commit run -a -c .config/pre-commit.yaml
+
+  validate-pr-title:
+    name: Validate squash commit message
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request && github.event.pull_request.draft == false }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.config/pre-commit.yaml') }}
+          restore-keys: |
+            pre-commit-
+
+      - name: Install pre-commit and hooks
+        run: |
+          uv tool install pre-commit
+          pre-commit install-hooks -c .config/pre-commit.yaml
+
+      - name: Create commit message from PR
+        run: |
+          cat > /tmp/commit-msg.txt << 'EOF'
+          ${{ github.event.pull_request.title }}
+
+          ${{ github.event.pull_request.body }}
+          EOF
+          echo "--- Commit message to validate ---"
+          cat /tmp/commit-msg.txt
+          echo "--- End of commit message ---"
+
+      - name: Find and validate with committed
+        run: |
+          # Find the committed binary in pre-commit cache
+          COMMITTED_BIN=$(find ~/.cache/pre-commit -type f -name committed | head -n 1)
+          if [ -z "$COMMITTED_BIN" ]; then
+            echo "Error: committed binary not found in pre-commit cache"
+            exit 1
+          fi
+          echo "Using committed binary: $COMMITTED_BIN"
+          "$COMMITTED_BIN" --config .config/committed.toml --commit-file /tmp/commit-msg.txt
+
+  cargo-deny:
+    name: Run cargo-deny
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features
+          command: check
+          command-arguments: ${{ matrix.checks }} -c .config/deny.toml
+
+  semver-checks:
+    name: Semver checks
+    runs-on: ubuntu-latest
+    if: |
+      startsWith(github.head_ref, 'release-please--') &&
+      !github.event.pull_request.draft
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: Run semver checks for published crates
+        run: |
+          crate_names=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          published_pkgs=()
+          for crate in $crate_names; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: github-actions-semver-check" \
+              "https://crates.io/api/v1/crates/$crate")
+            if [ "$status" = "200" ]; then
+              echo "✓ '$crate' is published — will run semver-checks"
+              published_pkgs+=("--package" "$crate")
+            else
+              echo "✗ '$crate' is not yet published (HTTP $status) — skipping"
+            fi
+          done
+          if [ "${#published_pkgs[@]}" -gt 0 ]; then
+            cargo semver-checks "${published_pkgs[@]}"
+          else
+            echo "No crates are published yet — skipping semver checks entirely."
+          fi
+
+  lint:
+    name: Lint
+    if: ${{ always() && !github.event.pull_request.draft }}
+    needs: [pre-commit, validate-pr-title, cargo-deny, semver-checks]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          result="${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}"
+          echo "result: $result"
+          [[ "$result" == "success" ]] || exit 1

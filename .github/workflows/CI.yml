@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - review_requested
+      - ready_for_review
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ${{ matrix.platform.runner }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64
+          - runner: ubuntu-24.04
+            target: aarch64
+          - runner: ubuntu-24.04
+            target: armv7
+          - runner: ubuntu-24.04
+            target: s390x
+          - runner: ubuntu-24.04
+            target: ppc64le
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: taiki-e/install-action@nextest
+      - name: Build and compile project
+        run: cargo nextest run --workspace --all-features --no-run
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
+
+  musllinux:
+    runs-on: ${{ matrix.platform.runner }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64
+          - runner: ubuntu-24.04
+            target: aarch64
+          - runner: ubuntu-24.04
+            target: armv7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: taiki-e/install-action@nextest
+      - name: Build and compile project
+        run: cargo nextest run --workspace --all-features --no-run
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
+
+  windows:
+    runs-on: ${{ matrix.platform.runner }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: taiki-e/install-action@nextest
+      - name: Build and compile project
+        run: cargo nextest run --workspace --all-features --no-run
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
+
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - uses: taiki-e/install-action@nextest
+      - name: Build and compile project
+        run: cargo nextest run --workspace --all-features --no-run
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
+
+  man:
+    name: man-generation
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+      - name: Generate man pages
+        run: |
+          cargo run --package git-vendor -- --generate-man target/debug/man
+          cargo run --package git-set-attr -- --generate-man target/debug/man
+
+  ci:
+    name: CI
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) }}
+    needs: [linux, musllinux, windows, macos, man]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          result="${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}"
+          echo "result: $result"
+          [[ "$result" == "success" ]] || exit 1

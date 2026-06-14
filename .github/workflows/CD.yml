@@ -1,0 +1,63 @@
+name: CD
+
+on:
+  release:
+    types: [released, prereleased]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-tag:
+    name: Check release tag
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ github.event_name == 'workflow_dispatch' || steps.check.outputs.match == 'true' }}
+    steps:
+      - name: Match semver tag
+        id: check
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [[ "$TAG" =~ ^git-vendor-v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Release
+    needs: check-tag
+    if: needs.check-tag.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # Used to sign the release artifacts
+      id-token: write
+      # Used to upload release artifacts
+      contents: write
+      # Used to generate artifact attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          toolchain: stable
+      - name: Package crates
+        run: cargo package --workspace
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "target/package/*.crate"
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            cargo publish --workspace --dry-run
+          else
+            cargo publish --workspace --token "$CARGO_REGISTRY_TOKEN"
+          fi

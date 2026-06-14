@@ -1,0 +1,16 @@
+{
+  "pull-request-header": "Release Notes",
+  "changelog-path": "CHANGELOG.md",
+  "draft": false,
+  "include-component-in-tag": true,
+  "include-v-in-tag": true,
+  "release-type": "rust",
+  "initial-version": "0.0.1",
+  "draft-pull-request": true,
+  "pull-request-footer": "This release was generated with [Release Please](https://github.com/googleapis/release-please).",
+  "packages": {
+    "crates/git-ents-server": {}
+  },
+  "plugins": [{ "type": "sentence-case" }, { "type": "cargo-workspace" }],
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
+}
