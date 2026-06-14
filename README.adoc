@@ -53,7 +53,7 @@ As long as you bring your own schema, we will happily help to track any data tha
 
 Your data is yours, and you will never be locked in by platform-specific data formats.
 Want to move to another forge?
-All of your data is one (correctly configured) `git clone` away.
+All of your data is one (correctly configured) `git fetch` away.
 Our open-source platform and accompanying developer tools will allow you to move your project with ease.
 
 === Transparency
