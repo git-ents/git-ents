@@ -1,11 +1,11 @@
 = 🪾 `git-ents`
 Joey Carpinelli <joseph.carpinelli@icloud.com>
 
-[abstract]
-An (in-development) experimental forge with all metadata stored as Git objects.
-
 image:https://github.com/git-ents/git-ents/actions/workflows/CI.yml/badge.svg[CI, link=https://github.com/git-ents/git-ents/actions/workflows/CI.yml]
 image:https://github.com/git-ents/git-ents/actions/workflows/CD.yml/badge.svg[CD, link=https://github.com/git-ents/git-ents/actions/workflows/CD.yml]
+
+[abstract]
+An (in-development) experimental forge with all metadata stored as Git objects.
 
 == Vision
 
