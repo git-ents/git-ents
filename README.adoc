@@ -1,0 +1,55 @@
+= 🪾 `git-ents`
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[abstract]
+An (in-development) experimental forge with all metadata stored as Git objects.
+
+image:https://github.com/git-ents/git-ents/actions/workflows/CI.yml/badge.svg[CI, link=https://github.com/git-ents/git-ents/actions/workflows/CI.yml]
+image:https://github.com/git-ents/git-ents/actions/workflows/CD.yml/badge.svg[CD, link=https://github.com/git-ents/git-ents/actions/workflows/CD.yml]
+
+== Vision
+
+Git is far more flexible than existing forges assume.
+Large files can be fetched lazily via partial cloning and promisor remotes.
+New libraries, e.g. https://github.com/GitoxideLabs/gitoxide[Gitoxide], can provide atomic updates across multiple refs.
+Reflection in modern programming languages, such as https://facet.rs[`facet`], allows for more general object storage, diffing, and merging with a single procedural macro.
+// TODO
+
+== Values
+
+
+In a 2017 Node Summit talk, [https://youtu.be/Xhx970_JKX4?si=eZI1Sk355juRLAq8&t=105[Platform as a Reflection of Values], the following table of values is presented by Bryan Cantrill.
+He notes that these values are often in tension with one another, and engineering projects must prioritize some over others.
+In the interest of transparency (one of the values this project prioritizes!) the values this project deliberately prioritizes over all others are discussed immediately below.
+
+[%autowidth,cols="3*"]
+|===
+| Approachability  | Interoperability | Robustness
+| Availability     | Maintainability  | Safety
+| Compatibility    | Measurability    | Security
+| Composability    | Operability      | #Simplicity#
+| Debuggability    | Performance      | Stability
+| Expressiveness   | #Portability#    | Thoroughness
+| #Extensibility#  | Resiliency       | #Transparency#
+| Integrity        | Rigor            | Velocity
+|===
+
+=== Simplicity
+
+// TODO
+
+=== Extensibility
+
+// TODO
+
+=== Portability
+
+// TODO
+
+=== Transparency
+
+// TODO
+
+== Usage
+
+_More documentation is en route!_
