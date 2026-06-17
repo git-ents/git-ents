@@ -1,0 +1,46 @@
+= Specification for git-ents
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[abstract]
+`git-ents` is a Git hosting service.
+
+[CAUTION]
+====
+This specification is not yet stable and will grow as the project develops.
+====
+
+== Requirements
+
+=== Storage
+
+[role="requirement", id="storage.bare"]
+.Persistent Bare Repository
+--
+Repository state MUST be persisted in a bare Git repository on durable storage.
+--
+
+=== Authentication
+
+[role="requirement", id="auth.ssh"]
+.SSH Authentication
+--
+All client connections MUST be authenticated via SSH public key.
+Password authentication and any other mechanism MUST NOT be offered.
+Connections from unrecognized keys MUST be rejected.
+--
+
+=== Protocol
+
+[role="requirement", id="protocol.git"]
+.Git Remote Compatibility
+--
+`git-ents` MUST function as a full Git remote, supporting clone, fetch, and push via the standard Git pack protocol without any special client configuration.
+--
+
+=== Namespace
+
+[role="requirement", id="namespace.url"]
+.URL
+--
+The service URL MUST be `git-ents.sh/git-ents`.
+--
