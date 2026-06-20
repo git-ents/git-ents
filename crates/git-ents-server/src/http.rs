@@ -211,7 +211,7 @@ fn reconcile_head(repo: &Path) {
         .status();
 }
 
-fn header_value(request: &Request, field: &str) -> Option<String> {
+pub(crate) fn header_value(request: &Request, field: &str) -> Option<String> {
     request
         .headers()
         .iter()

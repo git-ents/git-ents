@@ -25,6 +25,10 @@ struct Args {
     #[arg(long, env = "GIT_PROJECT_ROOT", default_value = "/data/repos")]
     data_dir: PathBuf,
 
+    /// Bearer token required for git operations; when unset, auth is disabled.
+    #[arg(long, env = "ACCESS_TOKEN")]
+    access_token: Option<String>,
+
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
@@ -54,6 +58,12 @@ fn main() -> ExitCode {
     for request in server.incoming_requests() {
         if is_health(&request) {
             let _health = request.respond(tiny_http::Response::from_string("ok"));
+        } else if args
+            .access_token
+            .as_deref()
+            .is_some_and(|token| !authorized(&request, token))
+        {
+            let _denied = request.respond(unauthorized());
         } else if let Err(e) = http::handle(request, &args.data_dir) {
             eprintln!("error: {e}");
         }
@@ -69,4 +79,68 @@ fn main() -> ExitCode {
 /// A liveness probe (and the `/` root) that does not touch git.
 fn is_health(request: &tiny_http::Request) -> bool {
     matches!(request.url(), "/" | "/healthz")
+}
+
+/// Check the request's HTTP Basic credentials against the expected token.
+///
+/// As with GitHub's HTTPS git auth, the username is ignored and the password
+/// field carries the bearer token.
+fn authorized(request: &tiny_http::Request, expected: &str) -> bool {
+    let Some(value) = http::header_value(request, "Authorization") else {
+        return false;
+    };
+    let Some(encoded) = value
+        .strip_prefix("Basic ")
+        .or_else(|| value.strip_prefix("basic "))
+    else {
+        return false;
+    };
+    let Some(decoded) = base64_decode(encoded.trim()) else {
+        return false;
+    };
+    let Some(colon) = decoded.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    decoded.get(colon.saturating_add(1)..) == Some(expected.as_bytes())
+}
+
+/// A `401` carrying the Basic challenge git expects before retrying with creds.
+fn unauthorized() -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let mut response = tiny_http::Response::from_string("unauthorized").with_status_code(401);
+    if let Ok(header) = tiny_http::Header::from_bytes(
+        &b"WWW-Authenticate"[..],
+        &br#"Basic realm="git-ents""#[..],
+    ) {
+        response.add_header(header);
+    }
+    response
+}
+
+/// Decode standard base64 with optional `=` padding; `None` on any bad input.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    fn sextet(byte: u8) -> Option<u32> {
+        let value = u32::from(byte);
+        match byte {
+            b'A'..=b'Z' => Some(value.saturating_sub(u32::from(b'A'))),
+            b'a'..=b'z' => Some(value.saturating_sub(u32::from(b'a')).saturating_add(26)),
+            b'0'..=b'9' => Some(value.saturating_sub(u32::from(b'0')).saturating_add(52)),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let bytes: &[u8] = input.trim_end_matches('=').as_bytes();
+    let mut out = Vec::new();
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &byte in bytes {
+        acc = (acc << 6) | sextet(byte)?;
+        bits = bits.saturating_add(6);
+        if bits >= 8 {
+            bits = bits.saturating_sub(8);
+            out.push(u8::try_from((acc >> bits) & 0xFF).ok()?);
+        }
+    }
+    Some(out)
 }
