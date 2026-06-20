@@ -1,9 +1,26 @@
 name: CD
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/git-ents-server/**"
+      - ".config/fly.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
   release:
     types: [released, prereleased]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "What to run"
+        type: choice
+        default: deploy
+        options:
+          - deploy
+          - publish
+          - both
 
 permissions:
   contents: read
@@ -11,7 +28,7 @@ permissions:
 jobs:
   check-tag:
     name: Check release tag
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'publish' || inputs.target == 'both'))
     runs-on: ubuntu-latest
     outputs:
       should-publish: ${{ github.event_name == 'workflow_dispatch' || steps.check.outputs.match == 'true' }}
@@ -61,3 +78,18 @@ jobs:
           else
             cargo publish --workspace --token "$CARGO_REGISTRY_TOKEN"
           fi
+
+  deploy-server:
+    name: Deploy server
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.target == 'deploy' || inputs.target == 'both'))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-server
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config .config/fly.toml --remote-only
