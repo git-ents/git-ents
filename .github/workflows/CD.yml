@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - "crates/git-ents/**"
       - "crates/git-ents-server/**"
       - ".config/fly.toml"
       - "Cargo.toml"

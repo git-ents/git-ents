@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/git-ents-server"]
+members = ["crates/git-ents", "crates/git-ents-server"]
 
 [workspace.package]
 edition = "2024"
