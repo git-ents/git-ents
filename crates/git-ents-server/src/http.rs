@@ -33,10 +33,10 @@ pub fn handle(mut request: Request, data_dir: &Path) -> std::io::Result<()> {
     // bare repo so the very first request finds it.
     let is_push = query_string.contains("service=git-receive-pack")
         || path_info.ends_with("/git-receive-pack");
-    if is_push
-        && let Some(repo) = repo_dir(data_dir, &path_info)
+    let push_repo = is_push.then(|| repo_dir(data_dir, &path_info)).flatten();
+    if let Some(repo) = &push_repo
         && !repo.exists()
-        && let Err(e) = init_bare_repo(&repo)
+        && let Err(e) = init_bare_repo(repo)
     {
         return request
             .respond(Response::from_string(format!("init failed: {e}")).with_status_code(500));
@@ -76,6 +76,16 @@ pub fn handle(mut request: Request, data_dir: &Path) -> std::io::Result<()> {
     }
 
     let output = child.wait_with_output()?;
+
+    // A fresh bare repo's `HEAD` points at its initial branch, which may not be
+    // the branch the client just pushed; without a valid `HEAD`, clones check
+    // out nothing. Adopt a pushed branch so the repo stays clonable.
+    if let Some(repo) = &push_repo
+        && output.status.success()
+    {
+        reconcile_head(repo);
+    }
+
     request.respond(build_response(&output.stdout))
 }
 
@@ -131,6 +141,8 @@ fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
     let init = Command::new("git")
         .arg("init")
         .arg("--bare")
+        .arg("-b")
+        .arg("main")
         .arg(repo)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -151,6 +163,52 @@ fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other("git config http.receivepack failed"));
     }
     Ok(())
+}
+
+/// Point `HEAD` at a real branch when it dangles after a push.
+///
+/// Best-effort: the push already succeeded, so failures here are ignored.
+fn reconcile_head(repo: &Path) {
+    let head_valid = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if head_valid {
+        return;
+    }
+
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    let branches = String::from_utf8_lossy(&output.stdout);
+    let branches: Vec<&str> = branches.lines().filter(|line| !line.is_empty()).collect();
+    let Some(branch) = branches
+        .iter()
+        .find(|name| **name == "main")
+        .or_else(|| branches.iter().find(|name| **name == "master"))
+        .or_else(|| branches.first())
+    else {
+        return;
+    };
+
+    let _set = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn header_value(request: &Request, field: &str) -> Option<String> {
