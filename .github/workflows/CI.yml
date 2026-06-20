@@ -141,6 +141,7 @@ jobs:
             ${{ runner.os }}-cargo-build-
       - name: Generate man pages
         run: |
+          mkdir -p target/debug/man
           cargo run --package git-ents-server -- --generate-man target/debug/man
 
   ci:
