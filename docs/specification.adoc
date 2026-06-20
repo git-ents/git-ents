@@ -1,13 +1,13 @@
-= Specification for git-ents
+= Specification
 Joey Carpinelli <joseph.carpinelli@icloud.com>
 
 [abstract]
-`git-ents` is a Git hosting service.
+The `git-ents` project aspires to be a Git server configuration with https://fly.io[Fly.io], and a package manager client application which interacts with the Git server to retrieve binaries and other software bundles.
+By extending the role of the Git server, and using recent novel technologies e.g. https://github.com/GitoxideLabs/gitoxide[Gitoxide], we aim to provide new capabilities to software developers.
+
 
 [CAUTION]
-====
 This specification is not yet stable and will grow as the project develops.
-====
 
 == Requirements
 
@@ -27,6 +27,9 @@ Repository state MUST be persisted in a bare Git repository on durable storage.
 All client connections MUST be authenticated via SSH public key.
 Password authentication and any other mechanism MUST NOT be offered.
 Connections from unrecognized keys MUST be rejected.
+
+[IMPORTANT]
+This requirement is deliberately unstable, and will change to allow other authentication methods as the project matures.
 --
 
 === Protocol
@@ -34,7 +37,7 @@ Connections from unrecognized keys MUST be rejected.
 [role="requirement", id="protocol.git"]
 .Git Remote Compatibility
 --
-`git-ents` MUST function as a full Git remote, supporting clone, fetch, and push via the standard Git pack protocol without any special client configuration.
+The server MUST function as a full Git remote, supporting clone, fetch, and push via the standard Git pack protocol without any special client configuration.
 --
 
 === Namespace
