@@ -6,6 +6,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { workspace = true }
+clap_mangen = { workspace = true }
 
 [lints]
 workspace = true
