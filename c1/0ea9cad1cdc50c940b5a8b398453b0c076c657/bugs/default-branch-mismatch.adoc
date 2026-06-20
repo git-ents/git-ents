@@ -1,0 +1,11 @@
+
+The server auto-creates a remote with a plain `git init --bare`, which sets the repo's `HEAD` to whatever git's default branch is on the host — `master` on the CI runners.
+The test then pushes a branch named `main`.
+The push creates `refs/heads/main`, but `HEAD` still points at `refs/heads/master`, which never gets created.
+
+When a client clones that repo, git can't resolve the remote `HEAD` to a real branch, so it checks out nothing.
+The clone command still exits 0, so the test's `run_git` assertion passes — but the resulting clone has no `HEAD`, and the next step, `git rev-parse HEAD`, exits non-zero.
+That's the panic at `tests/server.rs:124`.
+It fails on every platform because it's a branch-name mismatch, not anything platform-specific.
+It passes on my machine only because my global git config sets `init.defaultBranch = main`, so the server's `HEAD` happens to line up with the pushed branch.
+And because `fail-fast` is on, the first job to hit it cancels the rest of the matrix, turning the whole `CI` gate red.
