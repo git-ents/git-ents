@@ -1,7 +1,7 @@
 //! Git Ents server — helpful guardians of your git trees.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+mod http;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -21,6 +21,10 @@ struct Args {
     #[arg(long, env = "PORT", default_value = "8080")]
     port: u16,
 
+    /// Directory holding the bare repositories served over HTTP.
+    #[arg(long, env = "GIT_PROJECT_ROOT", default_value = "/data/repos")]
+    data_dir: PathBuf,
+
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
@@ -38,27 +42,31 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let listener = match TcpListener::bind(format!("0.0.0.0:{}", args.port)) {
-        Ok(l) => l,
+    let server = match tiny_http::Server::http(format!("0.0.0.0:{}", args.port)) {
+        Ok(server) => server,
         Err(e) => {
             eprintln!("error: failed to bind to port {}: {e}", args.port);
             return ExitCode::FAILURE;
         }
     };
 
-    for (count, stream) in listener.incoming().enumerate() {
-        if let Ok(mut stream) = stream {
-            let mut buf = [0u8; 4096];
-            let _read = stream.read(&mut buf);
-            let _write = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    let mut count: usize = 0;
+    for request in server.incoming_requests() {
+        if is_health(&request) {
+            let _health = request.respond(tiny_http::Response::from_string("ok"));
+        } else if let Err(e) = http::handle(request, &args.data_dir) {
+            eprintln!("error: {e}");
         }
-        if args
-            .max_requests
-            .is_some_and(|max| count.saturating_add(1) >= max)
-        {
+        count = count.saturating_add(1);
+        if args.max_requests.is_some_and(|max| count >= max) {
             break;
         }
     }
 
     ExitCode::SUCCESS
+}
+
+/// A liveness probe (and the `/` root) that does not touch git.
+fn is_health(request: &tiny_http::Request) -> bool {
+    matches!(request.url(), "/" | "/healthz")
 }

@@ -17,6 +17,7 @@ clap_mangen = "0.2.31"
 gix = { version = "0.83", features = ["no-default-features"] }
 tempfile = "3"
 thiserror = "2"
+tiny_http = "0.12"
 
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/

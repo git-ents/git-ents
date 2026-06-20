@@ -8,6 +8,10 @@ license.workspace = true
 [dependencies]
 clap = { workspace = true }
 clap_mangen = { workspace = true }
+tiny_http = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
