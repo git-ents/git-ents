@@ -37,4 +37,5 @@ locale = "en-us"
 # Keep these empty to not ignore anything by default
 extend-ignore-identifiers-re = []
 extend-ignore-words-re = []
-extend-ignore-re = []
+# Fly.io 6PN (private network) — a real term, not a typo
+extend-ignore-re = ["6PN"]

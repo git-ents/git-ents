@@ -8,7 +8,10 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser};
 
 #[derive(Parser)]
-#[command(name = "git-ents-server", about = "Helpful guardians of your git trees.")]
+#[command(
+    name = "git-ents-server",
+    about = "Helpful guardians of your git trees."
+)]
 struct Args {
     /// Generate man pages into the given directory.
     #[arg(long, value_name = "DIR")]
@@ -43,15 +46,16 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut count = 0usize;
-    for stream in listener.incoming() {
+    for (count, stream) in listener.incoming().enumerate() {
         if let Ok(mut stream) = stream {
             let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let _read = stream.read(&mut buf);
+            let _write = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         }
-        count += 1;
-        if args.max_requests.is_some_and(|max| count >= max) {
+        if args
+            .max_requests
+            .is_some_and(|max| count.saturating_add(1) >= max)
+        {
             break;
         }
     }

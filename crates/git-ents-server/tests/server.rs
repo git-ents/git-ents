@@ -1,4 +1,4 @@
-#![allow(missing_docs)]
+#![allow(missing_docs, reason = "integration test binary")]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -32,7 +32,10 @@ fn responds_and_shuts_down() {
         stream.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        assert!(response.starts_with("HTTP/1.1 200 OK"), "unexpected response: {response}");
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "unexpected response: {response}"
+        );
     }
 
     let status = child.wait().unwrap();
