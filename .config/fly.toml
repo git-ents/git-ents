@@ -7,7 +7,7 @@ app = 'git-ents-server'
 primary_region = 'iad'
 
 [build]
-  dockerfile = "crates/git-ents-server/Dockerfile"
+  dockerfile = "../crates/git-ents-server/Dockerfile"
 
 [env]
   PORT = '8080'
