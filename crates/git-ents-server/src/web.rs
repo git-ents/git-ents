@@ -324,6 +324,62 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; }
 
 .shell-note { color: var(--color-text-muted); font-size: .95rem; max-width: 44rem; margin-bottom: 1.5rem; }
+.shell-note code { font-family: var(--font-mono); font-size: .85em; background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }
+.card-row.muted { color: var(--color-text-muted); }
+.card-row.muted code { font-family: var(--font-mono); background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }
+
+.hooks-grid { display: grid; grid-template-columns: 20rem minmax(0, 1fr); gap: 20px; align-items: start; }
+.hooks-grid .card { margin-bottom: 0; }
+.hooks-grid .blob { border: 0; border-radius: 0; box-shadow: none; margin: 0; }
+@media (max-width: 800px) { .hooks-grid { grid-template-columns: 1fr; } }
+
+.issues-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--color-border); position: relative; }
+.issues-head::after { content: ""; position: absolute; bottom: -1px; left: 0; width: 3rem; height: 2px; background: var(--color-accent); border-radius: 1px; }
+.issues-head .page-title { white-space: nowrap; }
+.btn-primary { margin-left: auto; display: inline-flex; align-items: center; gap: .4rem; font-family: var(--font-sans); font-size: .85rem; font-weight: 600; color: var(--color-bg); background: var(--color-accent); border: none; border-radius: var(--radius-sm); padding: .45rem .9rem; cursor: pointer; transition: background .15s; }
+.btn-primary:hover { background: var(--color-link-hover); }
+.btn-primary .icon { color: currentColor; }
+.filter-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.filter-search { flex: 1; min-width: 14rem; position: relative; display: flex; align-items: center; }
+.filter-search .icon { position: absolute; left: .65rem; color: var(--color-text-muted); }
+.filter-search input { width: 100%; font-family: var(--font-sans); font-size: .85rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem .42rem 2rem; }
+.filter-search input:focus { outline: none; border-color: var(--color-accent); }
+.chip { font-family: var(--font-mono); font-size: .76rem; color: var(--color-text-muted); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: .2rem .7rem; cursor: default; }
+.chip.active { color: var(--color-bg); background: var(--color-accent); border-color: var(--color-accent); }
+.card-header.subtabs { display: flex; gap: 1.25rem; text-transform: none; letter-spacing: 0; }
+.subtab { display: inline-flex; align-items: center; gap: .35rem; color: var(--color-text-muted); }
+.subtab.active { color: var(--color-text); font-weight: 600; }
+.subtab .icon { width: 13px; height: 13px; }
+.subtab.active .icon { color: var(--s-func); }
+
+.settings { max-width: 46rem; }
+.field { padding: .85rem 1.1rem; }
+.field + .field { border-top: 1px solid var(--color-border); }
+.field label { display: block; font-size: .82rem; font-weight: 600; margin-bottom: .35rem; }
+.field input, .field textarea, .field select { width: 100%; font-family: var(--font-sans); font-size: .9rem; color: var(--color-text); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 8px; padding: .5rem .7rem; resize: vertical; }
+.field input:focus, .field textarea:focus { outline: none; border-color: var(--color-accent); }
+.field input[readonly], .field textarea[readonly] { color: var(--color-text-muted); }
+.feature-row, .danger-row { display: flex; align-items: center; gap: 1rem; padding: .85rem 1.1rem; }
+.feature-row + .feature-row, .danger-row + .danger-row { border-top: 1px solid var(--color-border); }
+.feature-row > div:first-child, .danger-row > div:first-child { flex: 1; }
+.feature-row p, .danger-row p { font-size: .82rem; margin: .1rem 0 0; }
+.toggle { flex-shrink: 0; position: relative; width: 42px; height: 24px; border-radius: var(--radius-pill); background: var(--color-border); transition: background .18s; }
+.toggle .knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .18s; }
+.toggle.on { background: var(--color-accent); }
+.toggle.on .knob { left: 21px; }
+.visibility-row { display: flex; align-items: flex-start; gap: .7rem; padding: .85rem 1.1rem; }
+.visibility-row + .visibility-row { border-top: 1px solid var(--color-border); }
+.visibility-row.sel { background: var(--color-accent-subtle); }
+.visibility-row p { font-size: .82rem; margin: .1rem 0 0; }
+.radio { flex-shrink: 0; margin-top: .2rem; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--color-border); position: relative; }
+.radio.on { border-color: var(--color-accent); }
+.radio.on::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--color-accent); }
+.card.danger { border-color: var(--s-keyword); }
+.card.danger .card-header { color: var(--s-keyword); }
+.btn-danger-outline, .btn-danger { font-family: var(--font-sans); font-size: .82rem; font-weight: 600; border-radius: var(--radius-sm); padding: .4rem .9rem; cursor: pointer; flex-shrink: 0; }
+.btn-danger-outline { color: var(--s-keyword); background: transparent; border: 1px solid var(--s-keyword); }
+.btn-danger-outline:hover { background: var(--diff-del); }
+.btn-danger { color: #fff; background: var(--s-keyword); border: none; }
 
 .site-footer { border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .8rem; margin-top: auto; }
 .footer-inner { max-width: var(--max-width); margin: 0 auto; padding: 2rem 1.5rem; text-align: center; }
@@ -395,6 +451,9 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"blob", sub)) => blob_page(repo, &meta, sub).await,
         Some((&"commit", &[sha])) => commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => releases_page(repo, &meta).await.into_response(),
+        Some((&"hooks", &[])) => hooks_page(repo, &meta).await.into_response(),
+        Some((&"issues", &[])) => issues_page(&meta).into_response(),
+        Some((&"settings", &[])) => settings_page(&meta).into_response(),
         _ => not_found().into_response(),
     }
 }
@@ -1368,6 +1427,174 @@ async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
+/// The Hooks tab: CI is defined as plain git hooks, configured in
+/// `.gitents/hooks.toml`. Run logs need a store that does not exist yet, so the
+/// run list is an empty state; the configuration shown is the real file.
+async fn hooks_page(repo: &Path, meta: &RepoMeta) -> Markup {
+    let config = git_output_bytes(repo, &["cat-file", "-p", "HEAD:.gitents/hooks.toml"])
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    repo_shell(
+        meta,
+        Tab::Hooks,
+        "Hooks",
+        html! {
+            div.page-header { h1.page-title { "Hooks" } }
+            p.shell-note {
+                "CI runs as plain "
+                code { "pre-receive" } " / " code { "post-receive" }
+                " git hooks, configured in " code { ".gitents/hooks.toml" }
+                ". Runs and logs appear here once hooks execute on a push."
+            }
+            div.hooks-grid {
+                div.card {
+                    div.card-header { "Recent runs" }
+                    div.card-row.muted { "No runs recorded yet." }
+                }
+                @if let Some(config) = &config {
+                    div.card {
+                        div.card-header { (icon_file()) " .gitents/hooks.toml" }
+                        (blob_body("hooks.toml", config))
+                    }
+                } @else {
+                    div.card {
+                        div.card-header { "Configuration" }
+                        div.card-row.muted { "No " code { ".gitents/hooks.toml" } " in this repository." }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// The Issues ("Bug reports") tab. There is no issue store yet, so the filters
+/// are present for the design and the list is an empty state.
+fn issues_page(meta: &RepoMeta) -> Markup {
+    repo_shell(
+        meta,
+        Tab::Issues,
+        "Bug reports",
+        html! {
+            div.issues-head {
+                h1.page-title { "Bug reports" }
+                button.btn-primary type="button" { (icon_plus()) "New issue" }
+            }
+            div.filter-row {
+                div.filter-search {
+                    (icon_search())
+                    input type="search" placeholder="Filter bug reports" aria-label="Filter";
+                }
+                span.chip.active { "All" }
+                span.chip { "bug" }
+                span.chip { "enhancement" }
+                span.chip { "question" }
+            }
+            div.card {
+                div.card-header.subtabs {
+                    span.subtab.active { (icon_issue()) "Open" span.tab-count { "0" } }
+                    span.subtab { (icon_check()) "Closed" span.tab-count { "0" } }
+                }
+                div.blankslate {
+                    h2 { "No bug reports yet" }
+                    p { "Open one to start tracking a bug." }
+                }
+            }
+        },
+    )
+}
+
+/// The Settings tab. Persisting changes needs a config store that does not
+/// exist yet, so the controls reflect the repository's current real values and
+/// are presented read-only.
+fn settings_page(meta: &RepoMeta) -> Markup {
+    let name = meta.rel.rsplit('/').next().unwrap_or(&meta.rel);
+    repo_shell(
+        meta,
+        Tab::Settings,
+        "Repository settings",
+        html! {
+            div.settings {
+                div.page-header { h1.page-title { "Repository settings" } }
+                p.shell-note { "These reflect the repository's current configuration." }
+
+                div.card {
+                    div.card-header { "General" }
+                    div.field {
+                        label { "Repository name" }
+                        input type="text" value=(name) readonly;
+                    }
+                    div.field {
+                        label { "Description" }
+                        textarea rows="2" readonly { (meta.description.as_deref().unwrap_or_default()) }
+                    }
+                    div.field {
+                        label { "Default branch" }
+                        input type="text" value=(meta.branch.as_deref().unwrap_or("—")) readonly;
+                    }
+                }
+
+                div.card {
+                    div.card-header { "Features" }
+                    (feature_row("Bug reports", "Track and triage bugs.", meta.issues > 0))
+                    (feature_row("Releases", "Publish tagged releases.", meta.releases > 0))
+                    (feature_row("Hooks (CI)", "Run git hooks on push.", meta.has_hooks))
+                    (feature_row("Wiki", "A separate documentation space.", false))
+                }
+
+                div.card {
+                    div.card-header { "Visibility" }
+                    (visibility_row("Public", "Anyone can read this repository.", true))
+                    (visibility_row("Private", "Only collaborators can read it.", false))
+                }
+
+                div.card.danger {
+                    div.card-header { "Danger zone" }
+                    div.danger-row {
+                        div {
+                            strong { "Archive this repository" }
+                            p.muted { "Make it read-only." }
+                        }
+                        button.btn-danger-outline type="button" { "Archive" }
+                    }
+                    div.danger-row {
+                        div {
+                            strong { "Delete this repository" }
+                            p.muted { "This cannot be undone." }
+                        }
+                        button.btn-danger type="button" { "Delete" }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// A Features row with a static toggle reflecting `on`.
+fn feature_row(title: &str, desc: &str, on: bool) -> Markup {
+    html! {
+        div.feature-row {
+            div {
+                strong { (title) }
+                p.muted { (desc) }
+            }
+            span.toggle.on[on] { span.knob {} }
+        }
+    }
+}
+
+/// A Visibility radio row, selected when `on`.
+fn visibility_row(title: &str, desc: &str, on: bool) -> Markup {
+    html! {
+        div.visibility-row.sel[on] {
+            span.radio.on[on] {}
+            div {
+                strong { (title) }
+                p.muted { (desc) }
+            }
+        }
+    }
+}
+
 /// Render a unified diff, coloring each line by its leading marker.
 fn diff_view(patch: &str) -> Markup {
     if patch.trim().is_empty() {
@@ -1529,6 +1756,24 @@ fn icon_folder() -> Markup {
 fn icon_file() -> Markup {
     svg(
         "M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z",
+    )
+}
+
+fn icon_plus() -> Markup {
+    svg(
+        "M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z",
+    )
+}
+
+fn icon_issue() -> Markup {
+    svg(
+        "M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z",
+    )
+}
+
+fn icon_check() -> Markup {
+    svg(
+        "M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z",
     )
 }
 
