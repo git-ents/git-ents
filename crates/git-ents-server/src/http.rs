@@ -12,6 +12,9 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use axum_extra::TypedHeader;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Basic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -27,13 +30,14 @@ pub async fn health() -> &'static str {
 /// Delegate a single request to `git http-backend` and reply with its output.
 pub async fn git(
     State(state): State<AppState>,
+    auth: Option<TypedHeader<Authorization<Basic>>>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     if let Some(expected) = state.access_token.as_deref()
-        && !authorized(&headers, expected)
+        && !authorized(auth.as_ref(), expected)
     {
         return unauthorized();
     }
@@ -255,23 +259,8 @@ async fn reconcile_head(repo: &Path) {
 ///
 /// As with GitHub's HTTPS git auth, the username is ignored and the password
 /// field carries the bearer token.
-fn authorized(headers: &HeaderMap, expected: &str) -> bool {
-    let Some(value) = header_value(headers, "Authorization") else {
-        return false;
-    };
-    let Some(encoded) = value
-        .strip_prefix("Basic ")
-        .or_else(|| value.strip_prefix("basic "))
-    else {
-        return false;
-    };
-    let Some(decoded) = base64_decode(encoded.trim()) else {
-        return false;
-    };
-    let Some(colon) = decoded.iter().position(|byte| *byte == b':') else {
-        return false;
-    };
-    decoded.get(colon.saturating_add(1)..) == Some(expected.as_bytes())
+fn authorized(auth: Option<&TypedHeader<Authorization<Basic>>>, expected: &str) -> bool {
+    auth.is_some_and(|TypedHeader(creds)| creds.password() == expected)
 }
 
 /// A `401` carrying the Basic challenge git expects before retrying with creds.
@@ -289,35 +278,6 @@ fn header_value(headers: &HeaderMap, field: &str) -> Option<String> {
         .get(field)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
-}
-
-/// Decode standard base64 with optional `=` padding; `None` on any bad input.
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    fn sextet(byte: u8) -> Option<u32> {
-        let value = u32::from(byte);
-        match byte {
-            b'A'..=b'Z' => Some(value.saturating_sub(u32::from(b'A'))),
-            b'a'..=b'z' => Some(value.saturating_sub(u32::from(b'a')).saturating_add(26)),
-            b'0'..=b'9' => Some(value.saturating_sub(u32::from(b'0')).saturating_add(52)),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-
-    let bytes: &[u8] = input.trim_end_matches('=').as_bytes();
-    let mut out = Vec::new();
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &byte in bytes {
-        acc = (acc << 6) | sextet(byte)?;
-        bits = bits.saturating_add(6);
-        if bits >= 8 {
-            bits = bits.saturating_sub(8);
-            out.push(u8::try_from((acc >> bits) & 0xFF).ok()?);
-        }
-    }
-    Some(out)
 }
 
 fn parse_status(value: &[u8]) -> Option<u16> {
