@@ -1,17 +1,20 @@
 //! Git Ents server — helpful guardians of your git trees.
 
+mod auth;
 mod http;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use clap::{CommandFactory, Parser};
 use tokio::sync::Notify;
+
+use crate::auth::Auth;
 
 #[derive(Parser)]
 #[command(
@@ -31,20 +34,26 @@ struct Args {
     #[arg(long, env = "GIT_PROJECT_ROOT", default_value = "/data/repos")]
     data_dir: PathBuf,
 
-    /// Bearer token required for git operations; when unset, auth is disabled.
+    /// Admin bearer token; approves logins and bootstraps git access.
     #[arg(long, env = "ACCESS_TOKEN")]
     access_token: Option<String>,
+
+    /// Externally reachable base URL, used to build login verification links.
+    #[arg(long, env = "PUBLIC_URL")]
+    public_url: Option<String>,
 
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
 }
 
-/// Shared handler state: where repos live and the optional auth token.
+/// Shared handler state: where repos live, the admin token, and issued tokens.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) data_dir: PathBuf,
     pub(crate) access_token: Option<String>,
+    pub(crate) public_url: Arc<str>,
+    pub(crate) auth: Arc<Mutex<Auth>>,
 }
 
 fn main() -> ExitCode {
@@ -71,14 +80,23 @@ fn main() -> ExitCode {
 
 /// Bind the listener and serve until shutdown.
 async fn serve(args: Args) -> ExitCode {
+    let public_url = args
+        .public_url
+        .unwrap_or_else(|| format!("http://localhost:{}", args.port));
+    let auth = Auth::load(&args.data_dir);
     let state = AppState {
         data_dir: args.data_dir,
         access_token: args.access_token,
+        public_url: Arc::from(public_url),
+        auth: Arc::new(Mutex::new(auth)),
     };
 
     let mut app = Router::new()
         .route("/", get(http::health))
         .route("/healthz", get(http::health))
+        .route("/auth/device", post(auth::device))
+        .route("/auth/token", post(auth::token))
+        .route("/auth/verify", get(auth::verify_page).post(auth::verify_submit))
         .fallback(http::git)
         .with_state(state);
 

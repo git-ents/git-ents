@@ -36,9 +36,7 @@ pub async fn git(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(expected) = state.access_token.as_deref()
-        && !authorized(auth.as_ref(), expected)
-    {
+    if !is_authorized(&state, auth.as_ref()) {
         return unauthorized();
     }
 
@@ -255,6 +253,22 @@ async fn reconcile_head(repo: &Path) {
         .await;
 }
 
+/// Whether a request may touch git: it carries the admin token, a token issued
+/// by the device flow, or auth is unconfigured (no admin token, none issued).
+fn is_authorized(state: &AppState, auth: Option<&TypedHeader<Authorization<Basic>>>) -> bool {
+    if let Some(expected) = state.access_token.as_deref()
+        && authorized(auth, expected)
+    {
+        return true;
+    }
+    let presented = auth.map(|TypedHeader(creds)| creds.password());
+    let (store_empty, store_ok) = match state.auth.lock() {
+        Ok(guard) => (guard.is_empty(), presented.is_some_and(|t| guard.validate(t))),
+        Err(_) => return false,
+    };
+    store_ok || (state.access_token.is_none() && store_empty)
+}
+
 /// Check the request's HTTP Basic credentials against the expected token.
 ///
 /// As with GitHub's HTTPS git auth, the username is ignored and the password
@@ -315,4 +329,35 @@ fn trim_space(mut value: &[u8]) -> &[u8] {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "unit tests may unwrap freely"
+    )]
+
+    use super::*;
+
+    fn basic(user: &str, password: &str) -> TypedHeader<Authorization<Basic>> {
+        TypedHeader(Authorization::basic(user, password))
+    }
+
+    #[test]
+    fn rejects_missing_credentials() {
+        assert!(!authorized(None, "secret"));
+    }
+
+    #[test]
+    fn rejects_wrong_password() {
+        let creds = basic("anyone", "nope");
+        assert!(!authorized(Some(&creds), "secret"));
+    }
+
+    #[test]
+    fn accepts_matching_password_regardless_of_username() {
+        let creds = basic("anyone", "secret");
+        assert!(authorized(Some(&creds), "secret"));
+    }
 }
