@@ -32,7 +32,7 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
     let clone_url = clone_url(host, rel);
     let langs = languages(repo).await;
     let latest = latest_release(repo).await;
-    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let name = meta.name();
 
     let main = html! {
         @if is_empty {
@@ -282,7 +282,7 @@ pub(super) async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Re
         },
     };
 
-    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let name = meta.name();
     repo_shell(
         meta,
         Tab::Files,
@@ -377,7 +377,7 @@ pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
     if entries.is_empty() && !dir.is_empty() {
         return not_found().into_response();
     }
-    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let name = meta.name();
     repo_shell(
         meta,
         Tab::Files,
@@ -421,7 +421,7 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
     };
     let name = path.rsplit('/').next().unwrap_or(&path);
     let body = if is_binary(&bytes) {
-        html! { div.blob { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } } }
+        html! { div.blob { div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." } } }
     } else {
         let text = String::from_utf8_lossy(&bytes);
         match crate::asciidoc::is_asciidoc(name)
@@ -576,39 +576,34 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
-/// The Hooks tab: CI is defined as plain git hooks, configured in
-/// `.gitents/hooks.toml`. Run logs need a store that does not exist yet, so the
-/// run list is an empty state; the configuration shown is the real file.
-pub(super) async fn hooks_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let config = git_output_bytes(repo, &["cat-file", "-p", "HEAD:.gitents/hooks.toml"])
-        .await
-        .map(|b| String::from_utf8_lossy(&b).into_owned());
+/// The Checks tab: CI in the object-graph model. A run is a signed record in the
+/// git-metadata fanout keyed by `(config_oid, code_oid)`, so identical
+/// config/code pairs dedupe and skip re-execution. The privileged config lives
+/// on `refs/ents/config` and unprivileged drafts on `refs/ents/ci/draft/<name>`.
+/// None of this is wired up yet, so every panel is an empty state.
+pub(super) fn checks_page(meta: &RepoMeta) -> Markup {
     repo_shell(
         meta,
-        Tab::Hooks,
-        "Hooks",
+        Tab::Checks,
+        "Checks",
         html! {
-            div.page-header { h1.page-title { "Hooks" } }
+            div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
-                "CI runs as plain "
-                code { "pre-receive" } " / " code { "post-receive" }
-                " git hooks, configured in " code { ".gitents/hooks.toml" }
-                ". Runs and logs appear here once hooks execute on a push."
+                "CI runs are signed records in the git-metadata fanout, keyed by "
+                code { "(config_oid, code_oid)" }
+                ". Configuration is read from " code { "refs/ents/config" }
+                " and draft pipelines from " code { "refs/ents/ci/draft/*" }
+                ". Runs appear here once the runner records them."
             }
-            div.hooks-grid {
+            div.checks-grid {
                 div.card {
                     div.card-header { "Recent runs" }
                     div.card-row.muted { "No runs recorded yet." }
                 }
-                @if let Some(config) = &config {
-                    div.card {
-                        div.card-header { (icon_file()) " .gitents/hooks.toml" }
-                        (blob_body("hooks.toml", config))
-                    }
-                } @else {
-                    div.card {
-                        div.card-header { "Configuration" }
-                        div.card-row.muted { "No " code { ".gitents/hooks.toml" } " in this repository." }
+                div.card {
+                    div.card-header { "Configuration" }
+                    div.card-row.muted {
+                        "No signed config on " code { "refs/ents/config" } " yet."
                     }
                 }
             }
@@ -656,7 +651,7 @@ pub(super) fn issues_page(meta: &RepoMeta) -> Markup {
 /// exist yet, so the controls reflect the repository's current real values and
 /// are presented read-only.
 pub(super) fn settings_page(meta: &RepoMeta) -> Markup {
-    let name = meta.rel.rsplit('/').next().unwrap_or(&meta.rel);
+    let name = meta.name();
     repo_shell(
         meta,
         Tab::Settings,
@@ -686,7 +681,7 @@ pub(super) fn settings_page(meta: &RepoMeta) -> Markup {
                     div.card-header { "Features" }
                     (feature_row("Bug reports", "Track and triage bugs.", meta.issues > 0))
                     (feature_row("Releases", "Publish tagged releases.", meta.releases > 0))
-                    (feature_row("Hooks (CI)", "Run git hooks on push.", meta.has_hooks))
+                    (feature_row("Checks (CI)", "Run signed CI records on push.", false))
                     (feature_row("Wiki", "A separate documentation space.", false))
                 }
 

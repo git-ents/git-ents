@@ -178,7 +178,8 @@ fn build_response(stdout: &[u8]) -> Response {
 }
 
 /// Greatest repository nesting depth: `repo`, `org/repo`, or `org/team/repo`.
-const MAX_REPO_DEPTH: usize = 3;
+/// Shared by the push gateway and the web UI's routing/discovery.
+pub(crate) const MAX_REPO_DEPTH: usize = 3;
 
 /// Whether a GET should be answered with the HTML web UI rather than handed to
 /// `git http-backend`.
@@ -211,12 +212,7 @@ fn is_service_request(path: &str, query: &str) -> bool {
 /// rather than the browser-facing web UI. Anything matching here is delegated
 /// to `git http-backend`; everything else is rendered as HTML.
 fn is_git_path(path: &str, query: &str) -> bool {
-    path.ends_with("/info/refs")
-        || path.ends_with("/git-upload-pack")
-        || path.ends_with("/git-receive-pack")
-        || path.ends_with("/HEAD")
-        || path.contains("/objects/")
-        || query.contains("service=")
+    is_service_request(path, query) || path.ends_with("/HEAD") || path.contains("/objects/")
 }
 
 /// Whether this request is a push: the smart-HTTP receive-pack advertisement

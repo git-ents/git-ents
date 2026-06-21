@@ -7,23 +7,14 @@ use std::process::Stdio;
 
 use tokio::process::Command;
 
-use super::MAX_DEPTH;
-use crate::http::is_bare_repo;
+use crate::http::{MAX_REPO_DEPTH, is_bare_repo};
 
-/// Run `git -C <repo> <args>` and return its stdout, or `None` on failure.
+/// Run `git -C <repo> <args>` and return its stdout as lossy UTF-8, or `None` on
+/// failure.
 pub(super) async fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
+    git_output_bytes(repo, args)
         .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Run `git -C <repo> <args>` and return its raw stdout bytes, or `None` on
@@ -91,7 +82,7 @@ pub(super) fn browse_path(sub: &[&str]) -> Option<String> {
 /// All bare repositories under `root`, as relative slash paths, sorted.
 pub(super) fn discover_repos(root: &Path) -> Vec<String> {
     let mut repos = Vec::new();
-    collect_repos(root, root, MAX_DEPTH, &mut repos);
+    collect_repos(root, root, MAX_REPO_DEPTH, &mut repos);
     repos.sort();
     repos
 }

@@ -19,14 +19,11 @@ use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 
 use crate::AppState;
-use crate::http::{is_bare_repo, valid_segment};
+use crate::http::{MAX_REPO_DEPTH, is_bare_repo, valid_segment};
 
 use self::assets::{COPY_SCRIPT, FONTS, STYLE};
 use self::git::{discover_repos, git_output, git_output_bytes};
 use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, icon_search};
-
-/// Greatest repository nesting depth served: `repo`, `org/repo`, `org/team/repo`.
-const MAX_DEPTH: usize = 3;
 
 /// Render the page for `path`: the repository index at the root, a repository
 /// overview, or one of its browse views (`tree`, `blob`, `commit`). `host` is
@@ -37,11 +34,11 @@ pub(crate) async fn render(state: &AppState, path: &str, host: Option<&str>) -> 
         return index(state).into_response();
     }
 
-    // The repository is the shortest valid prefix (up to `MAX_DEPTH` segments)
-    // that names a bare repo on disk; anything after it selects a browse view.
-    // Resolving the boundary this way keeps a repo named `tree`/`blob`/`commit`
-    // distinct from the route markers of the same name.
-    let depth_limit = segments.len().min(MAX_DEPTH);
+    // The repository is the shortest valid prefix (up to `MAX_REPO_DEPTH`
+    // segments) that names a bare repo on disk; anything after it selects a
+    // browse view. Resolving the boundary this way keeps a repo named
+    // `tree`/`blob`/`commit` distinct from the route markers of the same name.
+    let depth_limit = segments.len().min(MAX_REPO_DEPTH);
     for depth in 1..=depth_limit {
         let Some(repo_segs) = segments.get(..depth) else {
             break;
@@ -74,7 +71,7 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"blob", sub)) => pages::blob_page(repo, &meta, sub).await,
         Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
-        Some((&"hooks", &[])) => pages::hooks_page(repo, &meta).await.into_response(),
+        Some((&"checks", &[])) => pages::checks_page(&meta).into_response(),
         Some((&"issues", &[])) => pages::issues_page(&meta).into_response(),
         Some((&"settings", &[])) => pages::settings_page(&meta).into_response(),
         _ => not_found().into_response(),
@@ -87,7 +84,7 @@ enum Tab {
     Overview,
     Files,
     Releases,
-    Hooks,
+    Checks,
     Issues,
     Settings,
 }
@@ -101,7 +98,13 @@ struct RepoMeta {
     topics: Vec<String>,
     releases: usize,
     issues: usize,
-    has_hooks: bool,
+}
+
+impl RepoMeta {
+    /// The repository's short name: the final segment of its path.
+    fn name(&self) -> &str {
+        self.rel.rsplit('/').next().unwrap_or(&self.rel)
+    }
 }
 
 /// Collect the header/tab metadata for the repository at `rel`.
@@ -128,10 +131,6 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         .await
         .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
-    let has_hooks = git_output(repo, &["cat-file", "-t", "HEAD:.gitents/hooks.toml"])
-        .await
-        .as_deref()
-        == Some("blob\n");
     RepoMeta {
         rel: rel.to_owned(),
         branch,
@@ -139,7 +138,6 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         topics,
         releases,
         issues: 0,
-        has_hooks,
     }
 }
 
@@ -203,10 +201,7 @@ fn tab_bar(meta: &RepoMeta, active: Tab) -> Markup {
                 "Releases"
                 @if meta.releases > 0 { span.tab-count { (meta.releases) } }
             }
-            a.tab.active[active == Tab::Hooks] href={ "/" (rel) "/hooks" } {
-                "Hooks"
-                @if meta.has_hooks { span.tab-dot {} }
-            }
+            a.tab.active[active == Tab::Checks] href={ "/" (rel) "/checks" } { "Checks" }
             a.tab.active[active == Tab::Issues] href={ "/" (rel) "/issues" } {
                 "Issues"
                 @if meta.issues > 0 { span.tab-count { (meta.issues) } }
