@@ -11,6 +11,8 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
 
+use rstest::rstest;
+
 #[test]
 fn responds_and_shuts_down() {
     let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -85,6 +87,91 @@ fn push_then_clone_round_trip() {
     let _wait = child.wait();
 
     assert_eq!(pushed, cloned, "cloned HEAD must match pushed HEAD");
+}
+
+#[rstest]
+#[case("org/repo")]
+#[case("org/team/repo")]
+fn nested_push_then_clone_round_trip(#[case] name: &str) {
+    let data = tempfile::tempdir().unwrap();
+    let port = free_port();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_git-ents-server"))
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--data-dir")
+        .arg(data.path())
+        .spawn()
+        .unwrap();
+
+    wait_for_port(port);
+
+    let url = format!("http://127.0.0.1:{port}/{name}.git");
+
+    let src = tempfile::tempdir().unwrap();
+    run_git(Some(src.path()), &["init", "-q", "-b", "main"]);
+    std::fs::write(src.path().join("README.md"), "hello ents\n").unwrap();
+    run_git(Some(src.path()), &["add", "."]);
+    run_git(Some(src.path()), &["commit", "-q", "-m", "initial"]);
+    run_git(Some(src.path()), &["push", "-q", &url, "main"]);
+    let pushed = rev_parse(src.path());
+
+    let dst = tempfile::tempdir().unwrap();
+    let clone_path = dst.path().join("clone");
+    run_git(None, &["clone", "-q", &url, clone_path.to_str().unwrap()]);
+    let cloned = rev_parse(&clone_path);
+
+    child.kill().unwrap();
+    let _wait = child.wait();
+
+    assert_eq!(
+        pushed, cloned,
+        "cloned HEAD must match pushed HEAD for {name}"
+    );
+}
+
+#[rstest]
+#[case("org/repo.git/deep.git")] // nested inside an existing repository
+#[case("org")] // already exists as a namespace
+fn rejects_colliding_pushes(#[case] collide: &str) {
+    let data = tempfile::tempdir().unwrap();
+    let port = free_port();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_git-ents-server"))
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--data-dir")
+        .arg(data.path())
+        .spawn()
+        .unwrap();
+
+    wait_for_port(port);
+
+    let src = tempfile::tempdir().unwrap();
+    run_git(Some(src.path()), &["init", "-q", "-b", "main"]);
+    std::fs::write(src.path().join("README.md"), "hello ents\n").unwrap();
+    run_git(Some(src.path()), &["add", "."]);
+    run_git(Some(src.path()), &["commit", "-q", "-m", "initial"]);
+
+    // Claim `org/repo.git`, which also makes `org` a namespace directory.
+    let base = format!("http://127.0.0.1:{port}/org/repo.git");
+    run_git(Some(src.path()), &["push", "-q", &base, "main"]);
+
+    // A push that collides with that repository must be refused.
+    let url = format!("http://127.0.0.1:{port}/{collide}");
+    let rejected = !git_command(Some(src.path()), &["push", "-q", &url, "main"])
+        .output()
+        .unwrap()
+        .status
+        .success();
+
+    child.kill().unwrap();
+    let _wait = child.wait();
+
+    assert!(
+        rejected,
+        "push colliding with an existing repo ({collide}) must fail"
+    );
 }
 
 fn free_port() -> u16 {

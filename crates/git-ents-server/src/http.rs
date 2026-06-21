@@ -39,12 +39,12 @@ pub async fn git(
         return (StatusCode::BAD_REQUEST, "bad request").into_response();
     }
 
-    // A push begins with `info/refs?service=git-receive-pack`; auto-init the
-    // bare repo so the very first request finds it. An unacceptable repository
-    // path is rejected here rather than handed to the backend.
-    let is_push = query_string.contains("service=git-receive-pack")
-        || path_info.ends_with("/git-receive-pack");
-    let push_repo = if is_push {
+    // A push uses exactly two endpoints: the receive-pack advertisement
+    // (`GET /<repo>/info/refs?service=git-receive-pack`) and the receive-pack
+    // RPC (`POST /<repo>/git-receive-pack`). Recognize the target so the bare
+    // repo can be auto-created on the very first request; reject an
+    // unacceptable repository path here rather than handing it to the backend.
+    let push_repo = if is_receive_pack(&path_info, &query_string) {
         match repo_path(&path_info) {
             Some(relative) => Some(state.data_dir.join(relative)),
             None => return (StatusCode::BAD_REQUEST, "invalid repository path").into_response(),
@@ -53,14 +53,9 @@ pub async fn git(
         None
     };
     if let Some(repo) = &push_repo
-        && !repo.exists()
-        && let Err(e) = init_bare_repo(repo).await
+        && let Err(response) = ensure_repo(&state, repo).await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("init failed: {e}"),
-        )
-            .into_response();
+        return response;
     }
 
     let content_type = header_value(&headers, "Content-Type");
@@ -177,6 +172,82 @@ fn build_response(stdout: &[u8]) -> Response {
 
 /// Greatest repository nesting depth: `repo`, `org/repo`, or `org/team/repo`.
 const MAX_REPO_DEPTH: usize = 3;
+
+/// Whether this request is a push: the smart-HTTP receive-pack advertisement
+/// (`/info/refs?service=git-receive-pack`) or the receive-pack RPC itself.
+///
+/// The `service` parameter is matched exactly, so a request for the read-only
+/// `git-upload-pack` service (or an unrelated parameter that merely contains
+/// the string) is not mistaken for a push.
+fn is_receive_pack(path_info: &str, query: &str) -> bool {
+    path_info.ends_with("/git-receive-pack")
+        || (path_info.ends_with("/info/refs") && query_service(query) == Some("git-receive-pack"))
+}
+
+/// The value of the `service` query parameter, if present.
+fn query_service(query: &str) -> Option<&str> {
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("service="))
+}
+
+/// Ensure `repo` exists as a bare repository, creating it on first push.
+///
+/// Holds [`AppState::init_lock`] across the whole check-and-create so two
+/// concurrent first pushes to the same name cannot both initialize it, and
+/// refuses paths that collide with an existing repository: one nested inside a
+/// repo, or one that already exists as a namespace directory.
+async fn ensure_repo(state: &AppState, repo: &Path) -> Result<(), Response> {
+    let _guard = state.init_lock.lock().await;
+    if enclosing_repo(&state.data_dir, repo).is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            "repository path is nested inside an existing repository",
+        )
+            .into_response());
+    }
+    if repo.exists() {
+        return if is_bare_repo(repo) {
+            Ok(())
+        } else {
+            Err((
+                StatusCode::CONFLICT,
+                "repository path already exists as a namespace",
+            )
+                .into_response())
+        };
+    }
+    init_bare_repo(repo).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("init failed: {e}"),
+        )
+            .into_response()
+    })
+}
+
+/// The ancestor of `repo` (below `data_dir`) that is itself a bare repository,
+/// if any. Used to refuse creating a repository inside another one.
+fn enclosing_repo(data_dir: &Path, repo: &Path) -> Option<PathBuf> {
+    let relative = repo.strip_prefix(data_dir).ok()?;
+    let mut current = data_dir.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            break;
+        }
+        current.push(component);
+        if is_bare_repo(&current) {
+            return Some(current);
+        }
+    }
+    None
+}
+
+/// Whether `path` is the root of a bare git repository.
+fn is_bare_repo(path: &Path) -> bool {
+    path.join("HEAD").is_file() && path.join("objects").is_dir()
+}
 
 /// The target repository of a push, as a validated path relative to the data
 /// directory, or `None` if the request does not name an acceptable repository.
@@ -338,4 +409,50 @@ fn trim_space(mut value: &[u8]) -> &[u8] {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("repo", true)]
+    #[case("repo.git", true)]
+    #[case("My-Repo_1.git", true)]
+    #[case("", false)]
+    #[case(".", false)]
+    #[case("..", false)]
+    #[case(".hidden", false)]
+    #[case("a/b", false)]
+    #[case("a b", false)]
+    #[case("a%2eb", false)]
+    fn validates_segments(#[case] segment: &str, #[case] expected: bool) {
+        assert_eq!(valid_segment(segment), expected);
+    }
+
+    #[rstest]
+    #[case("/repo.git/git-receive-pack", Some("repo.git"))]
+    #[case("/org/repo.git/git-receive-pack", Some("org/repo.git"))]
+    #[case("/org/team/repo.git/git-receive-pack", Some("org/team/repo.git"))]
+    #[case("/repo.git/info/refs", Some("repo.git"))]
+    #[case("/a/b/c/d.git/git-receive-pack", None)]
+    #[case("/../etc/git-receive-pack", None)]
+    #[case("/.ssh/git-receive-pack", None)]
+    #[case("/git-receive-pack", None)]
+    fn extracts_repo_path(#[case] path: &str, #[case] expected: Option<&str>) {
+        assert_eq!(repo_path(path).as_deref(), expected.map(Path::new));
+    }
+
+    #[rstest]
+    #[case("/repo.git/git-receive-pack", "", true)]
+    #[case("/repo.git/info/refs", "service=git-receive-pack", true)]
+    #[case("/repo.git/info/refs", "service=git-upload-pack", false)]
+    #[case("/repo.git/info/refs", "", false)]
+    #[case("/repo.git/info/refs", "x=service=git-receive-pack", false)]
+    #[case("/repo.git/info/refs", "a=b&service=git-receive-pack", true)]
+    #[case("/repo.git/objects/info/packs", "", false)]
+    fn detects_pushes(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
+        assert_eq!(is_receive_pack(path, query), expected);
+    }
 }

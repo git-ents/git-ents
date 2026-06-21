@@ -12,6 +12,7 @@ clap_mangen = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

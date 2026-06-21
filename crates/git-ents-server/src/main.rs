@@ -12,7 +12,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use clap::{CommandFactory, Parser};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 #[derive(Parser)]
 #[command(
@@ -37,10 +37,12 @@ struct Args {
     max_requests: Option<usize>,
 }
 
-/// Shared handler state: where the bare repositories live.
+/// Shared handler state: where the bare repositories live, plus a lock that
+/// serializes repository creation so concurrent first pushes cannot race.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) data_dir: PathBuf,
+    pub(crate) init_lock: Arc<Mutex<()>>,
 }
 
 fn main() -> ExitCode {
@@ -69,6 +71,7 @@ fn main() -> ExitCode {
 async fn serve(args: Args) -> ExitCode {
     let state = AppState {
         data_dir: args.data_dir,
+        init_lock: Arc::new(Mutex::new(())),
     };
 
     // The git smart-HTTP protocol streams whole packfiles through the request
