@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use arborium::{Config, Highlighter, HtmlFormat};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
@@ -44,6 +45,16 @@ const STYLE: &str = r#"
   --radius-sm: 10px;
   --radius-pill: 100px;
   --glow: #b07d1012;
+  --s-comment: #9c8f74;
+  --s-keyword: #9d0006;
+  --s-func: #427b58;
+  --s-type: #b57614;
+  --s-string: #79740e;
+  --s-const: #8f3f71;
+  --s-op: #7c6f57;
+  --s-prop: #076678;
+  --diff-add: #4e9a0622;
+  --diff-del: #cc241d22;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -60,6 +71,16 @@ const STYLE: &str = r#"
     --shadow-sm: 0 1px 3px #00000040;
     --shadow-md: 0 4px 16px #0000004d;
     --glow: #d4a03014;
+    --s-comment: #928374;
+    --s-keyword: #fb4934;
+    --s-func: #8ec07c;
+    --s-type: #fabd2f;
+    --s-string: #b8bb26;
+    --s-const: #d3869b;
+    --s-op: #a89984;
+    --s-prop: #83a598;
+    --diff-add: #b8bb2620;
+    --diff-del: #fb493420;
   }
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -131,6 +152,47 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .btn { display: inline-flex; align-items: center; gap: .4rem; margin-top: 1.25rem; font-size: .88rem; font-weight: 600; color: var(--color-accent); text-decoration: none; padding: .45rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); box-shadow: var(--shadow-sm); transition: border-color .15s, box-shadow .15s; }
 .btn:hover { text-decoration: none; border-color: var(--color-accent); box-shadow: var(--shadow-md); }
 
+.card-row a { color: inherit; text-decoration: none; flex: 1; min-width: 0; word-break: break-all; }
+.card-row a:hover { color: var(--color-accent); }
+.commit-subject a { color: inherit; text-decoration: none; }
+.commit-subject a:hover { color: var(--color-accent); }
+
+.crumbs { font-family: var(--font-mono); font-size: .92rem; margin-bottom: 1.25rem; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; word-break: break-all; }
+.crumbs a { text-decoration: none; }
+.crumbs .sep { color: var(--color-text-muted); opacity: .55; }
+.crumbs .here { color: var(--color-text-muted); }
+
+.blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
+.blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
+.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1rem; padding-right: 1rem; user-select: none; -webkit-user-select: none; }
+.blob-code { overflow-x: auto; min-width: 0; }
+.blob-code code { display: block; font-family: inherit; padding: 0 1rem; white-space: pre; color: var(--color-text); }
+.binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
+
+.code .keyword, .code .macro, .code .tag { color: var(--s-keyword); }
+.code .function, .code .constructor { color: var(--s-func); }
+.code .type { color: var(--s-type); }
+.code .string { color: var(--s-string); }
+.code .number, .code .constant, .code .label { color: var(--s-const); }
+.code .comment { color: var(--s-comment); font-style: italic; }
+.code .operator, .code .punctuation { color: var(--s-op); }
+.code .property, .code .attribute { color: var(--s-prop); }
+.code .title { color: var(--s-keyword); font-weight: 700; }
+.code .strong { font-weight: 700; }
+.code .emphasis { font-style: italic; }
+.code .link, .code .url, .code .reference { color: var(--s-prop); text-decoration: underline; }
+.code .markup { color: var(--s-func); }
+
+.diff { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow-x: auto; margin-bottom: 1.5rem; font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; padding: .6rem 0; }
+.diff .ln { display: block; padding: 0 1rem; white-space: pre; }
+.diff .add { background: var(--diff-add); }
+.diff .del { background: var(--diff-del); }
+.diff .hunk { color: var(--s-prop); background: var(--color-code-bg); }
+.diff .meta { color: var(--color-text-muted); }
+.diff .file { color: var(--color-text); font-weight: 600; background: var(--color-code-bg); padding-top: .3rem; padding-bottom: .3rem; }
+
+.commit-msg { font-family: var(--font-mono); font-size: .9rem; white-space: pre-wrap; word-break: break-word; }
+
 .site-footer { border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .8rem; margin-top: auto; }
 .footer-inner { max-width: var(--max-width); margin: 0 auto; padding: 2rem 1.5rem; text-align: center; }
 .footer-inner a { color: var(--color-text-muted); text-decoration: none; }
@@ -155,26 +217,59 @@ document.querySelectorAll('[data-copy]').forEach((btn) => {
 });
 "#;
 
-/// Render the page for `path`: the repository index at the root, or a single
-/// repository's overview otherwise. `host` is the request's `Host` header, used
-/// to build a copy-pasteable clone URL.
+/// Render the page for `path`: the repository index at the root, a repository
+/// overview, or one of its browse views (`tree`, `blob`, `commit`). `host` is
+/// the request's `Host` header, used to build a copy-pasteable clone URL.
 pub(crate) async fn render(state: &AppState, path: &str, host: Option<&str>) -> Response {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return index(state).into_response();
     }
-    if segments.len() > MAX_DEPTH || !segments.iter().all(|s| valid_segment(s)) {
-        return not_found().into_response();
+
+    // The repository is the shortest valid prefix (up to `MAX_DEPTH` segments)
+    // that names a bare repo on disk; anything after it selects a browse view.
+    // Resolving the boundary this way keeps a repo named `tree`/`blob`/`commit`
+    // distinct from the route markers of the same name.
+    let depth_limit = segments.len().min(MAX_DEPTH);
+    for depth in 1..=depth_limit {
+        let Some(repo_segs) = segments.get(..depth) else {
+            break;
+        };
+        if !repo_segs.iter().all(|s| valid_segment(s)) {
+            break;
+        }
+        let relative: PathBuf = repo_segs.iter().collect();
+        let repo = state.data_dir.join(&relative);
+        if !is_bare_repo(&repo) {
+            continue;
+        }
+        let rel = repo_segs.join("/");
+        let rest = segments.get(depth..).unwrap_or_default();
+        return route(&repo, &rel, rest, host).await;
     }
 
-    let relative: PathBuf = segments.iter().collect();
-    let repo = state.data_dir.join(&relative);
-    if !is_bare_repo(&repo) {
-        return not_found().into_response();
-    }
+    not_found().into_response()
+}
 
-    let rel_str = segments.join("/");
-    repo_page(&repo, &rel_str, host).await.into_response()
+/// Dispatch the part of the path that follows the repository to a browse view.
+async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Response {
+    match rest.split_first() {
+        None => repo_page(repo, rel, host).await.into_response(),
+        Some((&"tree", sub)) => tree_page(repo, rel, sub).await,
+        Some((&"blob", sub)) => blob_page(repo, rel, sub).await,
+        Some((&"commit", &[sha])) => commit_page(repo, rel, sha).await,
+        _ => not_found().into_response(),
+    }
+}
+
+/// Join the path segments of a browse view, rejecting empty or traversing
+/// components. The result is used only as a git tree path (`HEAD:<path>`), never
+/// touched on disk, but refusing `..` keeps the rendered links well-formed.
+fn browse_path(sub: &[&str]) -> Option<String> {
+    if sub.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
+        return None;
+    }
+    Some(sub.join("/"))
 }
 
 /// The repository listing shown at `/`.
@@ -257,7 +352,7 @@ async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
                         @for entry in &tree {
                             div.card-row.is-dir[entry.is_dir] {
                                 @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
-                                span { (entry.name) }
+                                a href=(entry_href(rel, "", entry)) { (entry.name) }
                             }
                         }
                     }
@@ -266,7 +361,9 @@ async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
                     div.card-header { "Recent commits" }
                     @for commit in &commits {
                         div.commit {
-                            div.commit-subject { (commit.subject) }
+                            div.commit-subject {
+                                a href={ "/" (rel) "/commit/" (commit.hash) } { (commit.subject) }
+                            }
                             div.commit-meta {
                                 span.sha { (commit.short) }
                                 (commit.author) " · " (commit.when)
@@ -281,6 +378,7 @@ async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
 
 /// A parsed `git log` entry.
 struct Commit {
+    hash: String,
     short: String,
     author: String,
     when: String,
@@ -308,6 +406,7 @@ async fn recent_commits(repo: &Path) -> Vec<Commit> {
                 return None;
             }
             Some(Commit {
+                hash: hash.to_owned(),
                 short: hash.get(..7).unwrap_or(hash).to_owned(),
                 author: author.to_owned(),
                 when: when.to_owned(),
@@ -328,7 +427,13 @@ async fn root_tree(repo: &Path, has_head: bool) -> Vec<TreeEntry> {
     if !has_head {
         return Vec::new();
     }
-    let Some(out) = git_output(repo, &["ls-tree", "HEAD"]).await else {
+    list_tree(repo, "HEAD").await
+}
+
+/// The entries of the tree named by `spec` (a git tree-ish such as `HEAD` or
+/// `HEAD:src`), directories first then by name. Empty if `spec` is not a tree.
+async fn list_tree(repo: &Path, spec: &str) -> Vec<TreeEntry> {
+    let Some(out) = git_output(repo, &["ls-tree", spec]).await else {
         return Vec::new();
     };
     let mut entries: Vec<TreeEntry> = out
@@ -346,6 +451,18 @@ async fn root_tree(repo: &Path, has_head: bool) -> Vec<TreeEntry> {
     entries
 }
 
+/// The link to a tree entry: a `tree` view for directories, a `blob` view for
+/// files. `dir` is the tree's path within the repo (empty at the root).
+fn entry_href(rel: &str, dir: &str, entry: &TreeEntry) -> String {
+    let view = if entry.is_dir { "tree" } else { "blob" };
+    let name = &entry.name;
+    if dir.is_empty() {
+        format!("/{rel}/{view}/{name}")
+    } else {
+        format!("/{rel}/{view}/{dir}/{name}")
+    }
+}
+
 /// Run `git -C <repo> <args>` and return its stdout, or `None` on failure.
 async fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
@@ -360,6 +477,23 @@ async fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run `git -C <repo> <args>` and return its raw stdout bytes, or `None` on
+/// failure. Used for blob contents, which may not be valid UTF-8.
+async fn git_output_bytes(repo: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(out.stdout)
 }
 
 /// All bare repositories under `root`, as relative slash paths, sorted.
@@ -398,6 +532,245 @@ fn clone_url(host: Option<&str>, rel: &str) -> String {
     match host {
         Some(host) => format!("http://{host}/{rel}"),
         None => format!("/{rel}"),
+    }
+}
+
+/// A directory listing at `sub` within the repository.
+async fn tree_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
+    let Some(dir) = browse_path(sub) else {
+        return not_found().into_response();
+    };
+    let spec = if dir.is_empty() {
+        "HEAD".to_owned()
+    } else {
+        format!("HEAD:{dir}")
+    };
+    let entries = list_tree(repo, &spec).await;
+    if entries.is_empty() && !dir.is_empty() {
+        return not_found().into_response();
+    }
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    page(
+        name,
+        html! {
+            (crumbs(rel, &dir, false))
+            div.card {
+                div.card-header { "Files" }
+                @if dir.is_empty() && entries.is_empty() {
+                    div.card-row { "Empty repository." }
+                }
+                @for entry in &entries {
+                    div.card-row.is-dir[entry.is_dir] {
+                        @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
+                        a href=(entry_href(rel, &dir, entry)) { (entry.name) }
+                    }
+                }
+            }
+        },
+    )
+    .into_response()
+}
+
+/// A single file's contents at `sub`, syntax-highlighted when the language is
+/// recognized and the file is text.
+async fn blob_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
+    let Some(path) = browse_path(sub).filter(|p| !p.is_empty()) else {
+        return not_found().into_response();
+    };
+    let spec = format!("HEAD:{path}");
+    if git_output(repo, &["cat-file", "-t", &spec])
+        .await
+        .as_deref()
+        != Some("blob\n")
+    {
+        return not_found().into_response();
+    }
+    let Some(bytes) = git_output_bytes(repo, &["cat-file", "-p", &spec]).await else {
+        return not_found().into_response();
+    };
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    let body = if is_binary(&bytes) {
+        html! { div.blob { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } } }
+    } else {
+        blob_body(name, &String::from_utf8_lossy(&bytes))
+    };
+    page(
+        name,
+        html! {
+            (crumbs(rel, &path, true))
+            (body)
+        },
+    )
+    .into_response()
+}
+
+/// Render text file `source` with a line-number gutter, highlighting via
+/// `arborium` when the filename maps to a known grammar.
+fn blob_body(name: &str, source: &str) -> Markup {
+    let lines = source.lines().count().max(1);
+    let mut gutter = String::new();
+    for n in 1..=lines {
+        gutter.push_str(&n.to_string());
+        gutter.push('\n');
+    }
+    let highlighted = highlight(name, source);
+    html! {
+        div.blob {
+            pre.blob-nums { (gutter) }
+            pre.blob-code {
+                @match highlighted {
+                    Some(html) => code.code { (PreEscaped(html)) },
+                    None => code { (source) },
+                }
+            }
+        }
+    }
+}
+
+/// Highlighted HTML for `source`, or `None` when the filename has no grammar
+/// (in which case the caller renders escaped plain text). The highlighter is
+/// built and used synchronously so its non-`Send` grammar store is never held
+/// across an `.await`.
+fn highlight(name: &str, source: &str) -> Option<String> {
+    let language = arborium::detect_language(name)?;
+    let config = Config {
+        html_format: HtmlFormat::ClassNames,
+        ..Default::default()
+    };
+    Highlighter::with_config(config)
+        .highlight(language, source)
+        .ok()
+}
+
+/// Whether `bytes` looks like binary content (a NUL byte in the leading chunk,
+/// the same heuristic git uses).
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8000).any(|b| *b == 0)
+}
+
+/// A single commit: its metadata and a colorized unified diff.
+async fn commit_page(repo: &Path, rel: &str, sha: &str) -> Response {
+    if sha.is_empty() || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return not_found().into_response();
+    }
+    let Some(meta) = git_output(
+        repo,
+        &["show", "-s", "--format=%H%x00%an%x00%ar%x00%s%x00%b", sha],
+    )
+    .await
+    else {
+        return not_found().into_response();
+    };
+    let mut parts = meta.split('\u{0}');
+    let hash = parts.next().unwrap_or_default().trim().to_owned();
+    let author = parts.next().unwrap_or_default().to_owned();
+    let when = parts.next().unwrap_or_default().to_owned();
+    let subject = parts.next().unwrap_or_default().to_owned();
+    let body = parts.next().unwrap_or_default().trim_end().to_owned();
+    let short = hash.get(..7).unwrap_or(&hash).to_owned();
+    let patch = git_output(repo, &["show", "--no-color", "--format=", "--patch", sha])
+        .await
+        .unwrap_or_default();
+
+    page(
+        &subject,
+        html! {
+            div.page-header {
+                h1.page-title { a href={ "/" (rel) } { (rel) } }
+                span.branch { (short) }
+            }
+            div.card {
+                div.card-header { "Commit" }
+                div.commit {
+                    div.commit-subject { (subject) }
+                    @if !body.is_empty() {
+                        div.commit-msg { (body) }
+                    }
+                    div.commit-meta { (author) " · " (when) }
+                }
+            }
+            (diff_view(&patch))
+        },
+    )
+    .into_response()
+}
+
+/// Render a unified diff, coloring each line by its leading marker.
+fn diff_view(patch: &str) -> Markup {
+    if patch.trim().is_empty() {
+        return html! {};
+    }
+    html! {
+        div.diff {
+            @for line in patch.lines() {
+                span class={ "ln " (diff_class(line)) } { (line) "\n" }
+            }
+        }
+    }
+}
+
+/// The CSS class for a diff line, chosen from its leading marker.
+fn diff_class(line: &str) -> &'static str {
+    if line.starts_with("@@") {
+        "hunk"
+    } else if line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ") {
+        "file"
+    } else if line.starts_with("index ")
+        || line.starts_with("new file")
+        || line.starts_with("deleted file")
+        || line.starts_with("old mode")
+        || line.starts_with("new mode")
+        || line.starts_with("rename ")
+        || line.starts_with("similarity ")
+        || line.starts_with("Binary files")
+    {
+        "meta"
+    } else if line.starts_with('+') {
+        "add"
+    } else if line.starts_with('-') {
+        "del"
+    } else {
+        "ctx"
+    }
+}
+
+/// One segment of a breadcrumb trail: a label and, unless it is the current
+/// file, the link to its directory listing.
+struct Crumb {
+    label: String,
+    href: Option<String>,
+}
+
+/// Breadcrumb navigation from the repository root down through `path`. When
+/// `is_file` is set, the final component is shown as plain text rather than a
+/// link, since a file has no listing of its own.
+fn crumbs(rel: &str, path: &str, is_file: bool) -> Markup {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut acc = String::new();
+    let mut trail: Vec<Crumb> = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(part);
+        let is_last = i.saturating_add(1) == parts.len();
+        let href = (!(is_last && is_file)).then(|| format!("/{rel}/tree/{acc}"));
+        trail.push(Crumb {
+            label: (*part).to_owned(),
+            href,
+        });
+    }
+    html! {
+        nav.crumbs {
+            a href={ "/" (rel) } { (rel) }
+            @for crumb in &trail {
+                span.sep { "/" }
+                @match &crumb.href {
+                    Some(href) => a href=(href) { (crumb.label) },
+                    None => span.here { (crumb.label) },
+                }
+            }
+        }
     }
 }
 

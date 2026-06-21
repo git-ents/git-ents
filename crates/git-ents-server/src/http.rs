@@ -41,7 +41,7 @@ pub async fn git(
 
     // A plain browser GET (anything that is not part of the git wire protocol)
     // is served the HTML web UI rather than handed to the CGI backend.
-    if method == Method::GET && !is_git_path(&path_info, &query_string) {
+    if method == Method::GET && wants_web_ui(&path_info, &query_string) {
         let host = header_value(&headers, "Host");
         return crate::web::render(&state, &path_info, host.as_deref()).await;
     }
@@ -179,6 +179,33 @@ fn build_response(stdout: &[u8]) -> Response {
 
 /// Greatest repository nesting depth: `repo`, `org/repo`, or `org/team/repo`.
 const MAX_REPO_DEPTH: usize = 3;
+
+/// Whether a GET should be answered with the HTML web UI rather than handed to
+/// `git http-backend`.
+///
+/// Anything that is not a git wire-protocol request is web. In addition, the
+/// browse routes (`/tree/`, `/blob/`, `/commit/`) are claimed for the web UI
+/// even when a file path within them happens to resemble a dumb-HTTP git path
+/// (e.g. a file named `HEAD`, or a directory named `objects`) — but never when
+/// it is an actual smart-HTTP service request, so a repository named `commit`
+/// can still be pushed to and cloned.
+fn wants_web_ui(path: &str, query: &str) -> bool {
+    !is_git_path(path, query) || (is_browse_route(path) && !is_service_request(path, query))
+}
+
+/// Whether `path` selects one of the web UI's browse views.
+fn is_browse_route(path: &str) -> bool {
+    path.contains("/tree/") || path.contains("/blob/") || path.contains("/commit/")
+}
+
+/// Whether `path`/`query` is an unambiguous smart-HTTP service request (the
+/// ref advertisement or an upload-pack/receive-pack RPC).
+fn is_service_request(path: &str, query: &str) -> bool {
+    path.ends_with("/info/refs")
+        || path.ends_with("/git-upload-pack")
+        || path.ends_with("/git-receive-pack")
+        || query.contains("service=")
+}
 
 /// Whether `path`/`query` belong to git's wire protocol (smart or dumb HTTP)
 /// rather than the browser-facing web UI. Anything matching here is delegated
@@ -473,5 +500,26 @@ mod tests {
     #[case("/repo.git/objects/info/packs", "", false)]
     fn detects_pushes(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
         assert_eq!(is_receive_pack(path, query), expected);
+    }
+
+    #[rstest]
+    // Plain browse pages and the index are always web.
+    #[case("/", "", true)]
+    #[case("/repo", "", true)]
+    #[case("/repo/tree/src", "", true)]
+    #[case("/repo/blob/src/main.rs", "", true)]
+    #[case("/repo/commit/abc123", "", true)]
+    // Browse routes win over the loose dumb-HTTP heuristics: a file named HEAD,
+    // or a directory named `objects`, still renders as HTML.
+    #[case("/repo/blob/HEAD", "", true)]
+    #[case("/repo/blob/src/objects/mod.rs", "", true)]
+    // Real smart-HTTP requests are never stolen, even for a repo named `commit`.
+    #[case("/commit/info/refs", "service=git-upload-pack", false)]
+    #[case("/commit/git-receive-pack", "", false)]
+    #[case("/repo/info/refs", "service=git-upload-pack", false)]
+    #[case("/repo/git-upload-pack", "", false)]
+    #[case("/repo/objects/12/abcdef", "", false)]
+    fn routes_browser_gets(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
+        assert_eq!(wants_web_ui(path, query), expected);
     }
 }

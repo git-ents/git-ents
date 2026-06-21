@@ -12,6 +12,23 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+arborium = { version = "2.18", default-features = false, features = [
+    "lang-rust",
+    "lang-toml",
+    "lang-yaml",
+    "lang-json",
+    "lang-markdown",
+    "lang-asciidoc",
+    "lang-bash",
+    "lang-javascript",
+    "lang-typescript",
+    "lang-python",
+    "lang-c",
+    "lang-cpp",
+    "lang-go",
+    "lang-html",
+    "lang-css",
+] }
 axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"

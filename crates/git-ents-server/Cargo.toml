@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+arborium = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
