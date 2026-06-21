@@ -3,7 +3,10 @@
 //! warm-gold palette that follows the system light/dark preference. The git
 //! smart-HTTP gateway in [`crate::http`] delegates plain browser GETs here.
 
+use std::collections::HashSet;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
 
 use arborium::{Config, Highlighter, HtmlFormat};
@@ -223,6 +226,32 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .crumbs .sep { color: var(--color-text-muted); opacity: .55; }
 .crumbs .here { color: var(--color-text-muted); }
 
+.files { display: grid; grid-template-columns: 17rem minmax(0, 1fr); min-height: 30rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
+.tree-pane { background: var(--color-bg); border-right: 1px solid var(--color-border); overflow: auto; padding-bottom: .5rem; }
+.tree-head { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-code-bg); padding: .55rem .9rem; border-bottom: 1px solid var(--color-border); display: flex; align-items: center; gap: .4rem; }
+.tree-head .icon { width: 13px; height: 13px; }
+.tree-row { display: flex; align-items: center; gap: .3rem; font-family: var(--font-mono); font-size: .79rem; padding: 4px 8px; text-decoration: none; color: var(--color-text); white-space: nowrap; }
+.tree-row:hover { text-decoration: none; background: var(--color-code-bg); }
+.tree-row.sel { background: var(--color-accent-subtle); color: var(--color-accent); font-weight: 600; }
+.tree-row .chev { width: 12px; height: 12px; flex-shrink: 0; color: var(--color-text-muted); transition: transform .15s; }
+.tree-row .chev.open { transform: rotate(90deg); }
+.tree-row .ic-folder { display: inline-flex; color: var(--color-accent); }
+.tree-row.sel .ic-folder { color: var(--color-accent); }
+.tree-row .ic-file { display: inline-flex; color: var(--color-text-muted); }
+.tree-row span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.blob-pane { display: flex; flex-direction: column; min-width: 0; }
+.blob-head { display: flex; align-items: center; gap: .5rem; background: var(--color-code-bg); border-bottom: 1px solid var(--color-border); padding: .5rem 1rem; font-family: var(--font-mono); font-size: .78rem; }
+.blob-head .meta { margin-left: auto; display: flex; align-items: center; gap: .8rem; color: var(--color-text-muted); }
+.blob-head .copy-btn { border: 1px solid var(--color-border); border-radius: 6px; padding: .1rem .55rem; background: var(--color-surface); }
+.blob-pane .blob { border: 0; border-radius: 0; box-shadow: none; margin: 0; overflow: auto; flex: 1; }
+.files-empty { margin: auto; padding: 3rem; text-align: center; color: var(--color-text-muted); }
+.files-empty .icon { width: 28px; height: 28px; opacity: .5; margin-bottom: .5rem; }
+
+@media (max-width: 700px) {
+  .files { grid-template-columns: 1fr; }
+  .tree-pane { border-right: 0; border-bottom: 1px solid var(--color-border); max-height: 16rem; }
+}
+
 .blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
 .blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
 .blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1rem; padding-right: 1rem; user-select: none; -webkit-user-select: none; }
@@ -361,6 +390,7 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
         None => repo_page(repo, &meta, host).await.into_response(),
+        Some((&"files", sub)) => files_page(repo, &meta, sub).await,
         Some((&"tree", sub)) => tree_page(repo, &meta, sub).await,
         Some((&"blob", sub)) => blob_page(repo, &meta, sub).await,
         Some((&"commit", &[sha])) => commit_page(repo, &meta, sha).await,
@@ -926,6 +956,204 @@ fn clone_url(host: Option<&str>, rel: &str) -> String {
     }
 }
 
+/// One row of the Files tree pane.
+struct TreeRow {
+    name: String,
+    path: String,
+    is_dir: bool,
+    depth: usize,
+    expanded: bool,
+    selected: bool,
+}
+
+/// Walk the tree under `dir`, emitting a row per entry and recursing into any
+/// directory in `expanded`. Boxed because the recursion is `async`.
+fn collect_rows<'a>(
+    repo: &'a Path,
+    dir: &'a str,
+    depth: usize,
+    expanded: &'a HashSet<String>,
+    selected: &'a str,
+    out: &'a mut Vec<TreeRow>,
+) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        let spec = if dir.is_empty() {
+            "HEAD".to_owned()
+        } else {
+            format!("HEAD:{dir}")
+        };
+        for entry in list_tree(repo, &spec).await {
+            let path = if dir.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{dir}/{}", entry.name)
+            };
+            let is_expanded = entry.is_dir && expanded.contains(&path);
+            out.push(TreeRow {
+                name: entry.name.clone(),
+                path: path.clone(),
+                is_dir: entry.is_dir,
+                depth,
+                expanded: is_expanded,
+                selected: !entry.is_dir && path == selected,
+            });
+            if is_expanded {
+                collect_rows(
+                    repo,
+                    &path,
+                    depth.saturating_add(1),
+                    expanded,
+                    selected,
+                    out,
+                )
+                .await;
+            }
+        }
+    })
+}
+
+/// The Files tab: a tree pane beside a blob pane, both inside one card. With no
+/// client JavaScript, expanding a folder or opening a file is a link to
+/// `/<repo>/files/<path>`; the tree is rendered already expanded along the
+/// selected path.
+async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+    let rel = &meta.rel;
+    let Some(selected) = browse_path(sub) else {
+        return not_found().into_response();
+    };
+
+    // Classify the selection so the right pane shows a file and the tree expands
+    // the correct ancestors.
+    let kind = if selected.is_empty() {
+        None
+    } else {
+        git_output(repo, &["cat-file", "-t", &format!("HEAD:{selected}")])
+            .await
+            .map(|s| s.trim().to_owned())
+    };
+    let selected_file = matches!(kind.as_deref(), Some("blob")).then(|| selected.clone());
+    let selected_dir = match kind.as_deref() {
+        Some("tree") => selected.clone(),
+        Some("blob") => selected
+            .rsplit_once('/')
+            .map_or(String::new(), |(d, _)| d.to_owned()),
+        _ if selected.is_empty() => String::new(),
+        _ => return not_found().into_response(),
+    };
+
+    // Expand every ancestor directory of the selection (and the selection itself
+    // when it is a directory).
+    let mut expanded = HashSet::new();
+    let mut acc = String::new();
+    for part in selected_dir.split('/').filter(|s| !s.is_empty()) {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(part);
+        expanded.insert(acc.clone());
+    }
+
+    let mut rows = Vec::new();
+    collect_rows(
+        repo,
+        "",
+        0,
+        &expanded,
+        selected_file.as_deref().unwrap_or_default(),
+        &mut rows,
+    )
+    .await;
+
+    let right = match &selected_file {
+        Some(path) => blob_pane(repo, path).await,
+        None => html! {
+            div.files-empty {
+                (icon_file())
+                p { "Select a file to view its contents." }
+            }
+        },
+    };
+
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    repo_shell(
+        meta,
+        Tab::Files,
+        name,
+        html! {
+            div.files {
+                div.tree-pane {
+                    div.tree-head { (icon_branch()) (meta.branch.as_deref().unwrap_or("HEAD")) }
+                    @for row in &rows {
+                        a.tree-row.sel[row.selected]
+                            href={ "/" (rel) "/files/" (row.path) }
+                            style={ "padding-left:" (row.depth.saturating_mul(15).saturating_add(8)) "px" }
+                        {
+                            @if row.is_dir {
+                                span.chev.open[row.expanded] { (icon_chevron()) }
+                                span.ic-folder { (icon_folder()) }
+                            } @else {
+                                span.chev {}
+                                span.ic-file { (icon_file()) }
+                            }
+                            span { (row.name) }
+                        }
+                    }
+                }
+                div.blob-pane { (right) }
+            }
+        },
+    )
+    .into_response()
+}
+
+/// The right-hand pane of the Files view: a file's path, line/size meta, and its
+/// syntax-highlighted source (or a binary notice).
+async fn blob_pane(repo: &Path, path: &str) -> Markup {
+    let Some(bytes) = git_output_bytes(repo, &["cat-file", "-p", &format!("HEAD:{path}")]).await
+    else {
+        return html! { div.files-empty { "File not found." } };
+    };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    html! {
+        div.blob-head {
+            span { (path) }
+            span.meta {
+                @if !is_binary(&bytes) {
+                    span { (String::from_utf8_lossy(&bytes).lines().count()) " lines" }
+                }
+                span { (human_size(bytes.len())) }
+                button.copy-btn data-copy=(String::from_utf8_lossy(&bytes)) { "Copy" }
+            }
+        }
+        @if is_binary(&bytes) {
+            div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." }
+        } @else {
+            (blob_body(name, &String::from_utf8_lossy(&bytes)))
+        }
+    }
+}
+
+/// A byte count rendered as a compact human-readable size.
+fn human_size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "an approximate display size; exactness past 2^52 bytes is irrelevant"
+    )]
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len().saturating_sub(1) {
+        size /= 1024.0;
+        unit = unit.saturating_add(1);
+    }
+    let label = UNITS.get(unit).unwrap_or(&"B");
+    if unit == 0 {
+        format!("{bytes} {label}")
+    } else {
+        format!("{size:.1} {label}")
+    }
+}
+
 /// A directory listing at `sub` within the repository.
 async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
     let rel = &meta.rel;
@@ -1301,6 +1529,12 @@ fn icon_folder() -> Markup {
 fn icon_file() -> Markup {
     svg(
         "M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z",
+    )
+}
+
+fn icon_chevron() -> Markup {
+    svg(
+        "M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z",
     )
 }
 
