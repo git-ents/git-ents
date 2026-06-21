@@ -29,7 +29,7 @@ const STYLE: &str = r#"
   --font-sans: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-serif: "Lora", Georgia, "Times New Roman", serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  --max-width: 52rem;
+  --max-width: 78rem;
   --color-bg: #faf8f4;
   --color-surface: #fff;
   --color-text: #2a2518;
@@ -44,7 +44,6 @@ const STYLE: &str = r#"
   --shadow-md: 0 4px 16px #0000000f;
   --radius-sm: 10px;
   --radius-pill: 100px;
-  --glow: #b07d1012;
   --s-comment: #9c8f74;
   --s-keyword: #9d0006;
   --s-func: #427b58;
@@ -70,7 +69,6 @@ const STYLE: &str = r#"
     --color-accent-subtle: #d4a03012;
     --shadow-sm: 0 1px 3px #00000040;
     --shadow-md: 0 4px 16px #0000004d;
-    --glow: #d4a03014;
     --s-comment: #928374;
     --s-keyword: #fb4934;
     --s-func: #8ec07c;
@@ -93,16 +91,26 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background-image: radial-gradient(80% 40% at 50% -10%, var(--glow) 0%, #0000 70%);
+  background-image: radial-gradient(58rem 30rem at 50% -10rem, var(--color-accent-subtle), transparent 72%);
+  background-attachment: fixed;
 }
 a { color: var(--color-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--color-link) 25%, transparent); text-underline-offset: 2px; transition: color .15s, text-decoration-color .15s; }
 a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .icon { flex-shrink: 0; fill: currentColor; vertical-align: -0.125em; }
 
 .site-nav { position: sticky; top: 0; z-index: 100; background: color-mix(in srgb, var(--color-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--color-border); }
-.nav-inner { max-width: var(--max-width); margin: 0 auto; padding: 1rem 1.5rem; display: flex; align-items: center; gap: 2rem; }
-.nav-logo { font-family: var(--font-mono); font-weight: 700; font-size: 1.05rem; color: var(--color-text); letter-spacing: -.01em; text-decoration: none; margin-right: auto; transition: color .15s; }
+.nav-inner { max-width: var(--max-width); margin: 0 auto; height: 58px; padding: 0 1.5rem; display: flex; align-items: center; gap: 1.25rem; }
+.nav-logo { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-weight: 700; font-size: 1.02rem; color: var(--color-text); letter-spacing: -.01em; text-decoration: none; white-space: nowrap; transition: color .15s; }
+.nav-logo .icon { color: var(--color-accent); width: 18px; height: 18px; }
 .nav-logo:hover { color: var(--color-accent); }
+.nav-search { flex: 1; max-width: 24rem; margin: 0 auto; position: relative; display: flex; align-items: center; }
+.nav-search .icon { position: absolute; left: .65rem; color: var(--color-text-muted); pointer-events: none; }
+.nav-search input { width: 100%; font-family: var(--font-sans); font-size: .82rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem .42rem 2rem; transition: border-color .15s; }
+.nav-search input:focus { outline: none; border-color: var(--color-accent); }
+.nav-links { display: flex; align-items: center; gap: 1.1rem; white-space: nowrap; }
+.nav-link { font-size: .85rem; color: var(--color-text-muted); text-decoration: none; transition: color .15s; }
+.nav-link:hover { color: var(--color-accent); }
+.nav-avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); text-decoration: none; }
 
 .content { max-width: var(--max-width); width: 100%; margin: 0 auto; padding: 2.25rem 1.5rem 3rem; flex: 1; }
 
@@ -861,13 +869,22 @@ fn page(title: &str, body: Markup) -> Markup {
             body {
                 nav.site-nav {
                     div.nav-inner {
-                        a.nav-logo href="/" { "🌳 Git Ents" }
+                        a.nav-logo href="/" { (icon_tree()) "git-ents" }
+                        div.nav-search {
+                            (icon_search())
+                            input type="search" placeholder="Jump to file or symbol" aria-label="Search";
+                        }
+                        div.nav-links {
+                            a.nav-link href="/" { "Explore" }
+                            a.nav-link href="/" { "Docs" }
+                            a.nav-avatar href="/" title="Account" { "el" }
+                        }
                     }
                 }
                 main.content { (body) }
                 footer.site-footer {
                     div.footer-inner {
-                        "Served by " a href="/" { "Git Ents" } "."
+                        "git-ents · served as paper-grain HTML · no JavaScript required"
                     }
                 }
                 script { (PreEscaped(COPY_SCRIPT)) }
@@ -900,6 +917,18 @@ fn icon_folder() -> Markup {
 fn icon_file() -> Markup {
     svg(
         "M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z",
+    )
+}
+
+fn icon_tree() -> Markup {
+    svg(
+        "M8 0a4 4 0 0 1 .91 7.895A.749.749 0 0 1 8.75 8v2.5h2.75a1.75 1.75 0 0 1 1.75 1.75v1.25h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-1.25a.25.25 0 0 0-.25-.25H4.25a.25.25 0 0 0-.25.25v1.25h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5H2.5v-1.25c0-.966.784-1.75 1.75-1.75H7V8a.749.749 0 0 1-.16-.105A4 4 0 0 1 8 0Zm0 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z",
+    )
+}
+
+fn icon_search() -> Markup {
+    svg(
+        "M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z",
     )
 }
 
