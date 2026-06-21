@@ -193,6 +193,28 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 
 .commit-msg { font-family: var(--font-mono); font-size: .9rem; white-space: pre-wrap; word-break: break-word; }
 
+.adoc-body { padding: 40px 48px 52px; max-width: 44rem; overflow-wrap: break-word; }
+.adoc-body > :first-child { margin-top: 0; }
+.adoc-body h1, .adoc-body h2, .adoc-body h3, .adoc-body h4 { font-family: var(--font-serif); font-weight: 700; letter-spacing: -.01em; line-height: 1.25; margin: 1.8rem 0 .9rem; }
+.adoc-body h1 { font-size: 2.4rem; letter-spacing: -.02em; }
+.adoc-body h2 { font-size: 1.4rem; font-weight: 600; position: relative; padding-bottom: .55rem; }
+.adoc-body h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 3rem; height: 2px; background: var(--color-accent); border-radius: 1px; }
+.adoc-body h3 { font-size: 1.15rem; font-weight: 600; }
+.adoc-body p, .adoc-body ul, .adoc-body ol { margin: 0 0 1rem; }
+.adoc-body ul, .adoc-body ol { padding-left: 1.4rem; }
+.adoc-body li { margin: .25rem 0; }
+.adoc-body a { font-weight: 500; }
+.adoc-body code, .adoc-body .literal { font-family: var(--font-mono); font-size: .86em; background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }
+.adoc-body pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 1rem 1.2rem; overflow-x: auto; margin: 0 0 1rem; }
+.adoc-body pre code { background: none; padding: 0; font-size: inherit; }
+.adoc-body blockquote { border-left: 3px solid var(--color-accent); padding: .2rem 0 .2rem 1.1rem; margin: 0 0 1rem; color: var(--color-text-muted); }
+.adoc-body table { border-collapse: collapse; margin: 0 0 1rem; font-size: .92rem; }
+.adoc-body th, .adoc-body td { border: 1px solid var(--color-border); padding: .4rem .7rem; text-align: left; }
+.adoc-body th { background: var(--color-code-bg); font-weight: 600; }
+.adoc-body .title { font-weight: 600; color: var(--color-text-muted); font-size: .9rem; margin-bottom: .3rem; }
+.adoc-body img { max-width: 100%; height: auto; }
+.adoc-body hr { border: none; border-top: 1px solid var(--color-border); margin: 1.8rem 0; }
+
 .site-footer { border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .8rem; margin-top: auto; }
 .footer-inner { max-width: var(--max-width); margin: 0 auto; padding: 2rem 1.5rem; text-align: center; }
 .footer-inner a { color: var(--color-text-muted); text-decoration: none; }
@@ -316,6 +338,7 @@ async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
         .filter(|s| !s.is_empty());
     let commits = recent_commits(repo).await;
     let tree = root_tree(repo, branch.is_some()).await;
+    let readme = readme(repo, &tree).await;
     let clone_url = clone_url(host, rel);
     let name = rel.rsplit('/').next().unwrap_or(rel);
 
@@ -346,6 +369,12 @@ async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
                     p { "Push a commit to get started." }
                 }
             } @else {
+                @if let Some((file, html)) = &readme {
+                    div.card {
+                        div.card-header { (file) }
+                        article.adoc-body { (PreEscaped(html)) }
+                    }
+                }
                 @if !tree.is_empty() {
                     div.card {
                         div.card-header { "Files" }
@@ -428,6 +457,23 @@ async fn root_tree(repo: &Path, has_head: bool) -> Vec<TreeEntry> {
         return Vec::new();
     }
     list_tree(repo, "HEAD").await
+}
+
+/// The rendered README for the overview: the first AsciiDoc file in the root
+/// tree whose stem is `README`, converted to HTML, paired with its filename.
+/// `None` when there is no such file or it fails to render.
+async fn readme(repo: &Path, tree: &[TreeEntry]) -> Option<(String, String)> {
+    let entry = tree.iter().find(|e| {
+        !e.is_dir
+            && crate::asciidoc::is_asciidoc(&e.name)
+            && e.name
+                .rsplit_once('.')
+                .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"))
+    })?;
+    let spec = format!("HEAD:{}", entry.name);
+    let bytes = git_output_bytes(repo, &["cat-file", "-p", &spec]).await?;
+    let html = crate::asciidoc::to_html(&String::from_utf8_lossy(&bytes))?;
+    Some((entry.name.clone(), html))
 }
 
 /// The entries of the tree named by `spec` (a git tree-ish such as `HEAD` or
@@ -592,7 +638,14 @@ async fn blob_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
     let body = if is_binary(&bytes) {
         html! { div.blob { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } } }
     } else {
-        blob_body(name, &String::from_utf8_lossy(&bytes))
+        let text = String::from_utf8_lossy(&bytes);
+        match crate::asciidoc::is_asciidoc(name)
+            .then(|| crate::asciidoc::to_html(&text))
+            .flatten()
+        {
+            Some(html) => html! { div.card { article.adoc-body { (PreEscaped(html)) } } },
+            None => blob_body(name, &text),
+        }
     };
     page(
         name,

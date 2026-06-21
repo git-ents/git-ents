@@ -6,6 +6,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+acdc-parser = { workspace = true }
+acdc-converters-core = { workspace = true }
+acdc-converters-html = { workspace = true }
 arborium = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }

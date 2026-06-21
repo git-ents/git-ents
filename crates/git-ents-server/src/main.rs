@@ -1,5 +1,6 @@
 //! Git Ents server — helpful guardians of your git trees.
 
+mod asciidoc;
 mod http;
 mod web;
 
