@@ -8,7 +8,8 @@
 
 use acdc_converters_core::{Converter, Options as ConvertOptions};
 use acdc_converters_html::{Processor, RenderOptions};
-use acdc_parser::Options as ParseOptions;
+use acdc_parser::{Options as ParseOptions, inlines_to_string};
+use maud::html;
 
 /// File extensions that name an AsciiDoc document.
 const EXTENSIONS: [&str; 4] = ["adoc", "asciidoc", "asc", "adc"];
@@ -25,10 +26,34 @@ pub(crate) fn is_asciidoc(name: &str) -> bool {
 pub(crate) fn to_html(source: &str) -> Option<String> {
     let parsed = acdc_parser::parse(source, &ParseOptions::default()).ok()?;
     let doc = parsed.document();
+
+    // Embedded mode omits the document frame *and* the visible doctitle, so
+    // rebuild the title and subtitle from the parsed header — the README's h1 is
+    // the centerpiece of the overview.
+    let heading = doc
+        .header
+        .as_ref()
+        .filter(|h| !h.title.is_empty())
+        .map(|h| {
+            let title = inlines_to_string(&h.title);
+            let subtitle = h.subtitle.as_ref().map(|s| inlines_to_string(s));
+            html! {
+                h1 { (title) }
+                @if let Some(subtitle) = subtitle {
+                    p.doc-subtitle { (subtitle) }
+                }
+            }
+            .into_string()
+        });
+
     let processor = Processor::new(ConvertOptions::default(), doc.attributes.clone());
     let options = RenderOptions {
         embedded: true,
         ..RenderOptions::default()
     };
-    processor.convert_to_string(doc, &options).ok()
+    let body = processor.convert_to_string(doc, &options).ok()?;
+    Some(match heading {
+        Some(heading) => heading + &body,
+        None => body,
+    })
 }

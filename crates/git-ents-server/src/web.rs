@@ -122,7 +122,60 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .page-title a:hover { color: var(--color-accent); }
 .count { margin-left: auto; font-family: var(--font-mono); font-size: .8rem; color: var(--color-text-muted); }
 
-.branch { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: .1rem .6rem; }
+.branch { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: .1rem .6rem; display: inline-flex; align-items: center; gap: .3rem; }
+.branch .icon { width: 13px; height: 13px; }
+
+.repo-header { display: flex; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.repo-headline { flex: 1; min-width: 0; }
+.repo-path { font-family: var(--font-mono); font-size: 1.18rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; word-break: break-all; }
+.repo-path .icon { color: var(--color-accent); }
+.repo-path a { color: var(--color-text-muted); text-decoration: none; }
+.repo-path a:hover { color: var(--color-accent); }
+.repo-path .here { color: var(--color-accent); font-weight: 600; }
+.repo-path .sep { color: var(--color-text-muted); opacity: .55; }
+.pill-public { font-family: var(--font-mono); font-size: .7rem; font-weight: 500; color: var(--color-text-muted); background: var(--color-code-bg); border-radius: var(--radius-pill); padding: .1rem .55rem; }
+.repo-desc { font-size: .98rem; color: var(--color-text); max-width: 40rem; margin-top: .65rem; }
+.topics { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+.topic { font-family: var(--font-mono); font-size: .72rem; color: var(--color-link); background: var(--color-accent-subtle); border-radius: var(--radius-pill); padding: .12rem .6rem; text-decoration: none; }
+.topic:hover { color: var(--color-link-hover); }
+.repo-actions { display: flex; gap: .6rem; flex-shrink: 0; }
+.action-btn { display: inline-flex; align-items: center; gap: .4rem; font-family: var(--font-sans); font-size: .82rem; font-weight: 500; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); padding: .4rem .8rem; cursor: pointer; transition: border-color .15s; }
+.action-btn:hover { border-color: var(--color-accent); }
+.action-btn .icon { color: var(--color-text-muted); }
+
+.tabs { display: flex; gap: .15rem; border-bottom: 1px solid var(--color-border); margin-bottom: 1.75rem; overflow-x: auto; }
+.tab { display: inline-flex; align-items: center; gap: .4rem; padding: 10px 14px; font-size: .88rem; color: var(--color-text-muted); text-decoration: none; white-space: nowrap; position: relative; transition: color .15s; }
+.tab:hover { color: var(--color-text); }
+.tab.active { color: var(--color-text); font-weight: 600; }
+.tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--color-accent); }
+.tab-count { font-family: var(--font-mono); font-size: .68rem; color: var(--color-text-muted); background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: 0 .4rem; }
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--s-func); }
+
+.overview { display: grid; grid-template-columns: 1fr 19rem; gap: 34px; align-items: start; }
+.aside { position: sticky; top: 78px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.aside .card { margin-bottom: 0; }
+.aside .clone code { font-size: .76rem; padding: .6rem .8rem; }
+.aside-row { display: flex; align-items: center; gap: .5rem; padding: .55rem 1.1rem; font-size: .82rem; }
+.aside-row + .aside-row { border-top: 1px solid var(--color-border); }
+.aside-row .icon { color: var(--color-text-muted); flex-shrink: 0; }
+.aside-row .muted { color: var(--color-text-muted); }
+.aside-row .count { margin-left: 0; font-family: var(--font-mono); font-weight: 600; color: var(--color-accent); }
+.aside-row a { text-decoration: none; }
+.lang-dot, .swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.lang { padding: .8rem 1.1rem; }
+.lang-bar { display: flex; height: 8px; border-radius: var(--radius-pill); overflow: hidden; background: var(--color-code-bg); }
+.lang-bar span { display: block; height: 100%; }
+.lang-legend { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; font-size: .78rem; }
+.lang-legend li { display: flex; align-items: center; gap: .45rem; }
+.lang-legend .pct { margin-left: auto; font-family: var(--font-mono); color: var(--color-text-muted); }
+.latest { font-family: var(--font-mono); font-size: .8rem; }
+.tag-pill { color: var(--color-accent); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .overview { grid-template-columns: 1fr; }
+  .aside { position: static; }
+}
 
 .repo-list { list-style: none; }
 .repo-list li + li { border-top: 1px solid var(--color-border); }
@@ -205,6 +258,7 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .adoc-body > :first-child { margin-top: 0; }
 .adoc-body h1, .adoc-body h2, .adoc-body h3, .adoc-body h4 { font-family: var(--font-serif); font-weight: 700; letter-spacing: -.01em; line-height: 1.25; margin: 1.8rem 0 .9rem; }
 .adoc-body h1 { font-size: 2.4rem; letter-spacing: -.02em; }
+.adoc-body .doc-subtitle { font-family: var(--font-serif); font-style: italic; font-size: 1.18rem; color: var(--color-text-muted); margin: -.4rem 0 1.2rem; }
 .adoc-body h2 { font-size: 1.4rem; font-weight: 600; position: relative; padding-bottom: .55rem; }
 .adoc-body h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 3rem; height: 2px; background: var(--color-accent); border-radius: 1px; }
 .adoc-body h3 { font-size: 1.15rem; font-weight: 600; }
@@ -222,6 +276,25 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .adoc-body .title { font-weight: 600; color: var(--color-text-muted); font-size: .9rem; margin-bottom: .3rem; }
 .adoc-body img { max-width: 100%; height: auto; }
 .adoc-body hr { border: none; border-top: 1px solid var(--color-border); margin: 1.8rem 0; }
+
+.timeline { position: relative; padding-left: 30px; }
+.timeline::before { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--color-border); }
+.release { position: relative; margin-bottom: 1.5rem; }
+.release::before { content: ""; position: absolute; left: -30px; top: 16px; width: 12px; height: 12px; border-radius: var(--radius-pill); background: var(--color-surface); border: 2px solid var(--color-border); box-shadow: 0 0 0 4px var(--color-bg); }
+.release.latest::before { background: var(--color-accent); border-color: var(--color-accent); }
+.release-head { display: flex; align-items: center; gap: .55rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
+.release-head .icon { color: var(--color-accent); }
+.release-tag { font-family: var(--font-mono); font-size: .9rem; font-weight: 600; color: var(--color-accent); }
+.release-name { font-family: var(--font-serif); font-size: 1.05rem; font-weight: 600; }
+.release-date { margin-left: auto; font-size: .8rem; color: var(--color-text-muted); }
+.badge-latest { font-family: var(--font-mono); font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--s-func); background: var(--color-code-bg); border-radius: var(--radius-pill); padding: .05rem .5rem; }
+.release-body { padding: 1rem 1.1rem; }
+.release-body p { white-space: pre-wrap; font-size: .9rem; }
+.release-body .muted { color: var(--color-text-muted); }
+.release-foot { display: flex; align-items: center; padding: .7rem 1.1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: .74rem; }
+.release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; }
+
+.shell-note { color: var(--color-text-muted); font-size: .95rem; max-width: 44rem; margin-bottom: 1.5rem; }
 
 .site-footer { border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .8rem; margin-top: auto; }
 .footer-inner { max-width: var(--max-width); margin: 0 auto; padding: 2rem 1.5rem; text-align: center; }
@@ -282,13 +355,156 @@ pub(crate) async fn render(state: &AppState, path: &str, host: Option<&str>) -> 
 }
 
 /// Dispatch the part of the path that follows the repository to a browse view.
+/// Each top-level tab is its own route, since the product is server-rendered
+/// with no client JavaScript.
 async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Response {
+    let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
-        None => repo_page(repo, rel, host).await.into_response(),
-        Some((&"tree", sub)) => tree_page(repo, rel, sub).await,
-        Some((&"blob", sub)) => blob_page(repo, rel, sub).await,
-        Some((&"commit", &[sha])) => commit_page(repo, rel, sha).await,
+        None => repo_page(repo, &meta, host).await.into_response(),
+        Some((&"tree", sub)) => tree_page(repo, &meta, sub).await,
+        Some((&"blob", sub)) => blob_page(repo, &meta, sub).await,
+        Some((&"commit", &[sha])) => commit_page(repo, &meta, sha).await,
+        Some((&"releases", &[])) => releases_page(repo, &meta).await.into_response(),
         _ => not_found().into_response(),
+    }
+}
+
+/// The top-level tabs of a repository page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Overview,
+    Files,
+    Releases,
+    Hooks,
+    Issues,
+    Settings,
+}
+
+/// Metadata shown in the repository header band and tab bar, gathered once per
+/// request and shared by every view.
+struct RepoMeta {
+    rel: String,
+    branch: Option<String>,
+    description: Option<String>,
+    topics: Vec<String>,
+    releases: usize,
+    issues: usize,
+    has_hooks: bool,
+}
+
+/// Collect the header/tab metadata for the repository at `rel`.
+async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
+    let branch = git_output(repo, &["symbolic-ref", "--short", "HEAD"])
+        .await
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let description = std::fs::read_to_string(repo.join("description"))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty() && !s.starts_with("Unnamed repository"));
+    let topics = git_output_bytes(repo, &["cat-file", "-p", "HEAD:.gitents/topics"])
+        .await
+        .map(|b| {
+            String::from_utf8_lossy(&b)
+                .split([',', '\n', ' ', '\t'])
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let releases = git_output(repo, &["tag", "--list"])
+        .await
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let has_hooks = git_output(repo, &["cat-file", "-t", "HEAD:.gitents/hooks.toml"])
+        .await
+        .as_deref()
+        == Some("blob\n");
+    RepoMeta {
+        rel: rel.to_owned(),
+        branch,
+        description,
+        topics,
+        releases,
+        issues: 0,
+        has_hooks,
+    }
+}
+
+/// Wrap a repository view in the shared header band and tab bar, then the page
+/// shell. `active` highlights the current tab.
+fn repo_shell(meta: &RepoMeta, active: Tab, title: &str, body: Markup) -> Markup {
+    page(
+        title,
+        html! { (repo_header(meta)) (tab_bar(meta, active)) (body) },
+    )
+}
+
+/// The repository header band: path line, branch and visibility pills,
+/// description, topic chips, and the Watch/Star actions.
+fn repo_header(meta: &RepoMeta) -> Markup {
+    let segments: Vec<&str> = meta.rel.split('/').collect();
+    let last = segments.len().saturating_sub(1);
+    html! {
+        div.repo-header {
+            div.repo-headline {
+                div.repo-path {
+                    (icon_folder())
+                    @for (i, seg) in segments.iter().enumerate() {
+                        @if i > 0 { span.sep { "/" } }
+                        @if i == last {
+                            span.here { (seg) }
+                        } @else {
+                            @let href = format!("/{}", segments.get(..=i).unwrap_or_default().join("/"));
+                            a href=(href) { (seg) }
+                        }
+                    }
+                    @if let Some(branch) = &meta.branch {
+                        span.branch { (icon_branch()) (branch) }
+                    }
+                    span.pill-public { "Public" }
+                }
+                @if let Some(desc) = &meta.description {
+                    p.repo-desc { (desc) }
+                }
+                @if !meta.topics.is_empty() {
+                    div.topics {
+                        @for topic in &meta.topics {
+                            span.topic { (topic) }
+                        }
+                    }
+                }
+            }
+            div.repo-actions {
+                button.action-btn type="button" { (icon_eye()) "Watch" }
+                button.action-btn type="button" { (icon_star()) "Star" }
+            }
+        }
+    }
+}
+
+/// The tab bar with the active tab underlined. Tabs that have no backing data
+/// yet still render so the navigation matches the design.
+fn tab_bar(meta: &RepoMeta, active: Tab) -> Markup {
+    let rel = &meta.rel;
+    html! {
+        nav.tabs {
+            a.tab.active[active == Tab::Overview] href={ "/" (rel) } { "Overview" }
+            a.tab.active[active == Tab::Files] href={ "/" (rel) "/files" } { "Files" }
+            a.tab.active[active == Tab::Releases] href={ "/" (rel) "/releases" } {
+                "Releases"
+                @if meta.releases > 0 { span.tab-count { (meta.releases) } }
+            }
+            a.tab.active[active == Tab::Hooks] href={ "/" (rel) "/hooks" } {
+                "Hooks"
+                @if meta.has_hooks { span.tab-dot {} }
+            }
+            a.tab.active[active == Tab::Issues] href={ "/" (rel) "/issues" } {
+                "Issues"
+                @if meta.issues > 0 { span.tab-count { (meta.issues) } }
+            }
+            a.tab.active[active == Tab::Settings] href={ "/" (rel) "/settings" } { "Settings" }
+        }
     }
 }
 
@@ -338,119 +554,113 @@ fn index(state: &AppState) -> Markup {
     )
 }
 
-/// A single repository's overview: default branch, recent commits, root tree.
-async fn repo_page(repo: &Path, rel: &str, host: Option<&str>) -> Markup {
-    let branch = git_output(repo, &["symbolic-ref", "--short", "HEAD"])
+/// A single repository's overview: the rendered README beside an aside of
+/// clone, about, releases, and language cards.
+async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) -> Markup {
+    let rel = &meta.rel;
+    let updated = git_output(repo, &["log", "-1", "--format=%ar"])
         .await
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    let commits = recent_commits(repo).await;
-    let tree = root_tree(repo, branch.is_some()).await;
+    let is_empty = updated.is_none();
+    let tree = root_tree(repo, !is_empty).await;
     let readme = readme(repo, &tree).await;
     let clone_url = clone_url(host, rel);
+    let langs = languages(repo).await;
+    let latest = latest_release(repo).await;
     let name = rel.rsplit('/').next().unwrap_or(rel);
 
-    page(
-        name,
-        html! {
-            div.page-header {
-                h1.page-title {
-                    (icon_folder())
-                    a href={ "/" (rel) } { (rel) }
-                }
-                @if let Some(branch) = &branch {
-                    span.branch { (branch) }
+    let main = html! {
+        @if is_empty {
+            div.blankslate {
+                h2 { "This repository is empty" }
+                p { "Push a commit to get started." }
+            }
+        } @else if let Some((file, html)) = &readme {
+            div.card {
+                div.card-header { (icon_file()) " " (file) }
+                article.adoc-body { (PreEscaped(html)) }
+            }
+        } @else if !tree.is_empty() {
+            div.card {
+                div.card-header { "Files" }
+                @for entry in &tree {
+                    div.card-row.is-dir[entry.is_dir] {
+                        @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
+                        a href=(entry_href(rel, "", entry)) { (entry.name) }
+                    }
                 }
             }
+        }
+    };
 
+    let aside = html! {
+        aside.aside {
             div.card {
                 div.card-header { "Clone" }
                 div.clone {
-                    code { "git clone " (clone_url) }
+                    code { (clone_url) }
                     button.copy-btn data-copy={ "git clone " (clone_url) } { "Copy" }
                 }
             }
-
-            @if commits.is_empty() {
-                div.blankslate {
-                    h2 { "This repository is empty" }
-                    p { "Push a commit to get started." }
-                }
-            } @else {
-                @if let Some((file, html)) = &readme {
-                    div.card {
-                        div.card-header { (file) }
-                        article.adoc-body { (PreEscaped(html)) }
+            div.card {
+                div.card-header { "About" }
+                @if let Some((lang, color, _)) = langs.first() {
+                    div.aside-row {
+                        span.dot style={ "background:" (color) } {}
+                        span { (lang) }
                     }
                 }
-                @if !tree.is_empty() {
-                    div.card {
-                        div.card-header { "Files" }
-                        @for entry in &tree {
-                            div.card-row.is-dir[entry.is_dir] {
-                                @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
-                                a href=(entry_href(rel, "", entry)) { (entry.name) }
-                            }
-                        }
+                @if let Some(updated) = &updated {
+                    div.aside-row {
+                        (icon_clock())
+                        span.muted { "Updated " (updated) }
                     }
                 }
+            }
+            @if let Some(release) = &latest {
                 div.card {
-                    div.card-header { "Recent commits" }
-                    @for commit in &commits {
-                        div.commit {
-                            div.commit-subject {
-                                a href={ "/" (rel) "/commit/" (commit.hash) } { (commit.subject) }
+                    div.card-header { "Releases" span.count { (meta.releases) } }
+                    div.aside-row {
+                        (icon_tag())
+                        a href={ "/" (rel) "/releases" } { span.tag-pill { (release.tag) } }
+                        span.badge-latest { "Latest" }
+                    }
+                    div.aside-row {
+                        span.muted { (release.title) " · " (release.date) }
+                    }
+                }
+            }
+            @if !langs.is_empty() {
+                div.card {
+                    div.card-header { "Languages" }
+                    div.lang {
+                        div.lang-bar {
+                            @for (_, color, pct) in &langs {
+                                span style={ "width:" (pct) "%;background:" (color) } {}
                             }
-                            div.commit-meta {
-                                span.sha { (commit.short) }
-                                (commit.author) " · " (commit.when)
+                        }
+                        ul.lang-legend {
+                            @for (lang, color, pct) in &langs {
+                                li {
+                                    span.lang-dot style={ "background:" (color) } {}
+                                    span { (lang) }
+                                    span.pct { (pct) "%" }
+                                }
                             }
                         }
                     }
                 }
             }
-        },
-    )
-}
-
-/// A parsed `git log` entry.
-struct Commit {
-    hash: String,
-    short: String,
-    author: String,
-    when: String,
-    subject: String,
-}
-
-/// The most recent commits reachable from `HEAD`, newest first.
-async fn recent_commits(repo: &Path) -> Vec<Commit> {
-    let Some(log) = git_output(
-        repo,
-        &["log", "-n", "20", "--format=%H%x00%an%x00%ar%x00%s"],
-    )
-    .await
-    else {
-        return Vec::new();
+        }
     };
-    log.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\u{0}');
-            let hash = parts.next().unwrap_or_default();
-            let author = parts.next().unwrap_or_default();
-            let when = parts.next().unwrap_or_default();
-            let subject = parts.next().unwrap_or_default();
-            if hash.is_empty() {
-                return None;
-            }
-            Some(Commit {
-                hash: hash.to_owned(),
-                short: hash.get(..7).unwrap_or(hash).to_owned(),
-                author: author.to_owned(),
-                when: when.to_owned(),
-                subject: subject.to_owned(),
-            })
-        })
-        .collect()
+
+    repo_shell(
+        meta,
+        Tab::Overview,
+        name,
+        html! { div.overview { div { (main) } (aside) } },
+    )
 }
 
 /// A single entry in the repository's root tree.
@@ -482,6 +692,133 @@ async fn readme(repo: &Path, tree: &[TreeEntry]) -> Option<(String, String)> {
     let bytes = git_output_bytes(repo, &["cat-file", "-p", &spec]).await?;
     let html = crate::asciidoc::to_html(&String::from_utf8_lossy(&bytes))?;
     Some((entry.name.clone(), html))
+}
+
+/// A language's display name, swatch color (a CSS custom property), and the
+/// percentage of tracked bytes it accounts for.
+type Language = (&'static str, &'static str, u8);
+
+/// Map a filename to a language name and swatch color by its extension, or
+/// `None` for files that do not count toward the language breakdown.
+fn classify_language(name: &str) -> Option<(&'static str, &'static str)> {
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    let lang = match ext.as_str() {
+        "rs" => ("Rust", "var(--s-type)"),
+        "html" | "htm" => ("HTML", "var(--s-func)"),
+        "css" => ("CSS", "var(--s-prop)"),
+        "js" | "mjs" | "cjs" => ("JavaScript", "var(--s-const)"),
+        "ts" | "tsx" => ("TypeScript", "var(--s-prop)"),
+        "py" => ("Python", "var(--s-string)"),
+        "go" => ("Go", "var(--s-prop)"),
+        "c" | "h" => ("C", "var(--s-const)"),
+        "cpp" | "cc" | "hpp" | "cxx" => ("C++", "var(--s-const)"),
+        "sh" | "bash" => ("Shell", "var(--s-func)"),
+        "toml" => ("TOML", "var(--s-type)"),
+        "yaml" | "yml" => ("YAML", "var(--s-prop)"),
+        "json" => ("JSON", "var(--s-const)"),
+        "md" | "adoc" | "asciidoc" => ("Prose", "var(--s-comment)"),
+        _ => return None,
+    };
+    Some(lang)
+}
+
+/// The language breakdown for `HEAD`, by tracked blob size, as the top few
+/// languages with integer percentages summing to roughly 100.
+async fn languages(repo: &Path) -> Vec<Language> {
+    let Some(out) = git_output(repo, &["ls-tree", "-r", "-l", "HEAD"]).await else {
+        return Vec::new();
+    };
+    let mut totals: Vec<(&'static str, &'static str, u64)> = Vec::new();
+    let mut grand: u64 = 0;
+    for line in out.lines() {
+        let Some((meta, name)) = line.split_once('\t') else {
+            continue;
+        };
+        let size: u64 = meta
+            .split_whitespace()
+            .nth(3)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let Some((lang, color)) = classify_language(name) else {
+            continue;
+        };
+        grand = grand.saturating_add(size);
+        match totals.iter_mut().find(|(l, _, _)| *l == lang) {
+            Some(entry) => entry.2 = entry.2.saturating_add(size),
+            None => totals.push((lang, color, size)),
+        }
+    }
+    if grand == 0 {
+        return Vec::new();
+    }
+    totals.sort_by_key(|b| std::cmp::Reverse(b.2));
+    totals.truncate(4);
+    totals
+        .into_iter()
+        .map(|(lang, color, bytes)| {
+            let pct = bytes.saturating_mul(100).checked_div(grand).unwrap_or(0);
+            (lang, color, u8::try_from(pct).unwrap_or(100))
+        })
+        .filter(|(_, _, pct)| *pct > 0)
+        .collect()
+}
+
+/// A tagged release: its tag, the release name and notes drawn from the tag (or
+/// commit) message, the relative date, and the target commit's short hash.
+struct Release {
+    tag: String,
+    title: String,
+    body: String,
+    date: String,
+    short: String,
+}
+
+/// All tags as releases, newest first by creation date.
+async fn releases(repo: &Path) -> Vec<Release> {
+    let Some(list) = git_output(repo, &["tag", "--sort=-creatordate", "--list"]).await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for tag in list
+        .lines()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .take(40)
+    {
+        let Some(meta) = git_output(repo, &["log", "-1", "--format=%h%x00%ar", tag]).await else {
+            continue;
+        };
+        let mut parts = meta.trim().split('\u{0}');
+        let short = parts.next().unwrap_or_default().to_owned();
+        let date = parts.next().unwrap_or_default().to_owned();
+        let notes = git_output(
+            repo,
+            &[
+                "tag",
+                "--list",
+                "--format=%(contents:subject)%00%(contents:body)",
+                tag,
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        let mut np = notes.split('\u{0}');
+        let title = np.next().unwrap_or_default().trim().to_owned();
+        let body = np.next().unwrap_or_default().trim().to_owned();
+        out.push(Release {
+            tag: tag.to_owned(),
+            title,
+            body,
+            date,
+            short,
+        });
+    }
+    out
+}
+
+/// The newest release, if any.
+async fn latest_release(repo: &Path) -> Option<Release> {
+    releases(repo).await.into_iter().next()
 }
 
 /// The entries of the tree named by `spec` (a git tree-ish such as `HEAD` or
@@ -590,7 +927,8 @@ fn clone_url(host: Option<&str>, rel: &str) -> String {
 }
 
 /// A directory listing at `sub` within the repository.
-async fn tree_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
+async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+    let rel = &meta.rel;
     let Some(dir) = browse_path(sub) else {
         return not_found().into_response();
     };
@@ -604,7 +942,9 @@ async fn tree_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
         return not_found().into_response();
     }
     let name = rel.rsplit('/').next().unwrap_or(rel);
-    page(
+    repo_shell(
+        meta,
+        Tab::Files,
         name,
         html! {
             (crumbs(rel, &dir, false))
@@ -627,7 +967,8 @@ async fn tree_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
 
 /// A single file's contents at `sub`, syntax-highlighted when the language is
 /// recognized and the file is text.
-async fn blob_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
+async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+    let rel = &meta.rel;
     let Some(path) = browse_path(sub).filter(|p| !p.is_empty()) else {
         return not_found().into_response();
     };
@@ -655,7 +996,9 @@ async fn blob_page(repo: &Path, rel: &str, sub: &[&str]) -> Response {
             None => blob_body(name, &text),
         }
     };
-    page(
+    repo_shell(
+        meta,
+        Tab::Files,
         name,
         html! {
             (crumbs(rel, &path, true))
@@ -710,11 +1053,11 @@ fn is_binary(bytes: &[u8]) -> bool {
 }
 
 /// A single commit: its metadata and a colorized unified diff.
-async fn commit_page(repo: &Path, rel: &str, sha: &str) -> Response {
+async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Response {
     if sha.is_empty() || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return not_found().into_response();
     }
-    let Some(meta) = git_output(
+    let Some(info) = git_output(
         repo,
         &["show", "-s", "--format=%H%x00%an%x00%ar%x00%s%x00%b", sha],
     )
@@ -722,7 +1065,7 @@ async fn commit_page(repo: &Path, rel: &str, sha: &str) -> Response {
     else {
         return not_found().into_response();
     };
-    let mut parts = meta.split('\u{0}');
+    let mut parts = info.split('\u{0}');
     let hash = parts.next().unwrap_or_default().trim().to_owned();
     let author = parts.next().unwrap_or_default().to_owned();
     let when = parts.next().unwrap_or_default().to_owned();
@@ -733,15 +1076,13 @@ async fn commit_page(repo: &Path, rel: &str, sha: &str) -> Response {
         .await
         .unwrap_or_default();
 
-    page(
+    repo_shell(
+        meta,
+        Tab::Files,
         &subject,
         html! {
-            div.page-header {
-                h1.page-title { a href={ "/" (rel) } { (rel) } }
-                span.branch { (short) }
-            }
             div.card {
-                div.card-header { "Commit" }
+                div.card-header { (icon_commit()) " Commit " span.sha { (short) } }
                 div.commit {
                     div.commit-subject { (subject) }
                     @if !body.is_empty() {
@@ -754,6 +1095,49 @@ async fn commit_page(repo: &Path, rel: &str, sha: &str) -> Response {
         },
     )
     .into_response()
+}
+
+/// The Releases tab: tags presented as a changelog timeline, newest first.
+async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
+    let releases = releases(repo).await;
+    repo_shell(
+        meta,
+        Tab::Releases,
+        "Releases",
+        html! {
+            div.page-header { h1.page-title { "Releases" } }
+            @if releases.is_empty() {
+                div.blankslate {
+                    h2 { "No releases yet" }
+                    p { "Push a tag to publish a release: " code { "git push <url> v1.0.0" } }
+                }
+            } @else {
+                div.timeline {
+                    @for (i, release) in releases.iter().enumerate() {
+                        article.release.latest[i == 0] {
+                            div.card {
+                                div.release-head {
+                                    (icon_tag())
+                                    span.release-tag { (release.tag) }
+                                    @if !release.title.is_empty() && release.title != release.tag {
+                                        span.release-name { (release.title) }
+                                    }
+                                    @if i == 0 { span.badge-latest { "Latest" } }
+                                    span.release-date { (release.date) }
+                                }
+                                @if !release.body.is_empty() {
+                                    div.release-body { p { (release.body) } }
+                                }
+                                div.release-foot {
+                                    span.sha { (icon_commit()) (release.short) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
 }
 
 /// Render a unified diff, coloring each line by its leading marker.
@@ -917,6 +1301,42 @@ fn icon_folder() -> Markup {
 fn icon_file() -> Markup {
     svg(
         "M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z",
+    )
+}
+
+fn icon_branch() -> Markup {
+    svg(
+        "M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z",
+    )
+}
+
+fn icon_eye() -> Markup {
+    svg(
+        "M8 2c1.981 0 3.671.992 4.933 2.078 1.27 1.091 2.187 2.345 2.637 3.023a1.62 1.62 0 0 1 0 1.798c-.45.678-1.367 1.932-2.637 3.023C11.67 13.008 9.981 14 8 14c-1.981 0-3.671-.992-4.933-2.078C1.797 10.831.88 9.577.43 8.9a1.62 1.62 0 0 1 0-1.798c.45-.678 1.367-1.932 2.637-3.023C4.33 2.992 6.019 2 8 2Zm0 1.5c-1.504 0-2.88.762-3.957 1.69-1.077.926-1.882 2.025-2.281 2.624a.12.12 0 0 0 0 .172c.4.599 1.204 1.698 2.28 2.624C5.121 11.738 6.497 12.5 8 12.5c1.504 0 2.88-.762 3.957-1.69 1.077-.926 1.882-2.025 2.281-2.624a.12.12 0 0 0 0-.172c-.4-.599-1.204-1.698-2.28-2.624C10.879 4.262 9.503 3.5 8 3.5ZM8 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z",
+    )
+}
+
+fn icon_star() -> Markup {
+    svg(
+        "M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z",
+    )
+}
+
+fn icon_tag() -> Markup {
+    svg(
+        "M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.75 1.75 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z",
+    )
+}
+
+fn icon_clock() -> Markup {
+    svg(
+        "M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z",
+    )
+}
+
+fn icon_commit() -> Markup {
+    svg(
+        "M11.93 8.5a4.002 4.002 0 0 1-7.86 0H.75a.75.75 0 0 1 0-1.5h3.32a4.002 4.002 0 0 1 7.86 0h3.32a.75.75 0 0 1 0 1.5Zm-1.43-.75a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z",
     )
 }
 
