@@ -101,6 +101,14 @@ a { color: var(--color-link); text-decoration: underline; text-decoration-color:
 a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .icon { flex-shrink: 0; fill: currentColor; vertical-align: -0.125em; }
 
+/* Controls that are not wired up yet read as muted and non-interactive. */
+.stub { opacity: .5; cursor: not-allowed; }
+.nav-link.stub:hover { color: var(--color-text-muted); }
+button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .5; cursor: not-allowed; }
+.action-btn:disabled:hover { border-color: var(--color-border); }
+.btn-primary:disabled:hover { background: var(--color-accent); }
+.btn-danger-outline:disabled:hover { background: transparent; }
+
 .site-nav { position: sticky; top: 0; z-index: 100; background: color-mix(in srgb, var(--color-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--color-border); }
 .nav-inner { max-width: var(--max-width); margin: 0 auto; height: 58px; padding: 0 1.5rem; display: flex; align-items: center; gap: 1.25rem; }
 .nav-logo { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-weight: 700; font-size: 1.02rem; color: var(--color-text); letter-spacing: -.01em; text-decoration: none; white-space: nowrap; transition: color .15s; }
@@ -113,7 +121,6 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 .nav-links { display: flex; align-items: center; gap: 1.1rem; white-space: nowrap; }
 .nav-link { font-size: .85rem; color: var(--color-text-muted); text-decoration: none; transition: color .15s; }
 .nav-link:hover { color: var(--color-accent); }
-.nav-avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); text-decoration: none; }
 
 .content { max-width: var(--max-width); width: 100%; margin: 0 auto; padding: 2.25rem 1.5rem 3rem; flex: 1; }
 
@@ -565,8 +572,8 @@ fn repo_header(meta: &RepoMeta) -> Markup {
                 }
             }
             div.repo-actions {
-                button.action-btn type="button" { (icon_eye()) "Watch" }
-                button.action-btn type="button" { (icon_star()) "Star" }
+                button.action-btn type="button" disabled title="Not available yet" { (icon_eye()) "Watch" }
+                button.action-btn type="button" disabled title="Not available yet" { (icon_star()) "Star" }
             }
         }
     }
@@ -1477,12 +1484,12 @@ fn issues_page(meta: &RepoMeta) -> Markup {
         html! {
             div.issues-head {
                 h1.page-title { "Bug reports" }
-                button.btn-primary type="button" { (icon_plus()) "New issue" }
+                button.btn-primary type="button" disabled title="Not available yet" { (icon_plus()) "New issue" }
             }
-            div.filter-row {
+            div.filter-row.stub title="Not available yet" {
                 div.filter-search {
                     (icon_search())
-                    input type="search" placeholder="Filter bug reports" aria-label="Filter";
+                    input type="search" placeholder="Filter bug reports" aria-label="Filter" disabled;
                 }
                 span.chip.active { "All" }
                 span.chip { "bug" }
@@ -1490,7 +1497,7 @@ fn issues_page(meta: &RepoMeta) -> Markup {
                 span.chip { "question" }
             }
             div.card {
-                div.card-header.subtabs {
+                div.card-header.subtabs.stub title="Not available yet" {
                     span.subtab.active { (icon_issue()) "Open" span.tab-count { "0" } }
                     span.subtab { (icon_check()) "Closed" span.tab-count { "0" } }
                 }
@@ -1521,15 +1528,15 @@ fn settings_page(meta: &RepoMeta) -> Markup {
                     div.card-header { "General" }
                     div.field {
                         label { "Repository name" }
-                        input type="text" value=(name) readonly;
+                        input type="text" value=(name) disabled title="Not editable yet";
                     }
                     div.field {
                         label { "Description" }
-                        textarea rows="2" readonly { (meta.description.as_deref().unwrap_or_default()) }
+                        textarea rows="2" disabled title="Not editable yet" { (meta.description.as_deref().unwrap_or_default()) }
                     }
                     div.field {
                         label { "Default branch" }
-                        input type="text" value=(meta.branch.as_deref().unwrap_or("—")) readonly;
+                        input type="text" value=(meta.branch.as_deref().unwrap_or("—")) disabled title="Not editable yet";
                     }
                 }
 
@@ -1554,14 +1561,14 @@ fn settings_page(meta: &RepoMeta) -> Markup {
                             strong { "Archive this repository" }
                             p.muted { "Make it read-only." }
                         }
-                        button.btn-danger-outline type="button" { "Archive" }
+                        button.btn-danger-outline type="button" disabled title="Not available yet" { "Archive" }
                     }
                     div.danger-row {
                         div {
                             strong { "Delete this repository" }
                             p.muted { "This cannot be undone." }
                         }
-                        button.btn-danger type="button" { "Delete" }
+                        button.btn-danger type="button" disabled title="Not available yet" { "Delete" }
                     }
                 }
             }
@@ -1577,7 +1584,7 @@ fn feature_row(title: &str, desc: &str, on: bool) -> Markup {
                 strong { (title) }
                 p.muted { (desc) }
             }
-            span.toggle.on[on] { span.knob {} }
+            span.toggle.on[on].stub title="Not editable yet" { span.knob {} }
         }
     }
 }
@@ -1586,7 +1593,7 @@ fn feature_row(title: &str, desc: &str, on: bool) -> Markup {
 fn visibility_row(title: &str, desc: &str, on: bool) -> Markup {
     html! {
         div.visibility-row.sel[on] {
-            span.radio.on[on] {}
+            span.radio.on[on].stub title="Not editable yet" {}
             div {
                 strong { (title) }
                 p.muted { (desc) }
@@ -1711,12 +1718,11 @@ fn page(title: &str, body: Markup) -> Markup {
                         a.nav-logo href="/" { (icon_tree()) "git-ents" }
                         div.nav-search {
                             (icon_search())
-                            input type="search" placeholder="Jump to file or symbol" aria-label="Search";
+                            input type="search" placeholder="Jump to file or symbol" aria-label="Search" disabled title="Not available yet";
                         }
                         div.nav-links {
-                            a.nav-link href="/" { "Explore" }
-                            a.nav-link href="/" { "Docs" }
-                            a.nav-avatar href="/" title="Account" { "el" }
+                            span.nav-link.stub title="Not available yet" { "Explore" }
+                            span.nav-link.stub title="Not available yet" { "Docs" }
                         }
                     }
                 }
