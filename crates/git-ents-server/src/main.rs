@@ -2,10 +2,16 @@
 
 mod http;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use axum::Router;
+use axum::routing::get;
 use clap::{CommandFactory, Parser};
+use tokio::sync::Notify;
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +40,13 @@ struct Args {
     max_requests: Option<usize>,
 }
 
+/// Shared handler state: where repos live and the optional auth token.
+#[derive(Clone)]
+pub(crate) struct AppState {
+    pub(crate) data_dir: PathBuf,
+    pub(crate) access_token: Option<String>,
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
 
@@ -46,101 +59,66 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let server = match tiny_http::Server::http(format!("0.0.0.0:{}", args.port)) {
-        Ok(server) => server,
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("error: failed to start runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(serve(args))
+}
+
+/// Bind the listener and serve until shutdown.
+async fn serve(args: Args) -> ExitCode {
+    let state = AppState {
+        data_dir: args.data_dir,
+        access_token: args.access_token,
+    };
+
+    let mut app = Router::new()
+        .route("/", get(http::health))
+        .route("/healthz", get(http::health))
+        .fallback(http::git)
+        .with_state(state);
+
+    // When `--max-requests` is set, count every response and signal shutdown
+    // once the limit is reached so the process exits on its own.
+    let shutdown = Arc::new(Notify::new());
+    if let Some(max) = args.max_requests {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let notify = shutdown.clone();
+        app = app.layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let counter = counter.clone();
+                let notify = notify.clone();
+                async move {
+                    let response = next.run(req).await;
+                    let handled = counter.fetch_add(1, Ordering::SeqCst).saturating_add(1);
+                    if handled >= max {
+                        notify.notify_one();
+                    }
+                    response
+                }
+            },
+        ));
+    }
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
         Err(e) => {
             eprintln!("error: failed to bind to port {}: {e}", args.port);
             return ExitCode::FAILURE;
         }
     };
 
-    let mut count: usize = 0;
-    for request in server.incoming_requests() {
-        if is_health(&request) {
-            let _health = request.respond(tiny_http::Response::from_string("ok"));
-        } else if args
-            .access_token
-            .as_deref()
-            .is_some_and(|token| !authorized(&request, token))
-        {
-            let _denied = request.respond(unauthorized());
-        } else if let Err(e) = http::handle(request, &args.data_dir) {
-            eprintln!("error: {e}");
-        }
-        count = count.saturating_add(1);
-        if args.max_requests.is_some_and(|max| count >= max) {
-            break;
-        }
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async move { shutdown.notified().await });
+    if let Err(e) = server.await {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
-}
-
-/// A liveness probe (and the `/` root) that does not touch git.
-fn is_health(request: &tiny_http::Request) -> bool {
-    matches!(request.url(), "/" | "/healthz")
-}
-
-/// Check the request's HTTP Basic credentials against the expected token.
-///
-/// As with GitHub's HTTPS git auth, the username is ignored and the password
-/// field carries the bearer token.
-fn authorized(request: &tiny_http::Request, expected: &str) -> bool {
-    let Some(value) = http::header_value(request, "Authorization") else {
-        return false;
-    };
-    let Some(encoded) = value
-        .strip_prefix("Basic ")
-        .or_else(|| value.strip_prefix("basic "))
-    else {
-        return false;
-    };
-    let Some(decoded) = base64_decode(encoded.trim()) else {
-        return false;
-    };
-    let Some(colon) = decoded.iter().position(|byte| *byte == b':') else {
-        return false;
-    };
-    decoded.get(colon.saturating_add(1)..) == Some(expected.as_bytes())
-}
-
-/// A `401` carrying the Basic challenge git expects before retrying with creds.
-fn unauthorized() -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
-    let mut response = tiny_http::Response::from_string("unauthorized").with_status_code(401);
-    if let Ok(header) = tiny_http::Header::from_bytes(
-        &b"WWW-Authenticate"[..],
-        &br#"Basic realm="git-ents""#[..],
-    ) {
-        response.add_header(header);
-    }
-    response
-}
-
-/// Decode standard base64 with optional `=` padding; `None` on any bad input.
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    fn sextet(byte: u8) -> Option<u32> {
-        let value = u32::from(byte);
-        match byte {
-            b'A'..=b'Z' => Some(value.saturating_sub(u32::from(b'A'))),
-            b'a'..=b'z' => Some(value.saturating_sub(u32::from(b'a')).saturating_add(26)),
-            b'0'..=b'9' => Some(value.saturating_sub(u32::from(b'0')).saturating_add(52)),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-
-    let bytes: &[u8] = input.trim_end_matches('=').as_bytes();
-    let mut out = Vec::new();
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &byte in bytes {
-        acc = (acc << 6) | sextet(byte)?;
-        bits = bits.saturating_add(6);
-        if bits >= 8 {
-            bits = bits.saturating_sub(8);
-            out.push(u8::try_from((acc >> bits) & 0xFF).ok()?);
-        }
-    }
-    Some(out)
 }

@@ -12,12 +12,20 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
 gix = { version = "0.83", features = ["no-default-features"] }
 tempfile = "3"
 thiserror = "2"
-tiny_http = "0.12"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "process",
+    "io-util",
+    "sync",
+] }
 
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/

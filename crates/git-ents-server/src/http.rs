@@ -2,56 +2,73 @@
 //!
 //! Every request is handed to git's `http-backend` CGI, which implements the
 //! full smart-HTTP protocol (running `git-upload-pack` for fetch and
-//! `git-receive-pack` for push). This module only translates between
-//! `tiny_http` requests/responses and the CGI's stdin/stdout.
+//! `git-receive-pack` for push). This module only translates between Axum
+//! requests/responses and the CGI's stdin/stdout.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-use tiny_http::{Header, Request, Response};
+use axum::body::{Body, Bytes};
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::response::{IntoResponse, Response};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+
+use crate::AppState;
 
 const CGI_HEADER_SEP: &[u8] = b"\r\n\r\n";
 
-/// Delegate a single request to `git http-backend` and reply with its output.
-pub fn handle(mut request: Request, data_dir: &Path) -> std::io::Result<()> {
-    let url = request.url().to_owned();
-    let (path_info, query_string) = match url.split_once('?') {
-        Some((path, query)) => (path.to_owned(), query.to_owned()),
-        None => (url, String::new()),
-    };
+/// A liveness probe (and the `/` root) that does not touch git.
+pub async fn health() -> &'static str {
+    "ok"
+}
 
-    if path_info.contains("..") {
-        return request.respond(Response::from_string("bad request").with_status_code(400));
+/// Delegate a single request to `git http-backend` and reply with its output.
+pub async fn git(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Some(expected) = state.access_token.as_deref()
+        && !authorized(&headers, expected)
+    {
+        return unauthorized();
     }
 
-    let method = request.method().as_str().to_owned();
-    let content_type = header_value(&request, "Content-Type");
-    let content_length = header_value(&request, "Content-Length");
+    let path_info = uri.path().to_owned();
+    let query_string = uri.query().unwrap_or_default().to_owned();
+
+    if path_info.contains("..") {
+        return (StatusCode::BAD_REQUEST, "bad request").into_response();
+    }
 
     // A push begins with `info/refs?service=git-receive-pack`; auto-init the
     // bare repo so the very first request finds it.
     let is_push = query_string.contains("service=git-receive-pack")
         || path_info.ends_with("/git-receive-pack");
-    let push_repo = is_push.then(|| repo_dir(data_dir, &path_info)).flatten();
+    let push_repo = is_push
+        .then(|| repo_dir(&state.data_dir, &path_info))
+        .flatten();
     if let Some(repo) = &push_repo
         && !repo.exists()
-        && let Err(e) = init_bare_repo(repo)
+        && let Err(e) = init_bare_repo(repo).await
     {
-        return request
-            .respond(Response::from_string(format!("init failed: {e}")).with_status_code(500));
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("init failed: {e}")).into_response();
     }
 
-    let mut body = Vec::new();
-    request.as_reader().read_to_end(&mut body)?;
+    let content_type = header_value(&headers, "Content-Type");
+    let content_length = header_value(&headers, "Content-Length");
 
     let mut cmd = Command::new("git");
     cmd.arg("http-backend")
-        .env("GIT_PROJECT_ROOT", data_dir)
+        .env("GIT_PROJECT_ROOT", &state.data_dir)
         .env("GIT_HTTP_EXPORT_ALL", "1")
         .env("PATH_INFO", &path_info)
         .env("QUERY_STRING", &query_string)
-        .env("REQUEST_METHOD", &method)
+        .env("REQUEST_METHOD", method.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -65,32 +82,51 @@ pub fn handle(mut request: Request, data_dir: &Path) -> std::io::Result<()> {
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            return request.respond(
-                Response::from_string(format!("spawn failed: {e}")).with_status_code(500),
-            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("spawn failed: {e}"))
+                .into_response();
         }
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&body)?;
+    // Feed the request body and drain stdout concurrently; receive-pack streams
+    // progress to stdout while still reading the pack, so a sequential
+    // write-then-read would deadlock on a full pipe.
+    let writer = child.stdin.take().map(|mut stdin| {
+        tokio::spawn(async move {
+            let _write = stdin.write_all(&body).await;
+            // `stdin` drops here, closing the pipe so the CGI sees EOF.
+        })
+    });
+
+    let mut stdout = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _read = out.read_to_end(&mut stdout).await;
+    }
+    if let Some(writer) = writer {
+        let _joined = writer.await;
     }
 
-    let output = child.wait_with_output()?;
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("backend failed: {e}"))
+                .into_response();
+        }
+    };
 
     // A fresh bare repo's `HEAD` points at its initial branch, which may not be
     // the branch the client just pushed; without a valid `HEAD`, clones check
     // out nothing. Adopt a pushed branch so the repo stays clonable.
     if let Some(repo) = &push_repo
-        && output.status.success()
+        && status.success()
     {
-        reconcile_head(repo);
+        reconcile_head(repo).await;
     }
 
-    request.respond(build_response(&output.stdout))
+    build_response(&stdout)
 }
 
 /// Translate a CGI response (header block, blank line, body) into HTTP.
-fn build_response(stdout: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
+fn build_response(stdout: &[u8]) -> Response {
     let (header_block, body) = match find_subsequence(stdout, CGI_HEADER_SEP) {
         Some(pos) => {
             let body_start = pos.saturating_add(CGI_HEADER_SEP.len());
@@ -103,7 +139,7 @@ fn build_response(stdout: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
     };
 
     let mut status = 200u16;
-    let mut headers: Vec<Header> = Vec::new();
+    let mut builder = Response::builder();
     for raw in header_block.split(|byte| *byte == b'\n') {
         let line = trim_cr(raw);
         let Some(colon) = line.iter().position(|byte| *byte == b':') else {
@@ -114,17 +150,16 @@ fn build_response(stdout: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
         if name.eq_ignore_ascii_case(b"Status") {
             status = parse_status(value).unwrap_or(200);
         } else if name.eq_ignore_ascii_case(b"Content-Length") {
-            // tiny_http sets this from the body length itself.
-        } else if let Ok(header) = Header::from_bytes(name, value) {
-            headers.push(header);
+            // Axum sets this from the body length itself.
+        } else {
+            builder = builder.header(name, value);
         }
     }
 
-    let mut response = Response::from_data(body.to_vec()).with_status_code(status);
-    for header in headers {
-        response.add_header(header);
-    }
-    response
+    builder
+        .status(status)
+        .body(Body::from(body.to_vec()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Resolve the bare repository directory from the first path segment.
@@ -137,7 +172,7 @@ fn repo_dir(data_dir: &Path, path_info: &str) -> Option<PathBuf> {
 }
 
 /// Create a bare repo that accepts pushes over smart-HTTP.
-fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
+async fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
     let init = Command::new("git")
         .arg("init")
         .arg("--bare")
@@ -146,7 +181,8 @@ fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
         .arg(repo)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()?;
+        .status()
+        .await?;
     if !init.success() {
         return Err(std::io::Error::other("git init --bare failed"));
     }
@@ -158,7 +194,8 @@ fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
         .arg("true")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()?;
+        .status()
+        .await?;
     if !config.success() {
         return Err(std::io::Error::other("git config http.receivepack failed"));
     }
@@ -168,7 +205,7 @@ fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
 /// Point `HEAD` at a real branch when it dangles after a push.
 ///
 /// Best-effort: the push already succeeded, so failures here are ignored.
-fn reconcile_head(repo: &Path) {
+async fn reconcile_head(repo: &Path) {
     let head_valid = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -176,6 +213,7 @@ fn reconcile_head(repo: &Path) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
+        .await
         .map(|status| status.success())
         .unwrap_or(false);
     if head_valid {
@@ -188,6 +226,7 @@ fn reconcile_head(repo: &Path) {
         .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
         .stderr(Stdio::null())
         .output()
+        .await
     else {
         return;
     };
@@ -208,15 +247,77 @@ fn reconcile_head(repo: &Path) {
         .args(["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .await;
 }
 
-pub(crate) fn header_value(request: &Request, field: &str) -> Option<String> {
-    request
-        .headers()
-        .iter()
-        .find(|header| header.field.as_str().as_str().eq_ignore_ascii_case(field))
-        .map(|header| header.value.as_str().to_owned())
+/// Check the request's HTTP Basic credentials against the expected token.
+///
+/// As with GitHub's HTTPS git auth, the username is ignored and the password
+/// field carries the bearer token.
+fn authorized(headers: &HeaderMap, expected: &str) -> bool {
+    let Some(value) = header_value(headers, "Authorization") else {
+        return false;
+    };
+    let Some(encoded) = value
+        .strip_prefix("Basic ")
+        .or_else(|| value.strip_prefix("basic "))
+    else {
+        return false;
+    };
+    let Some(decoded) = base64_decode(encoded.trim()) else {
+        return false;
+    };
+    let Some(colon) = decoded.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    decoded.get(colon.saturating_add(1)..) == Some(expected.as_bytes())
+}
+
+/// A `401` carrying the Basic challenge git expects before retrying with creds.
+fn unauthorized() -> Response {
+    let mut response = (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static(r#"Basic realm="git-ents""#),
+    );
+    response
+}
+
+fn header_value(headers: &HeaderMap, field: &str) -> Option<String> {
+    headers
+        .get(field)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Decode standard base64 with optional `=` padding; `None` on any bad input.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    fn sextet(byte: u8) -> Option<u32> {
+        let value = u32::from(byte);
+        match byte {
+            b'A'..=b'Z' => Some(value.saturating_sub(u32::from(b'A'))),
+            b'a'..=b'z' => Some(value.saturating_sub(u32::from(b'a')).saturating_add(26)),
+            b'0'..=b'9' => Some(value.saturating_sub(u32::from(b'0')).saturating_add(52)),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let bytes: &[u8] = input.trim_end_matches('=').as_bytes();
+    let mut out = Vec::new();
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &byte in bytes {
+        acc = (acc << 6) | sextet(byte)?;
+        bits = bits.saturating_add(6);
+        if bits >= 8 {
+            bits = bits.saturating_sub(8);
+            out.push(u8::try_from((acc >> bits) & 0xFF).ok()?);
+        }
+    }
+    Some(out)
 }
 
 fn parse_status(value: &[u8]) -> Option<u16> {

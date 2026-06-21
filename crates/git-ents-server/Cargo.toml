@@ -6,9 +6,10 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+axum = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
-tiny_http = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
