@@ -40,12 +40,18 @@ pub async fn git(
     }
 
     // A push begins with `info/refs?service=git-receive-pack`; auto-init the
-    // bare repo so the very first request finds it.
+    // bare repo so the very first request finds it. An unacceptable repository
+    // path is rejected here rather than handed to the backend.
     let is_push = query_string.contains("service=git-receive-pack")
         || path_info.ends_with("/git-receive-pack");
-    let push_repo = is_push
-        .then(|| repo_dir(&state.data_dir, &path_info))
-        .flatten();
+    let push_repo = if is_push {
+        match repo_path(&path_info) {
+            Some(relative) => Some(state.data_dir.join(relative)),
+            None => return (StatusCode::BAD_REQUEST, "invalid repository path").into_response(),
+        }
+    } else {
+        None
+    };
     if let Some(repo) = &push_repo
         && !repo.exists()
         && let Err(e) = init_bare_repo(repo).await
@@ -169,13 +175,43 @@ fn build_response(stdout: &[u8]) -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Resolve the bare repository directory from the first path segment.
-fn repo_dir(data_dir: &Path, path_info: &str) -> Option<PathBuf> {
-    let first = path_info.trim_start_matches('/').split('/').next()?;
-    if first.is_empty() {
+/// Greatest repository nesting depth: `repo`, `org/repo`, or `org/team/repo`.
+const MAX_REPO_DEPTH: usize = 3;
+
+/// The target repository of a push, as a validated path relative to the data
+/// directory, or `None` if the request does not name an acceptable repository.
+///
+/// The repository is everything before git's service suffix (`/info/refs` or
+/// `/git-receive-pack`), limited to [`MAX_REPO_DEPTH`] segments each drawn from
+/// a conservative character set. Validating the segments here is what keeps a
+/// push from escaping the data directory or fabricating arbitrary paths on
+/// disk: every returned component is a plain, dot-free, separator-free name, so
+/// the join below can only ever descend into `data_dir`.
+fn repo_path(path_info: &str) -> Option<PathBuf> {
+    let repo = path_info
+        .strip_suffix("/git-receive-pack")
+        .or_else(|| path_info.strip_suffix("/info/refs"))?;
+    let segments: Vec<&str> = repo.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() || segments.len() > MAX_REPO_DEPTH {
         return None;
     }
-    Some(data_dir.join(first))
+    if !segments.iter().all(|segment| valid_segment(segment)) {
+        return None;
+    }
+    Some(segments.into_iter().collect())
+}
+
+/// Whether a single path component is a safe repository/namespace name.
+///
+/// Rejecting any leading `.` rules out `.`, `..`, and hidden directories; the
+/// allow-list of characters rules out path separators, NUL, percent-encoding,
+/// and whitespace, so no segment can traverse or otherwise escape on disk.
+fn valid_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && !segment.starts_with('.')
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// Create a bare repo that accepts pushes over smart-HTTP.
