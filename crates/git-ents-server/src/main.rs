@@ -1,6 +1,7 @@
 //! Git Ents server — helpful guardians of your git trees.
 
 mod http;
+mod web;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -77,7 +78,6 @@ async fn serve(args: Args) -> ExitCode {
     // The git smart-HTTP protocol streams whole packfiles through the request
     // body, so the default 2 MiB cap would reject any non-trivial push.
     let mut app = Router::new()
-        .route("/", get(http::health))
         .route("/healthz", get(http::health))
         .fallback(http::git)
         .layer(DefaultBodyLimit::disable())

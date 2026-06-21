@@ -9,6 +9,7 @@ license.workspace = true
 axum = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
+maud = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]

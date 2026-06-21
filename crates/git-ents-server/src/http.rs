@@ -39,6 +39,13 @@ pub async fn git(
         return (StatusCode::BAD_REQUEST, "bad request").into_response();
     }
 
+    // A plain browser GET (anything that is not part of the git wire protocol)
+    // is served the HTML web UI rather than handed to the CGI backend.
+    if method == Method::GET && !is_git_path(&path_info, &query_string) {
+        let host = header_value(&headers, "Host");
+        return crate::web::render(&state, &path_info, host.as_deref()).await;
+    }
+
     // A push uses exactly two endpoints: the receive-pack advertisement
     // (`GET /<repo>/info/refs?service=git-receive-pack`) and the receive-pack
     // RPC (`POST /<repo>/git-receive-pack`). Recognize the target so the bare
@@ -173,6 +180,18 @@ fn build_response(stdout: &[u8]) -> Response {
 /// Greatest repository nesting depth: `repo`, `org/repo`, or `org/team/repo`.
 const MAX_REPO_DEPTH: usize = 3;
 
+/// Whether `path`/`query` belong to git's wire protocol (smart or dumb HTTP)
+/// rather than the browser-facing web UI. Anything matching here is delegated
+/// to `git http-backend`; everything else is rendered as HTML.
+fn is_git_path(path: &str, query: &str) -> bool {
+    path.ends_with("/info/refs")
+        || path.ends_with("/git-upload-pack")
+        || path.ends_with("/git-receive-pack")
+        || path.ends_with("/HEAD")
+        || path.contains("/objects/")
+        || query.contains("service=")
+}
+
 /// Whether this request is a push: the smart-HTTP receive-pack advertisement
 /// (`/info/refs?service=git-receive-pack`) or the receive-pack RPC itself.
 ///
@@ -245,7 +264,7 @@ fn enclosing_repo(data_dir: &Path, repo: &Path) -> Option<PathBuf> {
 }
 
 /// Whether `path` is the root of a bare git repository.
-fn is_bare_repo(path: &Path) -> bool {
+pub(crate) fn is_bare_repo(path: &Path) -> bool {
     path.join("HEAD").is_file() && path.join("objects").is_dir()
 }
 
@@ -277,7 +296,7 @@ fn repo_path(path_info: &str) -> Option<PathBuf> {
 /// Rejecting any leading `.` rules out `.`, `..`, and hidden directories; the
 /// allow-list of characters rules out path separators, NUL, percent-encoding,
 /// and whitespace, so no segment can traverse or otherwise escape on disk.
-fn valid_segment(segment: &str) -> bool {
+pub(crate) fn valid_segment(segment: &str) -> bool {
     !segment.is_empty()
         && !segment.starts_with('.')
         && segment
