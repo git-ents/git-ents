@@ -2,6 +2,7 @@
 
 mod asciidoc;
 mod http;
+mod verify;
 mod web;
 
 use std::net::SocketAddr;
@@ -13,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, Parser, Subcommand};
 use tokio::sync::{Mutex, Notify};
 
 #[derive(Parser)]
@@ -22,6 +23,9 @@ use tokio::sync::{Mutex, Notify};
     about = "Helpful guardians of your git trees."
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Generate man pages into the given directory.
     #[arg(long, value_name = "DIR")]
     generate_man: Option<PathBuf>,
@@ -39,6 +43,14 @@ struct Args {
     max_requests: Option<usize>,
 }
 
+/// Subcommands that run instead of serving HTTP.
+#[derive(Subcommand)]
+enum Command {
+    /// Verify a signed push against the authorized signers (a git `pre-receive`
+    /// hook).
+    PreReceive,
+}
+
 /// Shared handler state: where the bare repositories live, plus a lock that
 /// serializes repository creation so concurrent first pushes cannot race.
 #[derive(Clone)]
@@ -49,6 +61,16 @@ pub(crate) struct AppState {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+
+    if let Some(Command::PreReceive) = args.command {
+        return match verify::pre_receive() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(reason) => {
+                eprintln!("error: {reason}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     if let Some(dir) = args.generate_man {
         let cmd = Args::command();
