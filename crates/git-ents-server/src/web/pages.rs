@@ -9,10 +9,14 @@ use std::pin::Pin;
 
 use arborium::{Config, Highlighter, HtmlFormat};
 use axum::response::{IntoResponse, Response};
+use gix_date::Time;
+use gix_hash::{ObjectId, Prefix};
+use gix_object::bstr::ByteSlice;
+use gix_object::tree::Entry;
 use maud::{Markup, PreEscaped, html};
 
 use super::git::{
-    TreeEntry, browse_path, git_output, git_output_bytes, languages, latest_release, list_tree,
+    browse_path, git_output, git_output_bytes, languages, latest_release, list_tree, parse_iso,
     releases, root_tree,
 };
 use super::icons::*;
@@ -49,9 +53,10 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
             div.card {
                 div.card-header { "Files" }
                 @for entry in &tree {
-                    div.card-row.is-dir[entry.is_dir] {
-                        @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
-                        a href=(entry_href(rel, "", entry)) { (entry.name) }
+                    @let name = entry.filename.to_str_lossy();
+                    div.card-row.is-dir[entry.mode.is_tree()] {
+                        @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
+                        a href=(entry_href(rel, "", entry)) { (name.as_ref()) }
                     }
                 }
             }
@@ -91,7 +96,7 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
                         span.badge-latest { "Latest" }
                     }
                     div.aside-row {
-                        span.muted { (release.title) " · " (release.date) }
+                        span.muted { (release.title) " · " (ago(&release.date)) }
                     }
                 }
             }
@@ -130,18 +135,20 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
 /// The rendered README for the overview: the first AsciiDoc file in the root
 /// tree whose stem is `README`, converted to HTML, paired with its filename.
 /// `None` when there is no such file or it fails to render.
-async fn readme(repo: &Path, tree: &[TreeEntry]) -> Option<(String, String)> {
+async fn readme(repo: &Path, tree: &[Entry]) -> Option<(String, String)> {
     let entry = tree.iter().find(|e| {
-        !e.is_dir
-            && crate::asciidoc::is_asciidoc(&e.name)
-            && e.name
+        let name = e.filename.to_str_lossy();
+        !e.mode.is_tree()
+            && crate::asciidoc::is_asciidoc(&name)
+            && name
                 .rsplit_once('.')
                 .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"))
     })?;
-    let spec = format!("HEAD:{}", entry.name);
+    let name = entry.filename.to_str_lossy();
+    let spec = format!("HEAD:{name}");
     let bytes = git_output_bytes(repo, &["cat-file", "-p", &spec]).await?;
     let html = crate::asciidoc::to_html(&String::from_utf8_lossy(&bytes))?;
-    Some((entry.name.clone(), html))
+    Some((name.into_owned(), html))
 }
 
 /// The clone URL for `rel`, using the request host when known.
@@ -154,9 +161,9 @@ fn clone_url(host: Option<&str>, rel: &str) -> String {
 
 /// The link to a tree entry: a `tree` view for directories, a `blob` view for
 /// files. `dir` is the tree's path within the repo (empty at the root).
-fn entry_href(rel: &str, dir: &str, entry: &TreeEntry) -> String {
-    let view = if entry.is_dir { "tree" } else { "blob" };
-    let name = &entry.name;
+fn entry_href(rel: &str, dir: &str, entry: &Entry) -> String {
+    let view = if entry.mode.is_tree() { "tree" } else { "blob" };
+    let name = entry.filename.to_str_lossy();
     if dir.is_empty() {
         format!("/{rel}/{view}/{name}")
     } else {
@@ -191,19 +198,21 @@ fn collect_rows<'a>(
             format!("HEAD:{dir}")
         };
         for entry in list_tree(repo, &spec).await {
+            let name = entry.filename.to_str_lossy();
+            let is_dir = entry.mode.is_tree();
             let path = if dir.is_empty() {
-                entry.name.clone()
+                name.clone().into_owned()
             } else {
-                format!("{dir}/{}", entry.name)
+                format!("{dir}/{name}")
             };
-            let is_expanded = entry.is_dir && expanded.contains(&path);
+            let is_expanded = is_dir && expanded.contains(&path);
             out.push(TreeRow {
-                name: entry.name.clone(),
+                name: name.into_owned(),
                 path: path.clone(),
-                is_dir: entry.is_dir,
+                is_dir,
                 depth,
                 expanded: is_expanded,
-                selected: !entry.is_dir && path == selected,
+                selected: !is_dir && path == selected,
             });
             if is_expanded {
                 collect_rows(
@@ -362,6 +371,44 @@ fn human_size(bytes: usize) -> String {
     }
 }
 
+/// A commit id shortened to seven hex characters for display.
+fn short_oid(oid: &ObjectId) -> String {
+    Prefix::new(oid, 7)
+        .ok()
+        .map_or_else(|| oid.to_string(), |prefix| prefix.to_string())
+}
+
+/// A git date rendered as a relative "time ago" label, measured against the
+/// current time.
+fn ago(time: &Time) -> String {
+    let secs = Time::now_utc().seconds.saturating_sub(time.seconds).max(0);
+    let mins = secs.checked_div(60).unwrap_or(0);
+    let hours = mins.checked_div(60).unwrap_or(0);
+    let days = hours.checked_div(24).unwrap_or(0);
+    if mins == 0 {
+        "just now".to_owned()
+    } else if hours == 0 {
+        plural(mins, "minute")
+    } else if days == 0 {
+        plural(hours, "hour")
+    } else if days < 30 {
+        plural(days, "day")
+    } else if days < 365 {
+        plural(days.checked_div(30).unwrap_or(0), "month")
+    } else {
+        plural(days.checked_div(365).unwrap_or(0), "year")
+    }
+}
+
+/// Format `n` whole `unit`s with an "ago" suffix, pluralizing as needed.
+fn plural(n: i64, unit: &str) -> String {
+    if n == 1 {
+        format!("1 {unit} ago")
+    } else {
+        format!("{n} {unit}s ago")
+    }
+}
+
 /// A directory listing at `sub` within the repository.
 pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
     let rel = &meta.rel;
@@ -390,9 +437,10 @@ pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
                     div.card-row { "Empty repository." }
                 }
                 @for entry in &entries {
-                    div.card-row.is-dir[entry.is_dir] {
-                        @if entry.is_dir { (icon_folder()) } @else { (icon_file()) }
-                        a href=(entry_href(rel, &dir, entry)) { (entry.name) }
+                    @let name = entry.filename.to_str_lossy();
+                    div.card-row.is-dir[entry.mode.is_tree()] {
+                        @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
+                        a href=(entry_href(rel, &dir, entry)) { (name.as_ref()) }
                     }
                 }
             }
@@ -495,19 +543,24 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
     }
     let Some(info) = git_output(
         repo,
-        &["show", "-s", "--format=%H%x00%an%x00%ar%x00%s%x00%b", sha],
+        &["show", "-s", "--format=%H%x00%an%x00%aI%x00%s%x00%b", sha],
     )
     .await
     else {
         return not_found().into_response();
     };
     let mut parts = info.split('\u{0}');
-    let hash = parts.next().unwrap_or_default().trim().to_owned();
+    let Some(oid) = parts
+        .next()
+        .and_then(|h| ObjectId::from_hex(h.trim().as_bytes()).ok())
+    else {
+        return not_found().into_response();
+    };
     let author = parts.next().unwrap_or_default().to_owned();
-    let when = parts.next().unwrap_or_default().to_owned();
+    let when = parts.next().and_then(parse_iso);
     let subject = parts.next().unwrap_or_default().to_owned();
     let body = parts.next().unwrap_or_default().trim_end().to_owned();
-    let short = hash.get(..7).unwrap_or(&hash).to_owned();
+    let short = short_oid(&oid);
     let patch = git_output(repo, &["show", "--no-color", "--format=", "--patch", sha])
         .await
         .unwrap_or_default();
@@ -524,7 +577,7 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
                     @if !body.is_empty() {
                         div.commit-msg { (body) }
                     }
-                    div.commit-meta { (author) " · " (when) }
+                    div.commit-meta { (author) @if let Some(when) = &when { " · " (ago(when)) } }
                 }
             }
             (diff_view(&patch))
@@ -559,13 +612,13 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
                                         span.release-name { (release.title) }
                                     }
                                     @if i == 0 { span.badge-latest { "Latest" } }
-                                    span.release-date { (release.date) }
+                                    span.release-date { (ago(&release.date)) }
                                 }
                                 @if !release.body.is_empty() {
                                     div.release-body { p { (release.body) } }
                                 }
                                 div.release-foot {
-                                    span.sha { (icon_commit()) (release.short) }
+                                    span.sha { (icon_commit()) (short_oid(&release.oid)) }
                                 }
                             }
                         }

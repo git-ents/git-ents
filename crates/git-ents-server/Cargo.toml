@@ -13,6 +13,10 @@ arborium = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
+gix-actor = { workspace = true }
+gix-date = { workspace = true }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
 maud = { workspace = true }
 tokio = { workspace = true }
 

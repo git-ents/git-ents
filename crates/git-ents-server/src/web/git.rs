@@ -5,6 +5,9 @@
 use std::path::Path;
 use std::process::Stdio;
 
+use gix_date::Time;
+use gix_hash::ObjectId;
+use gix_object::tree::{Entry, EntryKind, EntryMode};
 use tokio::process::Command;
 
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo};
@@ -34,14 +37,8 @@ pub(super) async fn git_output_bytes(repo: &Path, args: &[&str]) -> Option<Vec<u
     Some(out.stdout)
 }
 
-/// A single entry in a git tree.
-pub(super) struct TreeEntry {
-    pub(super) name: String,
-    pub(super) is_dir: bool,
-}
-
 /// The entries of the root tree at `HEAD`, directories first then by name.
-pub(super) async fn root_tree(repo: &Path, has_head: bool) -> Vec<TreeEntry> {
+pub(super) async fn root_tree(repo: &Path, has_head: bool) -> Vec<Entry> {
     if !has_head {
         return Vec::new();
     }
@@ -50,23 +47,44 @@ pub(super) async fn root_tree(repo: &Path, has_head: bool) -> Vec<TreeEntry> {
 
 /// The entries of the tree named by `spec` (a git tree-ish such as `HEAD` or
 /// `HEAD:src`), directories first then by name. Empty if `spec` is not a tree.
-pub(super) async fn list_tree(repo: &Path, spec: &str) -> Vec<TreeEntry> {
+pub(super) async fn list_tree(repo: &Path, spec: &str) -> Vec<Entry> {
     let Some(out) = git_output(repo, &["ls-tree", spec]).await else {
         return Vec::new();
     };
-    let mut entries: Vec<TreeEntry> = out
-        .lines()
-        .filter_map(|line| {
-            let (meta, name) = line.split_once('\t')?;
-            let kind = meta.split(' ').nth(1).unwrap_or_default();
-            Some(TreeEntry {
-                name: name.to_owned(),
-                is_dir: kind == "tree",
-            })
-        })
-        .collect();
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    let mut entries: Vec<Entry> = out.lines().filter_map(parse_tree_entry).collect();
+    entries.sort_by(|a, b| {
+        b.mode
+            .is_tree()
+            .cmp(&a.mode.is_tree())
+            .then_with(|| a.filename.cmp(&b.filename))
+    });
     entries
+}
+
+/// Parse one `git ls-tree` line (`<mode> <type> <oid>\t<name>`) into a tree
+/// entry, or `None` when it is malformed.
+fn parse_tree_entry(line: &str) -> Option<Entry> {
+    let (meta, name) = line.split_once('\t')?;
+    let mut cols = meta.split(' ');
+    let mode = cols.next()?;
+    let oid = cols.nth(1)?;
+    Some(Entry {
+        mode: entry_mode(mode),
+        filename: name.into(),
+        oid: ObjectId::from_hex(oid.as_bytes()).ok()?,
+    })
+}
+
+/// Map a `git ls-tree` mode column to a tree entry mode.
+fn entry_mode(mode: &str) -> EntryMode {
+    match mode {
+        "040000" | "40000" => EntryKind::Tree,
+        "120000" => EntryKind::Link,
+        "160000" => EntryKind::Commit,
+        "100755" => EntryKind::BlobExecutable,
+        _ => EntryKind::Blob,
+    }
+    .into()
 }
 
 /// Join the path segments of a browse view, rejecting empty or traversing
@@ -180,13 +198,18 @@ pub(super) async fn languages(repo: &Path) -> Vec<Language> {
 }
 
 /// A tagged release: its tag, the release name and notes drawn from the tag (or
-/// commit) message, the relative date, and the target commit's short hash.
+/// commit) message, the target commit's date, and that commit's id.
 pub(super) struct Release {
     pub(super) tag: String,
     pub(super) title: String,
     pub(super) body: String,
-    pub(super) date: String,
-    pub(super) short: String,
+    pub(super) date: Time,
+    pub(super) oid: ObjectId,
+}
+
+/// Parse a strict-ISO 8601 git date (`%aI`) into a gitoxide time.
+pub(super) fn parse_iso(input: &str) -> Option<Time> {
+    gix_date::parse(input, None).ok()
 }
 
 /// All tags as releases, newest first by creation date.
@@ -201,12 +224,19 @@ pub(super) async fn releases(repo: &Path) -> Vec<Release> {
         .filter(|t| !t.is_empty())
         .take(40)
     {
-        let Some(meta) = git_output(repo, &["log", "-1", "--format=%h%x00%ar", tag]).await else {
+        let Some(meta) = git_output(repo, &["log", "-1", "--format=%H%x00%aI", tag]).await else {
             continue;
         };
         let mut parts = meta.trim().split('\u{0}');
-        let short = parts.next().unwrap_or_default().to_owned();
-        let date = parts.next().unwrap_or_default().to_owned();
+        let Some(oid) = parts
+            .next()
+            .and_then(|h| ObjectId::from_hex(h.as_bytes()).ok())
+        else {
+            continue;
+        };
+        let Some(date) = parts.next().and_then(parse_iso) else {
+            continue;
+        };
         let notes = git_output(
             repo,
             &[
@@ -226,7 +256,7 @@ pub(super) async fn releases(repo: &Path) -> Vec<Release> {
             title,
             body,
             date,
-            short,
+            oid,
         });
     }
     out
