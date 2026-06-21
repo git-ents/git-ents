@@ -1,20 +1,18 @@
 //! Git Ents server — helpful guardians of your git trees.
 
-mod auth;
 mod http;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::extract::DefaultBodyLimit;
+use axum::routing::get;
 use clap::{CommandFactory, Parser};
 use tokio::sync::Notify;
-
-use crate::auth::Auth;
 
 #[derive(Parser)]
 #[command(
@@ -34,26 +32,15 @@ struct Args {
     #[arg(long, env = "GIT_PROJECT_ROOT", default_value = "/data/repos")]
     data_dir: PathBuf,
 
-    /// Admin bearer token; approves logins and bootstraps git access.
-    #[arg(long, env = "ACCESS_TOKEN")]
-    access_token: Option<String>,
-
-    /// Externally reachable base URL, used to build login verification links.
-    #[arg(long, env = "PUBLIC_URL")]
-    public_url: Option<String>,
-
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
 }
 
-/// Shared handler state: where repos live, the admin token, and issued tokens.
+/// Shared handler state: where the bare repositories live.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) data_dir: PathBuf,
-    pub(crate) access_token: Option<String>,
-    pub(crate) public_url: Arc<str>,
-    pub(crate) auth: Arc<Mutex<Auth>>,
 }
 
 fn main() -> ExitCode {
@@ -80,24 +67,17 @@ fn main() -> ExitCode {
 
 /// Bind the listener and serve until shutdown.
 async fn serve(args: Args) -> ExitCode {
-    let public_url = args
-        .public_url
-        .unwrap_or_else(|| format!("http://localhost:{}", args.port));
-    let auth = Auth::load(&args.data_dir);
     let state = AppState {
         data_dir: args.data_dir,
-        access_token: args.access_token,
-        public_url: Arc::from(public_url),
-        auth: Arc::new(Mutex::new(auth)),
     };
 
+    // The git smart-HTTP protocol streams whole packfiles through the request
+    // body, so the default 2 MiB cap would reject any non-trivial push.
     let mut app = Router::new()
         .route("/", get(http::health))
         .route("/healthz", get(http::health))
-        .route("/auth/device", post(auth::device))
-        .route("/auth/token", post(auth::token))
-        .route("/auth/verify", get(auth::verify_page).post(auth::verify_submit))
         .fallback(http::git)
+        .layer(DefaultBodyLimit::disable())
         .with_state(state);
 
     // When `--max-requests` is set, count every response and signal shutdown
@@ -131,8 +111,8 @@ async fn serve(args: Args) -> ExitCode {
         }
     };
 
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown.notified().await });
+    let server =
+        axum::serve(listener, app).with_graceful_shutdown(async move { shutdown.notified().await });
     if let Err(e) = server.await {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;

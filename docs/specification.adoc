@@ -19,17 +19,17 @@ This specification is not yet stable and will grow as the project develops.
 Repository state MUST be persisted in a bare Git repository on durable storage.
 --
 
-=== Authentication
+=== Access
 
-[role="requirement", id="auth.ssh"]
-.SSH Authentication
+[role="requirement", id="access.open"]
+.Open Access
 --
-All client connections MUST be authenticated via SSH public key.
-Password authentication and any other mechanism MUST NOT be offered.
-Connections from unrecognized keys MUST be rejected.
+The server MUST serve clone, fetch, and push to any client without authentication.
+Any client MAY create a repository by pushing to a previously unused name.
 
 [IMPORTANT]
-This requirement is deliberately unstable, and will change to allow other authentication methods as the project matures.
+This requirement is deliberately unstable.
+The current experimental phase prioritizes a frictionless Git remote; authentication will be reintroduced as the project matures.
 --
 
 === Protocol

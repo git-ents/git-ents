@@ -10,11 +10,8 @@ use std::process::Stdio;
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Basic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -30,16 +27,11 @@ pub async fn health() -> &'static str {
 /// Delegate a single request to `git http-backend` and reply with its output.
 pub async fn git(
     State(state): State<AppState>,
-    auth: Option<TypedHeader<Authorization<Basic>>>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !is_authorized(&state, auth.as_ref()) {
-        return unauthorized();
-    }
-
     let path_info = uri.path().to_owned();
     let query_string = uri.query().unwrap_or_default().to_owned();
 
@@ -58,7 +50,11 @@ pub async fn git(
         && !repo.exists()
         && let Err(e) = init_bare_repo(repo).await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("init failed: {e}")).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("init failed: {e}"),
+        )
+            .into_response();
     }
 
     let content_type = header_value(&headers, "Content-Type");
@@ -73,7 +69,10 @@ pub async fn git(
         .env("REQUEST_METHOD", method.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        // Surface backend diagnostics in the server's own logs rather than
+        // discarding them; git http-backend only writes here when something
+        // goes wrong.
+        .stderr(Stdio::inherit());
     if let Some(value) = &content_type {
         cmd.env("CONTENT_TYPE", value);
     }
@@ -84,7 +83,10 @@ pub async fn git(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("spawn failed: {e}"))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("spawn failed: {e}"),
+            )
                 .into_response();
         }
     };
@@ -110,14 +112,17 @@ pub async fn git(
     let status = match child.wait().await {
         Ok(status) => status,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("backend failed: {e}"))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("backend failed: {e}"),
+            )
                 .into_response();
         }
     };
 
     // A fresh bare repo's `HEAD` points at its initial branch, which may not be
     // the branch the client just pushed; without a valid `HEAD`, clones check
-    // out nothing. Adopt a pushed branch so the repo stays clonable.
+    // out nothing. Adopt a pushed branch so the repo stays cloneable.
     if let Some(repo) = &push_repo
         && status.success()
     {
@@ -253,40 +258,6 @@ async fn reconcile_head(repo: &Path) {
         .await;
 }
 
-/// Whether a request may touch git: it carries the admin token, a token issued
-/// by the device flow, or auth is unconfigured (no admin token, none issued).
-fn is_authorized(state: &AppState, auth: Option<&TypedHeader<Authorization<Basic>>>) -> bool {
-    if let Some(expected) = state.access_token.as_deref()
-        && authorized(auth, expected)
-    {
-        return true;
-    }
-    let presented = auth.map(|TypedHeader(creds)| creds.password());
-    let (store_empty, store_ok) = match state.auth.lock() {
-        Ok(guard) => (guard.is_empty(), presented.is_some_and(|t| guard.validate(t))),
-        Err(_) => return false,
-    };
-    store_ok || (state.access_token.is_none() && store_empty)
-}
-
-/// Check the request's HTTP Basic credentials against the expected token.
-///
-/// As with GitHub's HTTPS git auth, the username is ignored and the password
-/// field carries the bearer token.
-fn authorized(auth: Option<&TypedHeader<Authorization<Basic>>>, expected: &str) -> bool {
-    auth.is_some_and(|TypedHeader(creds)| creds.password() == expected)
-}
-
-/// A `401` carrying the Basic challenge git expects before retrying with creds.
-fn unauthorized() -> Response {
-    let mut response = (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_static(r#"Basic realm="git-ents""#),
-    );
-    response
-}
-
 fn header_value(headers: &HeaderMap, field: &str) -> Option<String> {
     headers
         .get(field)
@@ -303,7 +274,9 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn trim_cr(line: &[u8]) -> &[u8] {
@@ -329,35 +302,4 @@ fn trim_space(mut value: &[u8]) -> &[u8] {
         }
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        reason = "unit tests may unwrap freely"
-    )]
-
-    use super::*;
-
-    fn basic(user: &str, password: &str) -> TypedHeader<Authorization<Basic>> {
-        TypedHeader(Authorization::basic(user, password))
-    }
-
-    #[test]
-    fn rejects_missing_credentials() {
-        assert!(!authorized(None, "secret"));
-    }
-
-    #[test]
-    fn rejects_wrong_password() {
-        let creds = basic("anyone", "nope");
-        assert!(!authorized(Some(&creds), "secret"));
-    }
-
-    #[test]
-    fn accepts_matching_password_regardless_of_username() {
-        let creds = basic("anyone", "secret");
-        assert!(authorized(Some(&creds), "secret"));
-    }
 }

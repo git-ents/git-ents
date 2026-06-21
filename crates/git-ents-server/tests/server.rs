@@ -78,10 +78,7 @@ fn push_then_clone_round_trip() {
     // Clone it back and confirm the objects round-trip.
     let dst = tempfile::tempdir().unwrap();
     let clone_path = dst.path().join("clone");
-    run_git(
-        None,
-        &["clone", "-q", &url, clone_path.to_str().unwrap()],
-    );
+    run_git(None, &["clone", "-q", &url, clone_path.to_str().unwrap()]);
     let cloned = rev_parse(&clone_path);
 
     child.kill().unwrap();
@@ -120,7 +117,9 @@ fn run_git(dir: Option<&Path>, args: &[&str]) {
 }
 
 fn rev_parse(dir: &Path) -> String {
-    let output = git_command(Some(dir), &["rev-parse", "HEAD"]).output().unwrap();
+    let output = git_command(Some(dir), &["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
