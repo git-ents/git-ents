@@ -1,4 +1,6 @@
-exclude: ^(.*/)?(CHANGELOG\.md)$
+# Vendored content (see .gitvendors) is kept byte-for-byte as upstream, so it
+# must not be reformatted by the hooks below.
+exclude: ^(.*/)?(CHANGELOG\.md)$|^crates/git-ents-server/src/web/icons/
 default_install_hook_types: [pre-commit, commit-msg]
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
