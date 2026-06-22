@@ -201,19 +201,21 @@ fn update_ref(repo: &Path, commit: &str) -> Result<(), Error> {
     }
 }
 
-/// The namespace under which a push's check outcomes are recorded: one ref,
-/// `refs/checks/<commit>`, per checked commit. The ref points at a commit whose
-/// tree is a [`RunDoc`] — a recorded run *is* a git ref.
-pub const RESULTS_NS: &str = "refs/checks";
+/// The namespace under which a commit's check runs are recorded: one ref,
+/// `refs/meta/runs/<commit>`, per checked commit, holding the *log* of every
+/// run against it. Definitions live on [`CHECKS_REF`]; this is their history.
+pub const RUNS_NS: &str = "refs/meta/runs";
 
-/// The recorded outcomes for one checked commit, stored at the run's ref:
-/// `results/<name>` maps to that check's outcome.
+/// One run's outcomes, stored as the tree of a commit on the run ref:
+/// `results/<name>` maps each check to its outcome. Each commit on the ref is
+/// one run and the commit's date is when it ran, so no timestamp is duplicated
+/// in the tree — the run history is the ref's commit chain.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct RunDoc {
     results: BTreeMap<String, String>,
 }
 
-/// One check's outcome within a [`CheckRun`].
+/// One check's outcome within a [`Run`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutcome {
     /// The check's name (its `checks/<name>` in [`CHECKS_REF`]).
@@ -222,19 +224,30 @@ pub struct RunOutcome {
     pub outcome: String,
 }
 
-/// A recorded run: the commit that was checked and each check's outcome.
+/// One recorded execution of the check set against a commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckRun {
-    /// The checked commit's object id.
-    pub commit: String,
+pub struct Run {
+    /// When the run was recorded, as seconds since the Unix epoch — the run
+    /// commit's committer date.
+    pub at: u64,
     /// Each check's outcome, in name order.
     pub results: Vec<RunOutcome>,
 }
 
-/// Record `outcomes` for `commit` at `refs/checks/<commit>`, replacing any
-/// previous run for that commit, as a new commit. The outcomes are written as a
-/// [`RunDoc`] git tree through [`facet_git_tree`], so the run is a typed value
-/// living in git, like the check set itself.
+/// The runs recorded for one commit: its object id and every execution against
+/// it, newest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRuns {
+    /// The checked commit's object id.
+    pub commit: String,
+    /// Every run against it, newest first.
+    pub runs: Vec<Run>,
+}
+
+/// Record a run of `outcomes` for `commit` as a new commit on
+/// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
+/// chain is the run history. The outcomes are written as a [`RunDoc`] tree
+/// through [`facet_git_tree`]; the commit's date is the run time.
 pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), Error> {
     let doc = RunDoc {
         results: outcomes
@@ -244,42 +257,72 @@ pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), 
     };
     let odb = open_odb(repo).ok_or(Error::Odb)?;
     let tree = facet_git_tree::serialize_into(&doc, &odb)?;
-    let refname = format!("{RESULTS_NS}/{commit}");
+    let refname = format!("{RUNS_NS}/{commit}");
     let parent = ref_commit(repo, &refname);
     let new_commit = commit_run(repo, &tree, parent.as_deref())?;
     update_named_ref(repo, &refname, &new_commit)
 }
 
-/// List the recorded runs, newest first.
-pub fn runs(repo: &Path) -> Result<Vec<CheckRun>, Error> {
+/// List the recorded runs per commit, newest commit first. Each commit's runs
+/// are the ref's commit chain, newest first, with the run time taken from each
+/// commit's date.
+pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, Error> {
     let refs = run_refs(repo)?;
     if refs.is_empty() {
         return Ok(Vec::new());
     }
     let odb = open_odb(repo).ok_or(Error::Odb)?;
-    let prefix = format!("{RESULTS_NS}/");
-    let mut runs = Vec::new();
+    let prefix = format!("{RUNS_NS}/");
+    let mut commits = Vec::new();
     for refname in refs {
         let Some(commit) = refname.strip_prefix(&prefix) else {
             continue;
         };
-        let Some(tree) = ref_tree(repo, &refname) else {
-            continue;
-        };
-        let doc: RunDoc = facet_git_tree::deserialize(&tree, &odb)?;
-        runs.push(CheckRun {
+        let mut runs = Vec::new();
+        for (run_commit, at) in ref_history(repo, &refname)? {
+            let Some(tree) = ref_tree(repo, &run_commit) else {
+                continue;
+            };
+            let doc: RunDoc = facet_git_tree::deserialize(&tree, &odb)?;
+            runs.push(Run {
+                at,
+                results: doc
+                    .results
+                    .into_iter()
+                    .map(|(name, outcome)| RunOutcome { name, outcome })
+                    .collect(),
+            });
+        }
+        commits.push(CommitRuns {
             commit: commit.to_owned(),
-            results: doc
-                .results
-                .into_iter()
-                .map(|(name, outcome)| RunOutcome { name, outcome })
-                .collect(),
+            runs,
         });
     }
-    Ok(runs)
+    Ok(commits)
 }
 
-/// List the `refs/checks/*` refs, newest committed first.
+/// The commits on `refname` as `(object id, committer date)` pairs, newest
+/// first — one entry per recorded run.
+fn ref_history(repo: &Path, refname: &str) -> Result<Vec<(String, u64)>, Error> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["log", "--format=%H %ct", refname])
+        .output()
+        .map_err(|_source| Error::Git { operation: "log" })?;
+    if !output.status.success() {
+        return Err(Error::Git { operation: "log" });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (hash, ct) = line.split_once(' ')?;
+            Some((hash.to_owned(), ct.parse().ok()?))
+        })
+        .collect())
+}
+
+/// List the `refs/meta/runs/*` refs, newest committed first.
 fn run_refs(repo: &Path) -> Result<Vec<String>, Error> {
     let output = Command::new("git")
         .arg("-C")
@@ -288,7 +331,7 @@ fn run_refs(repo: &Path) -> Result<Vec<String>, Error> {
             "for-each-ref",
             "--sort=-committerdate",
             "--format=%(refname)",
-            RESULTS_NS,
+            RUNS_NS,
         ])
         .output()
         .map_err(|_source| Error::Git {
@@ -487,25 +530,29 @@ mod tests {
         )
         .unwrap();
 
-        let runs = runs(&repo).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].commit, commit);
+        let commits = runs(&repo).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].commit, commit);
+        assert_eq!(commits[0].runs.len(), 1);
         assert_eq!(
-            runs[0].results,
+            commits[0].runs[0].results,
             vec![outcome("fmt", "pass"), outcome("test", "fail")]
         );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
-    fn recording_a_commit_again_replaces_its_run() {
+    fn recording_a_commit_again_appends_a_run() {
         let repo = unique_repo();
         let commit = "0123456789012345678901234567890123456789";
         record(&repo, commit, &[outcome("fmt", "fail")]).unwrap();
         record(&repo, commit, &[outcome("fmt", "pass")]).unwrap();
-        let runs = runs(&repo).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].results, vec![outcome("fmt", "pass")]);
+        let commits = runs(&repo).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].runs.len(), 2);
+        // Newest first: the second run (pass) leads, the first (fail) follows.
+        assert_eq!(commits[0].runs[0].results, vec![outcome("fmt", "pass")]);
+        assert_eq!(commits[0].runs[1].results, vec![outcome("fmt", "fail")]);
         let _ = std::fs::remove_dir_all(&repo);
     }
 

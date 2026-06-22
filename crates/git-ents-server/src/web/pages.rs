@@ -651,12 +651,14 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                     div.card-header { "Recent runs" }
                     @match &runs {
                         Err(err) => div.card-row.muted { "Could not read runs: " (err) }
-                        Ok(runs) if runs.is_empty() => div.card-row.muted { "No runs recorded yet." }
-                        Ok(runs) => {
-                            @for run in runs.iter().take(25) {
-                                div.card-row.signer-row {
-                                    code.key { (run.commit.get(..8).unwrap_or(&run.commit)) }
-                                    span.muted { (run_summary(run)) }
+                        Ok(commits) if commits.is_empty() => div.card-row.muted { "No runs recorded yet." }
+                        Ok(commits) => {
+                            @for commit in commits.iter().take(25) {
+                                @for run in &commit.runs {
+                                    div.card-row.signer-row {
+                                        code.key { (commit.commit.get(..8).unwrap_or(&commit.commit)) }
+                                        span.muted { (run_summary(run)) }
+                                    }
                                 }
                             }
                         }
@@ -700,7 +702,7 @@ async fn load_checks(repo: &Path) -> Result<Vec<git_ents::checks::Check>, String
 }
 
 /// Load the recorded runs off the async runtime, like [`load_checks`].
-async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CheckRun>, String> {
+async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, String> {
     let repo = repo.to_owned();
     tokio::task::spawn_blocking(move || git_ents::checks::runs(&repo))
         .await
@@ -709,7 +711,7 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CheckRun>, Strin
 }
 
 /// A one-line summary of a run's outcomes, e.g. `fmt pass · test fail`.
-fn run_summary(run: &git_ents::checks::CheckRun) -> String {
+fn run_summary(run: &git_ents::checks::Run) -> String {
     run.results
         .iter()
         .map(|result| format!("{} {}", result.name, result.outcome))
