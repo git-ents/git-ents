@@ -88,6 +88,18 @@ pub async fn git(
         cmd.env("CONTENT_LENGTH", value);
     }
 
+    // Push these through `GIT_CONFIG_*` rather than `git -c` so they reach the
+    // `receive-pack` and `pre-receive` processes http-backend spawns, where the
+    // nonce and hook actually take effect.
+    let overrides = backend_config(&state);
+    if !overrides.is_empty() {
+        cmd.env("GIT_CONFIG_COUNT", overrides.len().to_string());
+        for (index, (key, value)) in overrides.iter().enumerate() {
+            cmd.env(format!("GIT_CONFIG_KEY_{index}"), key);
+            cmd.env(format!("GIT_CONFIG_VALUE_{index}"), value);
+        }
+    }
+
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
@@ -138,6 +150,20 @@ pub async fn git(
     }
 
     build_response(&stdout)
+}
+
+/// The `git` config overrides applied to every backend invocation. Empty until
+/// push authentication is wired: a seed enables the signed-push nonce, and the
+/// hooks directory points the backend at the `pre-receive` verifier.
+fn backend_config(state: &AppState) -> Vec<(&'static str, &str)> {
+    let mut overrides = Vec::new();
+    if let Some(seed) = state.cert_nonce_seed.as_deref() {
+        overrides.push(("receive.certNonceSeed", seed));
+    }
+    if let Some(hooks) = state.hooks_dir.as_deref().and_then(Path::to_str) {
+        overrides.push(("core.hooksPath", hooks));
+    }
+    overrides
 }
 
 /// Translate a CGI response (header block, blank line, body) into HTTP.
@@ -471,6 +497,31 @@ mod tests {
     #[case("a%2eb", false)]
     fn validates_segments(#[case] segment: &str, #[case] expected: bool) {
         assert_eq!(valid_segment(segment), expected);
+    }
+
+    fn state(cert_nonce_seed: Option<&str>, hooks_dir: Option<&str>) -> AppState {
+        AppState {
+            data_dir: PathBuf::from("/data"),
+            init_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            cert_nonce_seed: cert_nonce_seed.map(str::to_owned),
+            hooks_dir: hooks_dir.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn backend_config_is_empty_without_authentication() {
+        assert!(backend_config(&state(None, None)).is_empty());
+    }
+
+    #[test]
+    fn backend_config_injects_nonce_seed_and_hooks_path() {
+        assert_eq!(
+            backend_config(&state(Some("seed"), Some("/app/hooks"))),
+            vec![
+                ("receive.certNonceSeed", "seed"),
+                ("core.hooksPath", "/app/hooks"),
+            ]
+        );
     }
 
     #[rstest]

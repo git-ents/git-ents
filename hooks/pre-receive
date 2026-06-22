@@ -1,0 +1,4 @@
+#!/bin/sh
+# Gate pushes on a signed-push certificate from an authorized signer. Installed
+# on every served repository via `core.hooksPath`; see `verify.rs`.
+exec git-ents-server pre-receive

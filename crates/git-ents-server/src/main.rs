@@ -38,6 +38,15 @@ struct Args {
     #[arg(long, env = "GIT_PROJECT_ROOT", default_value = "/data/repos")]
     data_dir: PathBuf,
 
+    /// Secret seed for signed-push nonces. Setting it requires pushes to carry
+    /// a signed-push certificate, enabling authentication against the signers.
+    #[arg(long, env = "CERT_NONCE_SEED")]
+    cert_nonce_seed: Option<String>,
+
+    /// Directory of git hooks (a `pre-receive`) applied to every served repo.
+    #[arg(long, env = "GIT_ENTS_HOOKS_DIR")]
+    hooks_dir: Option<PathBuf>,
+
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
@@ -57,6 +66,12 @@ enum Command {
 pub(crate) struct AppState {
     pub(crate) data_dir: PathBuf,
     pub(crate) init_lock: Arc<Mutex<()>>,
+    /// When set, injected as `receive.certNonceSeed` so the backend demands a
+    /// signed-push certificate the `pre-receive` hook can verify.
+    pub(crate) cert_nonce_seed: Option<String>,
+    /// When set, injected as `core.hooksPath` so every served repo runs the
+    /// bundled `pre-receive` verifier.
+    pub(crate) hooks_dir: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -96,6 +111,8 @@ async fn serve(args: Args) -> ExitCode {
     let state = AppState {
         data_dir: args.data_dir,
         init_lock: Arc::new(Mutex::new(())),
+        cert_nonce_seed: args.cert_nonce_seed,
+        hooks_dir: args.hooks_dir,
     };
 
     // The git smart-HTTP protocol streams whole packfiles through the request
