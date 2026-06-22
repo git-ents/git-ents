@@ -1,5 +1,6 @@
 //! Git Ents — helpful guardians of your git trees.
 
+pub mod checks;
 pub mod signers;
 
 /// Returns the tagline describing what the ents do.
