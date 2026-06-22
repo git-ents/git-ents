@@ -357,4 +357,13 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 @media (max-width: 640px) {
   html { font-size: 16px; }
   .content { padding: 1.5rem 1.25rem 2.5rem; }
+  .nav-inner { gap: .75rem; padding: 0 1.25rem; }
+  .nav-search { max-width: none; }
+  .page-title { font-size: 1.3rem; }
+  .repo-path { font-size: 1.05rem; }
+  .adoc-body { padding: 1.75rem 1.5rem 2rem; }
+  .adoc-body h1 { font-size: 1.9rem; }
+  .adoc-body h2 { font-size: 1.25rem; }
+  .issues-head, .filter-row { flex-wrap: wrap; }
+  .btn-primary { margin-left: 0; }
 }
