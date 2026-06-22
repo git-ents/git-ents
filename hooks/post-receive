@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run the configured checks (refs/meta/checks) against the push in a Sprite.
+# Installed on every served repository via `core.hooksPath`; see `checks.rs`.
+exec git-ents-server post-receive

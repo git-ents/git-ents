@@ -1,6 +1,7 @@
 //! Git Ents server — helpful guardians of your git trees.
 
 mod asciidoc;
+mod checks;
 mod http;
 mod verify;
 mod web;
@@ -58,6 +59,9 @@ enum Command {
     /// Verify a signed push against the authorized signers (a git `pre-receive`
     /// hook).
     PreReceive,
+    /// Run the configured checks against a push in a Sprite (a git
+    /// `post-receive` hook).
+    PostReceive,
 }
 
 /// Shared handler state: where the bare repositories live, plus a lock that
@@ -85,6 +89,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+
+    if let Some(Command::PostReceive) = args.command {
+        // A post-receive failure cannot undo the push; report and exit clean so
+        // a runner hiccup never looks like a rejected push.
+        if let Err(reason) = checks::post_receive() {
+            eprintln!("checks: {reason}");
+        }
+        return ExitCode::SUCCESS;
     }
 
     if let Some(dir) = args.generate_man {

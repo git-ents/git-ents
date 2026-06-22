@@ -16,12 +16,15 @@ RUN cargo build --release --bin git-ents-server
 # We do not need the Rust toolchain to run the binary!
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-# openssh-client provides the `ssh-keygen -Y verify` the pre-receive hook runs.
+# openssh-client provides the `ssh-keygen -Y verify` the pre-receive hook runs;
+# curl installs the sprite CLI the post-receive check runner drives.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
+    && apt-get install -y --no-install-recommends git ca-certificates openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
+# The sprite CLI runs the checks in a Sprite; it reads SPRITES_TOKEN from the env.
+RUN curl -fsSL https://sprites.dev/install.sh | bash
 COPY --from=builder /app/target/release/git-ents-server /usr/local/bin
 COPY hooks /app/hooks
-RUN chmod +x /app/hooks/pre-receive
+RUN chmod +x /app/hooks/pre-receive /app/hooks/post-receive
 ENV GIT_ENTS_HOOKS_DIR=/app/hooks
 ENTRYPOINT ["/usr/local/bin/git-ents-server"]
