@@ -10,8 +10,10 @@
 //! synced into it before the checks run. Results are reported on the hook's
 //! stdout, which git relays to the pusher.
 //!
-//! The Sprite is driven through the `sprite` CLI, which reads its `SPRITES_TOKEN`
-//! from the environment the server passes down to the hook.
+//! The Sprite is driven through the `sprite` CLI. The CLI authenticates from a
+//! config file rather than the environment, so the runner first hands it the
+//! `SPRITES_TOKEN` the server passes down via `sprite auth setup`; only then
+//! does an organization become configured.
 //!
 //! [Sprite]: https://sprites.dev
 
@@ -50,6 +52,7 @@ pub fn post_receive() -> Result<(), String> {
     }
 
     let sprite = sprite_name(&repo);
+    ensure_auth()?;
     ensure_sprite(&sprite)?;
 
     for update in updates {
@@ -119,6 +122,29 @@ fn sprite_name(repo: &Path) -> String {
         "checks-{}",
         if trimmed.is_empty() { "repo" } else { trimmed }
     )
+}
+
+/// Configure the `sprite` CLI from the `SPRITES_TOKEN` the server passes down.
+/// The CLI persists its credentials to a config file rather than reading the
+/// token per call, so without this it reports "no organizations configured"
+/// even with the token in the environment. `auth setup` is idempotent, so it is
+/// run on every push to keep the steady state self-healing.
+fn ensure_auth() -> Result<(), String> {
+    let token = std::env::var("SPRITES_TOKEN")
+        .ok()
+        .ok_or("SPRITES_TOKEN is not set in the hook environment")?;
+    let output = Command::new("sprite")
+        .args(["auth", "setup", "--token", &token])
+        .output()
+        .map_err(|e| format!("could not run the sprite CLI (is it installed?): {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "sprite auth setup failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 /// Create the repository's Sprite if it does not already exist. `sprite create`
