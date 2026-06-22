@@ -214,8 +214,8 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .files-empty .icon { width: 28px; height: 28px; opacity: .5; margin-bottom: .5rem; }
 
 @media (max-width: 700px) {
-  .files { grid-template-columns: 1fr; }
-  .tree-pane { border-right: 0; border-bottom: 1px solid var(--color-border); max-height: 16rem; }
+  .files { grid-template-columns: 1fr; min-height: 0; }
+  .tree-pane { border-right: 0; border-bottom: 1px solid var(--color-border); max-height: 50vh; }
 }
 
 .blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
