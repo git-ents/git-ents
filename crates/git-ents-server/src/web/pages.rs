@@ -703,8 +703,9 @@ pub(super) fn issues_page(meta: &RepoMeta) -> Markup {
 /// The Settings tab. Persisting changes needs a config store that does not
 /// exist yet, so the controls reflect the repository's current real values and
 /// are presented read-only.
-pub(super) fn settings_page(meta: &RepoMeta) -> Markup {
+pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let name = meta.name();
+    let signers = load_signers(repo).await;
     repo_shell(
         meta,
         Tab::Settings,
@@ -739,6 +740,33 @@ pub(super) fn settings_page(meta: &RepoMeta) -> Markup {
                 }
 
                 div.card {
+                    div.card-header {
+                        "Authorized signers"
+                        @if let Ok(signers) = &signers { span.count { (signers.len()) } }
+                    }
+                    p.shell-note {
+                        "Keys on " code { "refs/meta/auth" } " whose signed pushes are accepted "
+                        "(" code { "git ents auth list" } ")."
+                    }
+                    @match &signers {
+                        Err(err) => div.card-row.muted { "Could not read signers: " (err) }
+                        Ok(signers) if signers.is_empty() => {
+                            div.card-row.muted {
+                                "No authorized signers — pushes are open until the first key is added."
+                            }
+                        }
+                        Ok(signers) => {
+                            @for signer in signers {
+                                div.card-row {
+                                    code { (signer.fingerprint) }
+                                    span.muted { (signer_label(&signer.key)) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                div.card {
                     div.card-header { "Visibility" }
                     (visibility_row("Public", "Anyone can read this repository.", true))
                     (visibility_row("Private", "Only collaborators can read it.", false))
@@ -764,6 +792,29 @@ pub(super) fn settings_page(meta: &RepoMeta) -> Markup {
             }
         },
     )
+}
+
+/// Load the authorized signer set off the async runtime, since `signers::load`
+/// shells out to git and reads the object database synchronously.
+async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Signer>, String> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::signers::load(&repo))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+/// A short label for a signer's key: its type and trailing comment, dropping the
+/// long base64 body that would not fit on the row.
+fn signer_label(key: &str) -> String {
+    let mut parts = key.split_whitespace();
+    let kind = parts.next().unwrap_or_default();
+    let comment = parts.nth(1).unwrap_or_default();
+    if comment.is_empty() {
+        kind.to_owned()
+    } else {
+        format!("{kind} · {comment}")
+    }
 }
 
 /// A Features row with a static toggle reflecting `on`.

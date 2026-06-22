@@ -73,7 +73,7 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(&meta).into_response(),
         Some((&"issues", &[])) => pages::issues_page(&meta).into_response(),
-        Some((&"settings", &[])) => pages::settings_page(&meta).into_response(),
+        Some((&"settings", &[])) => pages::settings_page(repo, &meta).await.into_response(),
         _ => not_found().into_response(),
     }
 }
