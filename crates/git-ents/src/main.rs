@@ -113,7 +113,7 @@ fn setup(key: Option<&Path>, local: bool) -> Result<(), String> {
     let signing_key = match key {
         Some(path) => ensure_key(path)?,
         None => match config_get("user.signingkey") {
-            Some(existing) => existing,
+            Some(existing) => ensure_key(&signing_key_path(&existing))?,
             None => ensure_key(&default_key_path()?)?,
         },
     };
@@ -146,8 +146,45 @@ fn ensure_key(path: &Path) -> Result<String, String> {
             .map_err(|error| format!("could not write {}: {error}", public.display()))?;
         return Ok(public.display().to_string());
     }
+    if !confirm(&format!(
+        "no SSH key at {}; generate a new ed25519 keypair there?",
+        private.display()
+    ))? {
+        return Err("setup needs a signing key; re-run with `--key` or generate one".to_owned());
+    }
     generate_key(&private)?;
     Ok(public.display().to_string())
+}
+
+/// Resolve the path to ensure for a configured `user.signingkey`. A real key
+/// path (or one a `.pub` can be derived from) is used as-is; a bare key id —
+/// e.g. an openpgp fingerprint left from another signing format — is not a
+/// path, so fall back to the default SSH key location rather than generating a
+/// keypair named after it.
+fn signing_key_path(configured: &str) -> PathBuf {
+    let candidate = expand_tilde(configured);
+    let (private, public) = key_paths(&candidate);
+    if private.exists() || public.exists() || configured.contains('/') {
+        candidate
+    } else {
+        default_key_path().unwrap_or(candidate)
+    }
+}
+
+/// Ask `question` on the terminal, returning whether it was accepted. Enter
+/// (an empty reply) accepts; a reply starting with `n` declines.
+fn confirm(question: &str) -> Result<bool, String> {
+    use std::io::Write as _;
+    print!("{question} [Y/n] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|error| format!("could not write prompt: {error}"))?;
+    let mut reply = String::new();
+    std::io::stdin()
+        .read_line(&mut reply)
+        .map_err(|error| format!("could not read reply: {error}"))?;
+    let reply = reply.trim();
+    Ok(reply.is_empty() || !reply.starts_with(['n', 'N']))
 }
 
 /// Split a key path into its private and `.pub` halves.
