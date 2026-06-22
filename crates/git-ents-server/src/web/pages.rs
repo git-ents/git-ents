@@ -634,6 +634,7 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 /// reflects the live set; runs are not yet recorded, so that panel is empty.
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let checks = load_checks(repo).await;
+    let runs = load_runs(repo).await;
     repo_shell(
         meta,
         Tab::Checks,
@@ -642,12 +643,24 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
                 "Checks are configured on " code { "refs/meta/checks" }
-                " (" code { "git ents checks list" } ") and run in a Sprite on each push."
+                " (" code { "git ents checks list" } ") and run in a Sprite on each push; "
+                "each run is recorded under " code { "refs/checks/<commit>" } "."
             }
             div.checks-grid {
                 div.card {
                     div.card-header { "Recent runs" }
-                    div.card-row.muted { "No runs recorded yet." }
+                    @match &runs {
+                        Err(err) => div.card-row.muted { "Could not read runs: " (err) }
+                        Ok(runs) if runs.is_empty() => div.card-row.muted { "No runs recorded yet." }
+                        Ok(runs) => {
+                            @for run in runs.iter().take(25) {
+                                div.card-row.signer-row {
+                                    code.key { (run.commit.get(..8).unwrap_or(&run.commit)) }
+                                    span.muted { (run_summary(run)) }
+                                }
+                            }
+                        }
+                    }
                 }
                 div.card {
                     div.card-header {
@@ -684,6 +697,24 @@ async fn load_checks(repo: &Path) -> Result<Vec<git_ents::checks::Check>, String
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
+}
+
+/// Load the recorded runs off the async runtime, like [`load_checks`].
+async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CheckRun>, String> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::checks::runs(&repo))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+/// A one-line summary of a run's outcomes, e.g. `fmt pass · test fail`.
+fn run_summary(run: &git_ents::checks::CheckRun) -> String {
+    run.results
+        .iter()
+        .map(|result| format!("{} {}", result.name, result.outcome))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The Issues ("Bug reports") tab. There is no issue store yet, so the filters

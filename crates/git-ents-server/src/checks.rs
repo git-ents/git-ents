@@ -19,7 +19,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use git_ents::checks::{self, Check};
+use git_ents::checks::{self, Check, RunOutcome};
 
 /// Where the pushed tree is unpacked inside the Sprite.
 const WORKDIR: &str = "/work";
@@ -59,7 +59,12 @@ pub fn post_receive() -> Result<(), String> {
             update.ref_name
         );
         sync_tree(&repo, &sprite, update.new)?;
-        run_checks(&sprite, &checks);
+        let outcomes = run_checks(&sprite, &checks);
+        // Persist the run as a ref (`refs/checks/<commit>`); a recording hiccup
+        // is reported but never fails the hook.
+        if let Err(e) = checks::record(&repo, update.new, &outcomes) {
+            eprintln!("checks: could not record run for {}: {e}", update.new);
+        }
     }
     Ok(())
 }
@@ -166,8 +171,10 @@ fn sync_tree(repo: &Path, sprite: &str, new: &str) -> Result<(), String> {
 }
 
 /// Run each check in the Sprite's [`WORKDIR`], printing a `PASS`/`FAIL` line per
-/// check and echoing the output of any that fail so the pusher sees why.
-fn run_checks(sprite: &str, checks: &[Check]) {
+/// check and echoing the output of any that fail so the pusher sees why. Returns
+/// each check's outcome (`pass`/`fail`/`error`) for recording.
+fn run_checks(sprite: &str, checks: &[Check]) -> Vec<RunOutcome> {
+    let mut outcomes = Vec::with_capacity(checks.len());
     for check in checks {
         let output = Command::new("sprite")
             .args([
@@ -182,9 +189,10 @@ fn run_checks(sprite: &str, checks: &[Check]) {
                 &check.command,
             ])
             .output();
-        match output {
+        let outcome = match output {
             Ok(output) if output.status.success() => {
                 println!("checks: PASS {}", check.name);
+                "pass"
             }
             Ok(output) => {
                 println!("checks: FAIL {} ({})", check.name, check.command);
@@ -197,10 +205,17 @@ fn run_checks(sprite: &str, checks: &[Check]) {
                 for line in logs.lines() {
                     println!("checks:   {line}");
                 }
+                "fail"
             }
             Err(e) => {
                 println!("checks: ERROR {} (could not run: {e})", check.name);
+                "error"
             }
-        }
+        };
+        outcomes.push(RunOutcome {
+            name: check.name.clone(),
+            outcome: outcome.to_owned(),
+        });
     }
+    outcomes
 }
