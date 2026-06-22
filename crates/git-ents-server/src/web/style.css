@@ -158,7 +158,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .repo-arrow { color: var(--color-accent); display: inline-flex; opacity: 0; transform: translateX(-6px); transition: opacity .22s, transform .22s; }
 
 .card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem; overflow: hidden; }
-.card-header { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); background: var(--color-code-bg); padding: .55rem 1.1rem; border-bottom: 1px solid var(--color-border); }
+.card-header { display: flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); background: var(--color-code-bg); padding: .55rem 1.1rem; border-bottom: 1px solid var(--color-border); }
 .card-row { display: flex; align-items: center; gap: .65rem; padding: .7rem 1.1rem; font-family: var(--font-mono); font-size: .9rem; }
 .card-row + .card-row { border-top: 1px solid var(--color-border); }
 .card-row .icon { color: var(--color-text-muted); }
@@ -220,7 +220,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 
 .blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
 .blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
-.blob-nums { text-align: center; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1rem; padding-right: 1rem; min-width: 2.5rem; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1rem; padding-right: 1rem; min-width: 2.5rem; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
 .blob-code { overflow-x: auto; min-width: 0; }
 .blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
@@ -290,9 +290,11 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; }
 
 .shell-note { color: var(--color-text-muted); font-size: .95rem; max-width: 44rem; margin-bottom: 1.5rem; }
+.card .shell-note { padding: .7rem 1.1rem; margin-bottom: 0; }
 .shell-note code { font-family: var(--font-mono); font-size: .85em; background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }
 .card-row.muted { color: var(--color-text-muted); }
 .card-row.muted code { font-family: var(--font-mono); background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }
+.signer-row .key { font-family: var(--font-mono); font-size: .82rem; background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: 5px; padding: .25rem .55rem; }
 
 .checks-grid { display: grid; grid-template-columns: 20rem minmax(0, 1fr); gap: 20px; align-items: start; }
 .checks-grid .card { margin-bottom: 0; }

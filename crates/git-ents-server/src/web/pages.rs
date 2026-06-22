@@ -757,8 +757,8 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                         }
                         Ok(signers) => {
                             @for signer in signers {
-                                div.card-row {
-                                    code { (signer.fingerprint) }
+                                div.card-row.signer-row {
+                                    code.key { (signer.fingerprint) }
                                     span.muted { (signer_label(&signer.key)) }
                                 }
                             }
