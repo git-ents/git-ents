@@ -19,7 +19,8 @@ use git_ents::signers::{self, Signer};
 /// environment git populates for the hook.
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
-    let authorized = signers::load(&repo);
+    let authorized =
+        signers::load(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
     if authorized.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
         return Ok(());

@@ -4,7 +4,7 @@ members = ["crates/git-ents", "crates/git-ents-server"]
 
 [workspace.package]
 edition = "2024"
-publish = true
+publish = false
 license = "MIT OR Apache-2.0"
 
 [workspace.lints.rust]
@@ -35,9 +35,12 @@ acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8
 axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
+facet = { version = "0.50.0-rc.0", features = ["reflect"] }
+facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
 gix = { version = "0.83", features = ["no-default-features"] }
 gix-hash = { version = "0.25", features = ["sha1"] }
-gix-object = "0.60"
+gix-object = "0.61"
+gix-odb = "0.81"
 gix-actor = "0.41"
 gix-date = "0.15"
 maud = { version = "0.27", features = ["axum"] }
