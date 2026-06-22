@@ -32,14 +32,15 @@ enum Top {
 
 #[derive(Subcommand)]
 enum Action {
-    /// Configure this client to sign the pushes the server requires.
-    Configure {
-        /// Key to sign with; defaults to `user.signingkey`.
+    /// Set this machine up to sign the pushes the server requires.
+    Setup {
+        /// Key to sign with; defaults to `user.signingkey`, else a new or
+        /// existing `~/.ssh/id_ed25519`.
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Write to global git config instead of this repository's.
+        /// Write to this repository's config instead of your global config.
         #[arg(long)]
-        global: bool,
+        local: bool,
     },
     /// List the authorized signers on a remote.
     List {
@@ -91,7 +92,7 @@ fn main() -> ExitCode {
 
 fn run_auth(action: Action) -> Result<(), String> {
     match action {
-        Action::Configure { key, global } => configure(key.as_deref(), global),
+        Action::Setup { key, local } => setup(key.as_deref(), local),
         Action::List { remote } => list(&remote),
         Action::Add { remote, key } => add(&remote, key.as_deref()),
         Action::Remove {
@@ -102,28 +103,113 @@ fn run_auth(action: Action) -> Result<(), String> {
     }
 }
 
-/// Set the local (or global) git config that makes `git push` sign for this
-/// server: SSH-format signatures, a signing key, and "sign when the server
-/// asks" so pushes elsewhere are untouched.
-fn configure(key: Option<&Path>, global: bool) -> Result<(), String> {
-    let scope = if global { "--global" } else { "--local" };
+/// Set this machine up to produce the signed pushes the server requires:
+/// ensure a signing key exists, then record the SSH signing config
+/// (SSH-format signatures, the key, and "sign when the server asks" so pushes
+/// elsewhere are untouched). Writes global config by default, since the setup
+/// is per-machine.
+fn setup(key: Option<&Path>, local: bool) -> Result<(), String> {
+    let scope = if local { "--local" } else { "--global" };
+    let signing_key = match key {
+        Some(path) => ensure_key(path)?,
+        None => match config_get("user.signingkey") {
+            Some(existing) => existing,
+            None => ensure_key(&default_key_path()?)?,
+        },
+    };
     set_config(scope, "gpg.format", "ssh")?;
+    set_config(scope, "user.signingkey", &signing_key)?;
     set_config(scope, "push.gpgSign", "if-asked")?;
-    match key {
-        Some(path) => set_config(scope, "user.signingkey", &path.display().to_string())?,
-        None => {
-            if config_get("user.signingkey").is_none() {
-                eprintln!(
-                    "note: user.signingkey is unset; pass --key <path> or set it to sign pushes"
-                );
-            }
-        }
-    }
+
+    let public_key = public_key(None)?;
+    let fingerprint = fingerprint(&public_key)?;
     println!(
         "configured signed pushes ({} git config)",
         scope.trim_start_matches('-')
     );
+    println!("signing key: {signing_key} ({fingerprint})");
+    println!("authorize it on a server with `git ents auth add <remote>`");
     Ok(())
+}
+
+/// Ensure a usable SSH key exists at `path`, returning the public-key path to
+/// record in `user.signingkey`. Generates an ed25519 keypair when neither the
+/// key nor its `.pub` is present; derives a missing `.pub` from the private key.
+fn ensure_key(path: &Path) -> Result<String, String> {
+    let (private, public) = key_paths(path);
+    if public.exists() {
+        return Ok(public.display().to_string());
+    }
+    if private.exists() {
+        let derived = read_public_key(&private)?;
+        std::fs::write(&public, format!("{derived}\n"))
+            .map_err(|error| format!("could not write {}: {error}", public.display()))?;
+        return Ok(public.display().to_string());
+    }
+    generate_key(&private)?;
+    Ok(public.display().to_string())
+}
+
+/// Split a key path into its private and `.pub` halves.
+fn key_paths(path: &Path) -> (PathBuf, PathBuf) {
+    if path.extension().is_some_and(|extension| extension == "pub") {
+        (path.with_extension(""), path.to_owned())
+    } else {
+        (
+            path.to_owned(),
+            PathBuf::from(format!("{}.pub", path.display())),
+        )
+    }
+}
+
+/// Generate a passphrase-less ed25519 keypair at `private` and `<private>.pub`.
+fn generate_key(private: &Path) -> Result<(), String> {
+    if let Some(dir) = private.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+    }
+    println!("generating a new ed25519 key at {}", private.display());
+    let status = Command::new("ssh-keygen")
+        .arg("-t")
+        .arg("ed25519")
+        .arg("-N")
+        .arg("")
+        .arg("-C")
+        .arg(host_comment())
+        .arg("-f")
+        .arg(private)
+        .status()
+        .map_err(|error| format!("could not run ssh-keygen: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("ssh-keygen could not generate a key".to_owned())
+    }
+}
+
+/// A `<user>@<host>` comment for a freshly generated key, best-effort.
+fn host_comment() -> String {
+    let user = std::env::var("USER").unwrap_or_else(|_unset| "git-ents".to_owned());
+    match Command::new("hostname").output() {
+        Ok(output) if output.status.success() => {
+            let host = String::from_utf8_lossy(&output.stdout);
+            let host = host.trim();
+            if host.is_empty() {
+                user
+            } else {
+                format!("{user}@{host}")
+            }
+        }
+        Ok(_) | Err(_) => user,
+    }
+}
+
+/// The default signing key path, `~/.ssh/id_ed25519`.
+fn default_key_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_unset| "HOME is not set".to_owned())?;
+    Ok(Path::new(&home).join(".ssh").join("id_ed25519"))
 }
 
 /// Print each authorized signer on `remote` as `<fingerprint>  <comment>`.
