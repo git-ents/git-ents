@@ -159,6 +159,11 @@ fn backend_config(state: &AppState) -> Vec<(&'static str, &str)> {
     let mut overrides = Vec::new();
     if let Some(seed) = state.cert_nonce_seed.as_deref() {
         overrides.push(("receive.certNonceSeed", seed));
+        // Smart-HTTP issues the nonce and verifies it in two separate
+        // `receive-pack` processes, so the cert's stamp never matches the
+        // verifier's "now"; without a slop window git's default of 0 returns
+        // SLOP for every signed push. Allow a small drift for the round-trip.
+        overrides.push(("receive.certNonceSlop", "60"));
     }
     if let Some(hooks) = state.hooks_dir.as_deref().and_then(Path::to_str) {
         overrides.push(("core.hooksPath", hooks));
@@ -519,6 +524,7 @@ mod tests {
             backend_config(&state(Some("seed"), Some("/app/hooks"))),
             vec![
                 ("receive.certNonceSeed", "seed"),
+                ("receive.certNonceSlop", "60"),
                 ("core.hooksPath", "/app/hooks"),
             ]
         );
