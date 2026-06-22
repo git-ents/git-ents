@@ -146,7 +146,7 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    sync_auth(remote)?;
+    let expected = sync_auth(remote)?;
     let mut signers = signers::load(&repo).map_err(|error| error.to_string())?;
     if signers
         .iter()
@@ -160,7 +160,7 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
         key: public_key,
     });
     signers::store(&repo, &signers).map_err(|error| error.to_string())?;
-    push_auth(remote)?;
+    push_auth(remote, expected.as_deref())?;
     println!("authorized {fingerprint}");
     Ok(())
 }
@@ -168,7 +168,7 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
 /// Drop the signer named `fingerprint` from `remote` and push the update.
 fn remove(fingerprint: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
-    sync_auth(remote)?;
+    let expected = sync_auth(remote)?;
     let before = signers::load(&repo).map_err(|error| error.to_string())?;
     let count = before.len();
     let after: Vec<Signer> = before
@@ -179,7 +179,7 @@ fn remove(fingerprint: &str, remote: &str) -> Result<(), String> {
         return Err(format!("no signer named {fingerprint} on {remote}"));
     }
     signers::store(&repo, &after).map_err(|error| error.to_string())?;
-    push_auth(remote)?;
+    push_auth(remote, expected.as_deref())?;
     println!("removed {fingerprint}");
     Ok(())
 }
@@ -218,22 +218,31 @@ fn repo() -> Result<PathBuf, String> {
 }
 
 /// Mirror `remote`'s `refs/meta/auth` into the local repository so the signer
-/// helpers see the current set. When the remote has none, clear any stale local
-/// ref so the set reads empty (the open bootstrap window).
-fn sync_auth(remote: &str) -> Result<(), String> {
+/// helpers see the current set, returning the remote's current object id (or
+/// `None` when it has no such ref — the open bootstrap window). When the remote
+/// has none, clear any stale local ref so the set reads empty.
+fn sync_auth(remote: &str) -> Result<Option<String>, String> {
     let listing = git_capture(&["ls-remote", remote, AUTH_REF])?;
-    if listing.trim().is_empty() {
-        let _deleted = git_capture(&["update-ref", "-d", AUTH_REF]);
-        Ok(())
-    } else {
+    let oid = listing.split_whitespace().next().map(str::to_owned);
+    if oid.is_some() {
         let refspec = format!("+{AUTH_REF}:{AUTH_REF}");
-        git_run(&["fetch", "--quiet", remote, &refspec])
+        git_run(&["fetch", "--quiet", remote, &refspec])?;
+    } else {
+        let _deleted = git_capture(&["update-ref", "-d", AUTH_REF]);
     }
+    Ok(oid)
 }
 
 /// Push the local `refs/meta/auth` to `remote`, signed per the client's config.
-fn push_auth(remote: &str) -> Result<(), String> {
-    git_run(&["push", remote, AUTH_REF])
+///
+/// `expected` is the remote tip observed at sync time (`None` when the ref did
+/// not exist). Pushing with `--force-with-lease` pinned to that value, plus
+/// `--force-if-includes`, makes the update a clean compare-and-swap: it is
+/// rejected rather than clobbering a set someone changed since the fetch.
+fn push_auth(remote: &str, expected: Option<&str>) -> Result<(), String> {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let lease = format!("--force-with-lease={AUTH_REF}:{}", expected.unwrap_or(ZERO));
+    git_run(&["push", "--force-if-includes", &lease, remote, AUTH_REF])
 }
 
 /// Resolve the OpenSSH public key to operate on, defaulting to the key behind
