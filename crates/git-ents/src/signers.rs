@@ -137,18 +137,22 @@ fn open_odb(repo: &Path) -> Option<gix_odb::Handle> {
     gix_odb::at(repo.join(git_dir.trim()).join("objects")).ok()
 }
 
-/// Wrap `tree` in a commit, returning its object id. A fixed identity keeps the
-/// write self-contained, independent of any ambient git config.
+/// Wrap `tree` in a commit, returning its object id. The commit parents on the
+/// current [`AUTH_REF`] when present so updates fast-forward and accrue history;
+/// a fixed identity keeps the write self-contained, independent of any ambient
+/// git config.
 fn commit_tree(repo: &Path, tree: &ObjectId) -> Result<String, Error> {
+    let mut args = vec!["commit-tree".to_owned(), tree.to_string()];
+    if let Some(parent) = auth_commit(repo) {
+        args.push("-p".to_owned());
+        args.push(parent);
+    }
+    args.push("-m".to_owned());
+    args.push("Update authorized signers".to_owned());
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args([
-            "commit-tree",
-            &tree.to_string(),
-            "-m",
-            "Update authorized signers",
-        ])
+        .args(&args)
         .env("GIT_AUTHOR_NAME", "git-ents")
         .env("GIT_AUTHOR_EMAIL", "git-ents@localhost")
         .env("GIT_COMMITTER_NAME", "git-ents")
@@ -167,6 +171,28 @@ fn commit_tree(repo: &Path, tree: &ObjectId) -> Result<String, Error> {
         .map_err(|_invalid| Error::Git {
             operation: "commit-tree",
         })
+}
+
+/// Resolve [`AUTH_REF`] to the object id of its commit, or `None` when the ref
+/// is absent.
+fn auth_commit(repo: &Path) -> Option<String> {
+    let spec = format!("{AUTH_REF}^{{commit}}");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "--quiet", &spec])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let hex = String::from_utf8(output.stdout).ok()?;
+    let hex = hex.trim();
+    if hex.is_empty() {
+        None
+    } else {
+        Some(hex.to_owned())
+    }
 }
 
 /// Point [`AUTH_REF`] at `commit`.

@@ -950,6 +950,7 @@ dependencies = [
 name = "git-ents"
 version = "0.0.0"
 dependencies = [
+ "clap",
  "facet",
  "facet-git-tree",
  "gix-odb",

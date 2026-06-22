@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { workspace = true }
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
 gix-odb = { workspace = true }
