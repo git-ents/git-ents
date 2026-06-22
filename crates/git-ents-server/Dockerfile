@@ -22,7 +22,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
 # The sprite CLI runs the checks in a Sprite; it reads SPRITES_TOKEN from the env.
-RUN curl -fsSL https://sprites.dev/install.sh | bash
+# The installer drops the binary in $HOME/.local/bin and never touches PATH, so
+# point it at /usr/local/bin (already on PATH) where the server can spawn it.
+RUN curl -fsSL https://sprites.dev/install.sh \
+    | env SPRITE_INSTALL_PREFERRED_DIRS=/usr/local/bin \
+          SPRITE_INSTALL_DEFAULT_BIN_DIR=/usr/local/bin bash
 COPY --from=builder /app/target/release/git-ents-server /usr/local/bin
 COPY hooks /app/hooks
 RUN chmod +x /app/hooks/pre-receive /app/hooks/post-receive
