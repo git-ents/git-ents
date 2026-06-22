@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Parser, Subcommand};
+use git_ents::checks::{self, CHECKS_REF, Check};
 use git_ents::signers::{self, AUTH_REF, Signer};
 
 #[derive(Parser)]
@@ -27,6 +28,11 @@ enum Top {
     Auth {
         #[command(subcommand)]
         action: Action,
+    },
+    /// Manage the configured checks at `refs/meta/checks`.
+    Checks {
+        #[command(subcommand)]
+        action: ChecksAction,
     },
 }
 
@@ -76,10 +82,39 @@ enum Action {
     },
 }
 
+#[derive(Subcommand)]
+enum ChecksAction {
+    /// List the checks configured on a remote.
+    List {
+        /// Remote to read `refs/meta/checks` from.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+    /// Add (or replace) a check on a remote's set and push the update.
+    Add {
+        /// Name to record the check under (`checks/<name>`).
+        name: String,
+        /// Command the check runs (e.g. `cargo fmt --check`).
+        command: String,
+        /// Remote whose `refs/meta/checks` to update.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+    /// Remove a check from a remote's set and push the update.
+    Remove {
+        /// Name (`checks/<name>`) to drop.
+        name: String,
+        /// Remote whose `refs/meta/checks` to update.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Top::Auth { action } => run_auth(action),
+        Top::Checks { action } => run_checks(action),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -101,6 +136,69 @@ fn run_auth(action: Action) -> Result<(), String> {
         } => remove(&fingerprint, &remote),
         Action::Check { remote, key } => check(&remote, key.as_deref()),
     }
+}
+
+fn run_checks(action: ChecksAction) -> Result<(), String> {
+    match action {
+        ChecksAction::List { remote } => list_checks(&remote),
+        ChecksAction::Add {
+            name,
+            command,
+            remote,
+        } => add_check(&name, &command, &remote),
+        ChecksAction::Remove { name, remote } => remove_check(&name, &remote),
+    }
+}
+
+/// Print each check configured on `remote` as `<name>  <command>`.
+fn list_checks(remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_checks(remote)?;
+    let checks = checks::load(&repo).map_err(|error| error.to_string())?;
+    if checks.is_empty() {
+        println!("no checks configured on {remote}");
+        return Ok(());
+    }
+    for check in &checks {
+        println!("{}  {}", check.name, check.command);
+    }
+    Ok(())
+}
+
+/// Add `name` running `command` to `remote`'s set, replacing any check already
+/// recorded under that name, and push the update.
+fn add_check(name: &str, command: &str, remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    let expected = sync_checks(remote)?;
+    let mut checks = checks::load(&repo).map_err(|error| error.to_string())?;
+    checks.retain(|check| check.name != name);
+    checks.push(Check {
+        name: name.to_owned(),
+        command: command.to_owned(),
+    });
+    checks::store(&repo, &checks).map_err(|error| error.to_string())?;
+    push_checks(remote, expected.as_deref())?;
+    println!("recorded check {name}");
+    Ok(())
+}
+
+/// Drop the check named `name` from `remote` and push the update.
+fn remove_check(name: &str, remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    let expected = sync_checks(remote)?;
+    let before = checks::load(&repo).map_err(|error| error.to_string())?;
+    let count = before.len();
+    let after: Vec<Check> = before
+        .into_iter()
+        .filter(|check| check.name != name)
+        .collect();
+    if after.len() == count {
+        return Err(format!("no check named {name} on {remote}"));
+    }
+    checks::store(&repo, &after).map_err(|error| error.to_string())?;
+    push_checks(remote, expected.as_deref())?;
+    println!("removed {name}");
+    Ok(())
 }
 
 /// Set this machine up to produce the signed pushes the server requires:
@@ -366,6 +464,34 @@ fn push_auth(remote: &str, expected: Option<&str>) -> Result<(), String> {
     const ZERO: &str = "0000000000000000000000000000000000000000";
     let lease = format!("--force-with-lease={AUTH_REF}:{}", expected.unwrap_or(ZERO));
     git_run(&["push", "--force-if-includes", &lease, remote, AUTH_REF])
+}
+
+/// Mirror `remote`'s `refs/meta/checks` into the local repository so the check
+/// helpers see the current set, returning the remote's current object id (or
+/// `None` when it has no such ref). When the remote has none, clear any stale
+/// local ref so the set reads empty.
+fn sync_checks(remote: &str) -> Result<Option<String>, String> {
+    let listing = git_capture(&["ls-remote", remote, CHECKS_REF])?;
+    let oid = listing.split_whitespace().next().map(str::to_owned);
+    if oid.is_some() {
+        let refspec = format!("+{CHECKS_REF}:{CHECKS_REF}");
+        git_run(&["fetch", "--quiet", remote, &refspec])?;
+    } else {
+        let _deleted = git_capture(&["update-ref", "-d", CHECKS_REF]);
+    }
+    Ok(oid)
+}
+
+/// Push the local `refs/meta/checks` to `remote`, signed per the client's
+/// config. As with the signer set, the update is a compare-and-swap against
+/// `expected` so a set someone changed since the fetch is not clobbered.
+fn push_checks(remote: &str, expected: Option<&str>) -> Result<(), String> {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let lease = format!(
+        "--force-with-lease={CHECKS_REF}:{}",
+        expected.unwrap_or(ZERO)
+    );
+    git_run(&["push", "--force-if-includes", &lease, remote, CHECKS_REF])
 }
 
 /// Resolve the OpenSSH public key to operate on, defaulting to the key behind
