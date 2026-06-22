@@ -145,7 +145,7 @@ fn sync_tree(repo: &Path, sprite: &str, new: &str) -> Result<(), String> {
 
     let script = format!("rm -rf {WORKDIR} && mkdir -p {WORKDIR} && tar -x -C {WORKDIR}");
     let mut child = Command::new("sprite")
-        .args(["exec", "-s", sprite, "sh", "-c", &script])
+        .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
@@ -176,6 +176,7 @@ fn run_checks(sprite: &str, checks: &[Check]) {
                 sprite,
                 "--dir",
                 WORKDIR,
+                "--",
                 "sh",
                 "-c",
                 &check.command,
