@@ -71,7 +71,7 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"blob", sub)) => pages::blob_page(repo, &meta, sub).await,
         Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
-        Some((&"checks", &[])) => pages::checks_page(&meta).into_response(),
+        Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
         Some((&"issues", &[])) => pages::issues_page(&meta).into_response(),
         Some((&"settings", &[])) => pages::settings_page(repo, &meta).await.into_response(),
         _ => not_found().into_response(),

@@ -629,12 +629,11 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
-/// The Checks tab: CI in the object-graph model. A run is a signed record in the
-/// git-metadata fanout keyed by `(config_oid, code_oid)`, so identical
-/// config/code pairs dedupe and skip re-execution. The privileged config lives
-/// on `refs/ents/config` and unprivileged drafts on `refs/ents/ci/draft/<name>`.
-/// None of this is wired up yet, so every panel is an empty state.
-pub(super) fn checks_page(meta: &RepoMeta) -> Markup {
+/// The Checks tab. The check set lives on `refs/meta/checks` (managed with
+/// `git ents checks`); each push runs them in a Sprite. The Configuration card
+/// reflects the live set; runs are not yet recorded, so that panel is empty.
+pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
+    let checks = load_checks(repo).await;
     repo_shell(
         meta,
         Tab::Checks,
@@ -642,11 +641,8 @@ pub(super) fn checks_page(meta: &RepoMeta) -> Markup {
         html! {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
-                "CI runs are signed records in the git-metadata fanout, keyed by "
-                code { "(config_oid, code_oid)" }
-                ". Configuration is read from " code { "refs/ents/config" }
-                " and draft pipelines from " code { "refs/ents/ci/draft/*" }
-                ". Runs appear here once the runner records them."
+                "Checks are configured on " code { "refs/meta/checks" }
+                " (" code { "git ents checks list" } ") and run in a Sprite on each push."
             }
             div.checks-grid {
                 div.card {
@@ -654,14 +650,40 @@ pub(super) fn checks_page(meta: &RepoMeta) -> Markup {
                     div.card-row.muted { "No runs recorded yet." }
                 }
                 div.card {
-                    div.card-header { "Configuration" }
-                    div.card-row.muted {
-                        "No signed config on " code { "refs/ents/config" } " yet."
+                    div.card-header {
+                        "Configuration"
+                        @if let Ok(checks) = &checks { span.count { (checks.len()) } }
+                    }
+                    @match &checks {
+                        Err(err) => div.card-row.muted { "Could not read checks: " (err) }
+                        Ok(checks) if checks.is_empty() => {
+                            div.card-row.muted {
+                                "No checks configured on " code { "refs/meta/checks" } "."
+                            }
+                        }
+                        Ok(checks) => {
+                            @for check in checks {
+                                div.card-row.signer-row {
+                                    code.key { (check.name) }
+                                    span.muted { (check.command) }
+                                }
+                            }
+                        }
                     }
                 }
             }
         },
     )
+}
+
+/// Load the configured check set off the async runtime, since `checks::load`
+/// shells out to git and reads the object database synchronously.
+async fn load_checks(repo: &Path) -> Result<Vec<git_ents::checks::Check>, String> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::checks::load(&repo))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 /// The Issues ("Bug reports") tab. There is no issue store yet, so the filters
