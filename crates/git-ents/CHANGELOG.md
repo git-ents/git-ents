@@ -1,0 +1,36 @@
+# Changelog
+
+## 0.1.0 (2026-06-22)
+
+
+### Features
+
+* Add `checks add <name> <command>` recording/replacing a check ([ec40890](https://github.com/git-ents/git-ents/commit/ec408907f55e395672ec548edc0b977e48116313))
+* Add `checks list` reading a remote's set ([ec40890](https://github.com/git-ents/git-ents/commit/ec408907f55e395672ec548edc0b977e48116313))
+* Add `checks remove <name>` dropping a check ([ec40890](https://github.com/git-ents/git-ents/commit/ec408907f55e395672ec548edc0b977e48116313))
+* Add `checks::{record,runs}` storing runs at `refs/checks/<commit>` ([64cda92](https://github.com/git-ents/git-ents/commit/64cda9296472ed243d35335023ad8b17360ab5e8))
+* Add `git ents auth add` and `remove` to update and push the set ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add `git ents auth add` and `remove` to update and push the set ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Add `git ents auth check` to report authorization and client config ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add `git ents auth check` to report authorization and client config ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Add `git ents auth configure` to set up signed-push client config ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Add `git ents auth list` to show a remote's authorized signers ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add `git ents auth list` to show a remote's authorized signers ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Add `git ents auth setup` to configure this machine for signed pushes ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add `git ents checks` porcelain for `refs/meta/checks` ([ec40890](https://github.com/git-ents/git-ents/commit/ec408907f55e395672ec548edc0b977e48116313))
+* Add `git-ents` library crate ([7365e0d](https://github.com/git-ents/git-ents/commit/7365e0df4754d3b8f89ffa8cec8241bb3c8386ad))
+* Add `git-ents` library crate with a doctest ([7365e0d](https://github.com/git-ents/git-ents/commit/7365e0df4754d3b8f89ffa8cec8241bb3c8386ad))
+* Add `signers::allowed_signers` to render a wildcard `allowed_signers` file ([95c43a5](https://github.com/git-ents/git-ents/commit/95c43a5cdf2ff9531200d1cdc524b089afaf60d8))
+* Add `signers::load` to read `signers/<fingerprint>` from `refs/meta/auth` ([95c43a5](https://github.com/git-ents/git-ents/commit/95c43a5cdf2ff9531200d1cdc524b089afaf60d8))
+* Add `signers::store` to write the signer set with facet-git-tree ([60d511f](https://github.com/git-ents/git-ents/commit/60d511f69309d092ce3492ef4bb00dc192bb0257))
+* Add a `git-ents` binary with an `auth` subcommand group ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add a `git-ents` binary with an `auth` subcommand group ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Add the `git ents auth` porcelain for managing push signers ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Add the `git ents auth` porcelain for managing push signers ([f5a4da4](https://github.com/git-ents/git-ents/commit/f5a4da4437e7a941f2e82cc76ff426fda880f360))
+* Push the signer set with --force-with-lease and --force-if-includes ([f45b0d9](https://github.com/git-ents/git-ents/commit/f45b0d91014df147ebaf9ccb4391dea66ad51bb0))
+* Read the authorized-signer set from the refs/meta/auth ref ([95c43a5](https://github.com/git-ents/git-ents/commit/95c43a5cdf2ff9531200d1cdc524b089afaf60d8))
+* Record check runs as refs and show them on the Checks tab ([64cda92](https://github.com/git-ents/git-ents/commit/64cda9296472ed243d35335023ad8b17360ab5e8))
+* Record outcomes from the post-receive runner ([64cda92](https://github.com/git-ents/git-ents/commit/64cda9296472ed243d35335023ad8b17360ab5e8))
+* Render recent runs on the Checks tab ([64cda92](https://github.com/git-ents/git-ents/commit/64cda9296472ed243d35335023ad8b17360ab5e8))
+* Return a `Result` from `signers::load` so callers fail closed ([60d511f](https://github.com/git-ents/git-ents/commit/60d511f69309d092ce3492ef4bb00dc192bb0257))
+* Store configured checks at `refs/meta/checks` ([4a19734](https://github.com/git-ents/git-ents/commit/4a197340f15a7dcf74f115b892cbf43151295a93))
