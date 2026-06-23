@@ -18,18 +18,10 @@ use facet::Facet;
 pub const CHECKS_REF: &str = "refs/meta/checks";
 
 /// The check document stored at [`CHECKS_REF`]: its `checks/` subtree maps each
-/// check name to that check's definition (its command).
+/// check name to the command that runs it.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Checks {
-    checks: BTreeMap<String, CheckDef>,
-}
-
-/// One check's stored definition. A struct (rather than a bare command blob) so
-/// each check can grow per-check settings without a tree-format migration.
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct CheckDef {
-    /// The shell command run for the check.
-    command: String,
+    checks: BTreeMap<String, String>,
 }
 
 /// One configured check recorded in [`CHECKS_REF`].
@@ -62,9 +54,9 @@ pub fn load(repo: &Path) -> Result<Vec<Check>, Error> {
     Ok(document
         .checks
         .into_iter()
-        .map(|(name, def)| Check {
+        .map(|(name, command)| Check {
             name,
-            command: def.command.trim_end().to_owned(),
+            command: command.trim_end().to_owned(),
         })
         .collect())
 }
@@ -75,14 +67,7 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), Error> {
     let document = Checks {
         checks: checks
             .iter()
-            .map(|check| {
-                (
-                    check.name.clone(),
-                    CheckDef {
-                        command: check.command.clone(),
-                    },
-                )
-            })
+            .map(|check| (check.name.clone(), check.command.clone()))
             .collect(),
     };
     git_store::Store::open(repo)?.store(CHECKS_REF, &document, "Update checks")?;
