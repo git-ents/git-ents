@@ -75,6 +75,9 @@ pub async fn git(
         .env("PATH_INFO", &path_info)
         .env("QUERY_STRING", &query_string)
         .env("REQUEST_METHOD", method.as_str())
+        // Hand the `post-receive` hook the queue it drops jobs into; it inherits
+        // this through the receive-pack process tree git spawns.
+        .env(crate::checks::QUEUE_ENV, &state.checks_queue)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Surface backend diagnostics in the server's own logs rather than
@@ -510,6 +513,7 @@ mod tests {
             init_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             cert_nonce_seed: cert_nonce_seed.map(str::to_owned),
             hooks_dir: hooks_dir.map(PathBuf::from),
+            checks_queue: PathBuf::from("/data/checks-queue"),
         }
     }
 

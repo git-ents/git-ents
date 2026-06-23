@@ -48,6 +48,15 @@ struct Args {
     #[arg(long, env = "GIT_ENTS_HOOKS_DIR")]
     hooks_dir: Option<PathBuf>,
 
+    /// Directory where the `post-receive` hook queues pushes for the check
+    /// worker to run asynchronously.
+    #[arg(
+        long,
+        env = "GIT_ENTS_CHECKS_QUEUE",
+        default_value = "/data/checks-queue"
+    )]
+    checks_queue: PathBuf,
+
     /// Stop after handling this many requests.
     #[arg(long)]
     max_requests: Option<usize>,
@@ -76,6 +85,9 @@ pub(crate) struct AppState {
     /// When set, injected as `core.hooksPath` so every served repo runs the
     /// bundled `pre-receive` verifier.
     pub(crate) hooks_dir: Option<PathBuf>,
+    /// Directory the `post-receive` hook queues pushes into and the check
+    /// worker drains; passed down to the hook via [`checks::QUEUE_ENV`].
+    pub(crate) checks_queue: PathBuf,
 }
 
 fn main() -> ExitCode {
@@ -126,7 +138,11 @@ async fn serve(args: Args) -> ExitCode {
         init_lock: Arc::new(Mutex::new(())),
         cert_nonce_seed: args.cert_nonce_seed,
         hooks_dir: args.hooks_dir,
+        checks_queue: args.checks_queue,
     };
+
+    // Drain queued pushes and run their checks for the life of the server.
+    tokio::spawn(checks::worker(state.checks_queue.clone()));
 
     // The git smart-HTTP protocol streams whole packfiles through the request
     // body, so the default 2 MiB cap would reject any non-trivial push.

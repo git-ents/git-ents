@@ -19,17 +19,26 @@ use facet_git_tree::ObjectId;
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";
 
-/// The check document stored at [`CHECKS_REF`]: `checks/<name>` maps to the
-/// command run for that check.
+/// The check document stored at [`CHECKS_REF`]: `checks/<name>` maps to that
+/// check's definition (its command).
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Checks {
-    checks: BTreeMap<String, String>,
+    checks: BTreeMap<String, CheckDef>,
+}
+
+/// One check's stored definition under `checks/<name>` in [`CHECKS_REF`]. A
+/// struct (rather than a bare command blob) so each check can grow per-check
+/// settings without a tree-format migration.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+struct CheckDef {
+    /// The shell command run for the check.
+    command: String,
 }
 
 /// One configured check recorded under `checks/` in [`CHECKS_REF`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Check {
-    /// The `checks/<name>` the command is stored under — the check's name.
+    /// The `checks/<name>` the definition is stored under — the check's name.
     pub name: String,
     /// The shell command run for the check (e.g. `cargo fmt --check`).
     pub command: String,
@@ -66,9 +75,9 @@ pub fn load(repo: &Path) -> Result<Vec<Check>, Error> {
     Ok(checks
         .checks
         .into_iter()
-        .map(|(name, command)| Check {
+        .map(|(name, def)| Check {
             name,
-            command: command.trim_end().to_owned(),
+            command: def.command.trim_end().to_owned(),
         })
         .collect())
 }
@@ -79,7 +88,14 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), Error> {
     let document = Checks {
         checks: checks
             .iter()
-            .map(|check| (check.name.clone(), check.command.clone()))
+            .map(|check| {
+                (
+                    check.name.clone(),
+                    CheckDef {
+                        command: check.command.clone(),
+                    },
+                )
+            })
             .collect(),
     };
     let odb = open_odb(repo).ok_or(Error::Odb)?;
@@ -220,7 +236,8 @@ struct RunDoc {
 pub struct RunOutcome {
     /// The check's name (its `checks/<name>` in [`CHECKS_REF`]).
     pub name: String,
-    /// The outcome recorded for it — `pass`, `fail`, or `error`.
+    /// The outcome recorded for it as a run progresses — `queued`, `running`,
+    /// then `pass`, `fail`, or `error`.
     pub outcome: String,
 }
 
@@ -261,6 +278,50 @@ pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), 
     let parent = ref_commit(repo, &refname);
     let new_commit = commit_run(repo, &tree, parent.as_deref())?;
     update_named_ref(repo, &refname, &new_commit)
+}
+
+/// Advance the latest run recorded for `commit` to `outcomes`, in place. Unlike
+/// [`record`], which appends a new run, this replaces the run ref's tip commit
+/// (re-parented on the prior run) so a single run's status can progress —
+/// `queued` → `running` → results — without appending a commit per transition.
+///
+/// When no run has been recorded yet the update starts one, so a worker that
+/// advances a run is self-healing even if the `queued` record never landed.
+pub fn update_run(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), Error> {
+    let doc = RunDoc {
+        results: outcomes
+            .iter()
+            .map(|outcome| (outcome.name.clone(), outcome.outcome.clone()))
+            .collect(),
+    };
+    let odb = open_odb(repo).ok_or(Error::Odb)?;
+    let tree = facet_git_tree::serialize_into(&doc, &odb)?;
+    let refname = format!("{RUNS_NS}/{commit}");
+    let parent = ref_parent(repo, &refname);
+    let new_commit = commit_run(repo, &tree, parent.as_deref())?;
+    update_named_ref(repo, &refname, &new_commit)
+}
+
+/// The first parent of `refname`'s tip commit, or `None` when the tip is a root
+/// commit or the ref is absent.
+fn ref_parent(repo: &Path, refname: &str) -> Option<String> {
+    let spec = format!("{refname}^");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "--quiet", &spec])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let hex = String::from_utf8(output.stdout).ok()?;
+    let hex = hex.trim();
+    if hex.is_empty() {
+        None
+    } else {
+        Some(hex.to_owned())
+    }
 }
 
 /// List the recorded runs per commit, newest commit first. Each commit's runs

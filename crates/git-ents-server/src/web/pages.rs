@@ -630,8 +630,9 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 }
 
 /// The Checks tab. The check set lives on `refs/meta/checks` (managed with
-/// `git ents checks`); each push runs them in a Sprite. The Configuration card
-/// reflects the live set; runs are not yet recorded, so that panel is empty.
+/// `git ents checks`); each push queues them and a worker runs them in a Sprite.
+/// The Configuration card reflects the live set; Recent runs reflects the run
+/// log on `refs/meta/runs`, including in-flight `queued`/`running` runs.
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let checks = load_checks(repo).await;
     let runs = load_runs(repo).await;
@@ -643,8 +644,8 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
                 "Checks are configured on " code { "refs/meta/checks" }
-                " (" code { "git ents checks list" } ") and run in a Sprite on each push; "
-                "each run is recorded under " code { "refs/checks/<commit>" } "."
+                " (" code { "git ents checks list" } ") and run in a Sprite after each push; "
+                "each run is recorded under " code { "refs/meta/runs/<commit>" } "."
             }
             div.checks-grid {
                 div.card {
