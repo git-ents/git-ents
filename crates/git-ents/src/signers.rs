@@ -1,32 +1,30 @@
 //! The authorized signer set, sourced from the `refs/meta/auth` ref.
 //!
 //! Push authentication trusts exactly one place: the `refs/meta/auth` ref. Its
-//! tree is an [`Auth`] document whose `signers/` subtree maps each fingerprint
-//! to its OpenSSH public key. The document is read and written with
-//! [`facet_git_tree`], so the trust list is a typed value that lives in git —
-//! versioned, auditable, and itself pushable.
+//! tree is an [`Auth`] document mapping each fingerprint to its OpenSSH public
+//! key. The document is read and written through [`git_store`], so the trust
+//! list is a typed value that lives in git — versioned, auditable, and itself
+//! pushable.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 
 use facet::Facet;
-use facet_git_tree::ObjectId;
 
 /// The ref whose tree holds the authorized signer set.
 pub const AUTH_REF: &str = "refs/meta/auth";
 
-/// The authorization document stored at [`AUTH_REF`]: `signers/<fingerprint>`
-/// maps to the OpenSSH public key held there.
+/// The authorization document stored at [`AUTH_REF`]: its `signers/` subtree
+/// maps each fingerprint to the OpenSSH public key held there.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Auth {
     signers: BTreeMap<String, String>,
 }
 
-/// One authorized signer recorded under `signers/` in [`AUTH_REF`].
+/// One authorized signer recorded in [`AUTH_REF`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signer {
-    /// The `signers/<name>` the key is stored under — its fingerprint.
+    /// The key it is stored under — its fingerprint.
     pub fingerprint: String,
     /// The OpenSSH public key the blob holds (`<type> <base64> [comment]`).
     pub key: String,
@@ -35,18 +33,9 @@ pub struct Signer {
 /// A failure reading or writing the signer set.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The repository's object database could not be opened.
-    #[error("could not open the repository object database")]
-    Odb,
-    /// The signer set could not be (de)serialized from its git tree.
-    #[error("could not (de)serialize the signer set: {0}")]
-    Facet(#[from] facet_git_tree::Error),
-    /// A git invocation needed to read or update the ref failed.
-    #[error("git {operation} failed")]
-    Git {
-        /// The git operation that failed.
-        operation: &'static str,
-    },
+    /// The signer set could not be read from or written to its ref.
+    #[error(transparent)]
+    Store(#[from] git_store::Error),
 }
 
 /// Load the authorized signers recorded at [`AUTH_REF`] in `repo`.
@@ -55,11 +44,10 @@ pub enum Error {
 /// not been pushed yet. A present but unreadable ref is an error so callers can
 /// fail closed rather than mistake corruption for "no signers".
 pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
-    let Some(tree) = auth_tree(repo) else {
+    let store = git_store::Store::open(repo)?;
+    let Some(auth) = store.load::<Auth>(AUTH_REF)? else {
         return Ok(Vec::new());
     };
-    let odb = open_odb(repo).ok_or(Error::Odb)?;
-    let auth: Auth = facet_git_tree::deserialize(&tree, &odb)?;
     Ok(auth
         .signers
         .into_iter()
@@ -78,10 +66,8 @@ pub fn store(repo: &Path, signers: &[Signer]) -> Result<(), Error> {
             .map(|signer| (signer.fingerprint.clone(), signer.key.clone()))
             .collect(),
     };
-    let odb = open_odb(repo).ok_or(Error::Odb)?;
-    let tree = facet_git_tree::serialize_into(&auth, &odb)?;
-    let commit = commit_tree(repo, &tree)?;
-    update_ref(repo, &commit)
+    git_store::Store::open(repo)?.store(AUTH_REF, &auth, "Update authorized signers")?;
+    Ok(())
 }
 
 /// Render `signers` as an OpenSSH `allowed_signers` file that authorizes any
@@ -99,132 +85,16 @@ pub fn allowed_signers(signers: &[Signer]) -> String {
         .collect()
 }
 
-/// Resolve [`AUTH_REF`] to the object id of its tree, or `None` when the ref is
-/// absent.
-fn auth_tree(repo: &Path) -> Option<ObjectId> {
-    let spec = format!("{AUTH_REF}^{{tree}}");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--verify", "--quiet", &spec])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let hex = String::from_utf8(output.stdout).ok()?;
-    ObjectId::from_hex(hex.trim().as_bytes()).ok()
-}
-
-/// Open the repository's durable object database as a `gix` `Find`/`Write`
-/// backend.
-///
-/// Resolves the *common* git directory rather than `--git-path objects`: inside
-/// a `pre-receive` hook git points the latter at a quarantine holding only the
-/// incoming pack, while the current signer set lives in the durable store — and
-/// authorization is against the pre-push set, never the keys being pushed.
-fn open_odb(repo: &Path) -> Option<gix_odb::Handle> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--git-common-dir"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let git_dir = String::from_utf8(output.stdout).ok()?;
-    gix_odb::at(repo.join(git_dir.trim()).join("objects")).ok()
-}
-
-/// Wrap `tree` in a commit, returning its object id. The commit parents on the
-/// current [`AUTH_REF`] when present so updates fast-forward and accrue history;
-/// a fixed identity keeps the write self-contained, independent of any ambient
-/// git config.
-fn commit_tree(repo: &Path, tree: &ObjectId) -> Result<String, Error> {
-    let mut args = vec!["commit-tree".to_owned(), tree.to_string()];
-    if let Some(parent) = auth_commit(repo) {
-        args.push("-p".to_owned());
-        args.push(parent);
-    }
-    args.push("-m".to_owned());
-    args.push("Update authorized signers".to_owned());
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(&args)
-        .env("GIT_AUTHOR_NAME", "git-ents")
-        .env("GIT_AUTHOR_EMAIL", "git-ents@localhost")
-        .env("GIT_COMMITTER_NAME", "git-ents")
-        .env("GIT_COMMITTER_EMAIL", "git-ents@localhost")
-        .output()
-        .map_err(|_source| Error::Git {
-            operation: "commit-tree",
-        })?;
-    if !output.status.success() {
-        return Err(Error::Git {
-            operation: "commit-tree",
-        });
-    }
-    String::from_utf8(output.stdout)
-        .map(|stdout| stdout.trim().to_owned())
-        .map_err(|_invalid| Error::Git {
-            operation: "commit-tree",
-        })
-}
-
-/// Resolve [`AUTH_REF`] to the object id of its commit, or `None` when the ref
-/// is absent.
-fn auth_commit(repo: &Path) -> Option<String> {
-    let spec = format!("{AUTH_REF}^{{commit}}");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--verify", "--quiet", &spec])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let hex = String::from_utf8(output.stdout).ok()?;
-    let hex = hex.trim();
-    if hex.is_empty() {
-        None
-    } else {
-        Some(hex.to_owned())
-    }
-}
-
-/// Point [`AUTH_REF`] at `commit`.
-fn update_ref(repo: &Path, commit: &str) -> Result<(), Error> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["update-ref", AUTH_REF, commit])
-        .status()
-        .map_err(|_source| Error::Git {
-            operation: "update-ref",
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::Git {
-            operation: "update-ref",
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
         clippy::unwrap_used,
-        clippy::panic,
-        clippy::arithmetic_side_effects,
         clippy::let_underscore_must_use,
         reason = "unit test"
     )]
 
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;

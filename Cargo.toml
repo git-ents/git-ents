@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/git-ents", "crates/git-ents-server"]
+members = ["crates/git-ents", "crates/git-ents-server", "crates/git-store"]
 
 [workspace.package]
 edition = "2024"
@@ -37,7 +37,8 @@ clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
-gix = { version = "0.83", features = ["no-default-features"] }
+git-store = { path = "crates/git-store" }
+gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-object = "0.61"
 gix-odb = "0.81"
