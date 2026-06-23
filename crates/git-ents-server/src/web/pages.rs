@@ -20,6 +20,7 @@ use super::git::{
     releases, root_tree,
 };
 use super::icons::*;
+use super::render::Render;
 use super::{RepoMeta, Tab, not_found, repo_shell};
 
 /// A single repository's overview: the rendered README beside an aside of
@@ -658,7 +659,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                                 @for run in &commit.runs {
                                     div.card-row.signer-row {
                                         code.key { (commit.commit.get(..8).unwrap_or(&commit.commit)) }
-                                        span.muted { (run_summary(run)) }
+                                        (run.render())
                                     }
                                 }
                             }
@@ -679,10 +680,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                         }
                         Ok(checks) => {
                             @for check in checks {
-                                div.card-row.signer-row {
-                                    code.key { (check.name) }
-                                    span.muted { (check.command) }
-                                }
+                                (check.render())
                             }
                         }
                     }
@@ -709,15 +707,6 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, Str
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
-}
-
-/// A one-line summary of a run's outcomes, e.g. `fmt pass · test fail`.
-fn run_summary(run: &git_ents::checks::Run) -> String {
-    run.results
-        .iter()
-        .map(|result| format!("{} {}", result.name, result.outcome))
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 /// The Issues ("Bug reports") tab. There is no issue store yet, so the filters
@@ -813,10 +802,7 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                         }
                         Ok(signers) => {
                             @for signer in signers {
-                                div.card-row.signer-row {
-                                    code.key { (signer.fingerprint) }
-                                    span.muted { (signer_label(&signer.key)) }
-                                }
+                                (signer.render())
                             }
                         }
                     }
@@ -858,19 +844,6 @@ async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Signer>, Str
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
-}
-
-/// A short label for a signer's key: its type and trailing comment, dropping the
-/// long base64 body that would not fit on the row.
-fn signer_label(key: &str) -> String {
-    let mut parts = key.split_whitespace();
-    let kind = parts.next().unwrap_or_default();
-    let comment = parts.nth(1).unwrap_or_default();
-    if comment.is_empty() {
-        kind.to_owned()
-    } else {
-        format!("{kind} · {comment}")
-    }
 }
 
 /// A Features row with a static toggle reflecting `on`.

@@ -1039,6 +1039,7 @@ dependencies = [
  "axum",
  "clap",
  "clap_mangen",
+ "facet",
  "git-ents",
  "gix-actor",
  "gix-date",

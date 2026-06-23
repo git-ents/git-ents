@@ -33,7 +33,7 @@ struct CheckDef {
 }
 
 /// One configured check recorded in [`CHECKS_REF`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Check {
     /// The name it is stored under.
     pub name: String,
@@ -104,7 +104,7 @@ struct RunDoc {
 }
 
 /// One check's outcome within a [`Run`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct RunOutcome {
     /// The check's name (its `checks/<name>` in [`CHECKS_REF`]).
     pub name: String,
@@ -114,7 +114,7 @@ pub struct RunOutcome {
 }
 
 /// One recorded execution of the check set against a commit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Run {
     /// When the run was recorded, as seconds since the Unix epoch — the run
     /// commit's committer date.

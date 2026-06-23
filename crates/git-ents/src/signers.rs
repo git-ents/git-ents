@@ -22,7 +22,7 @@ struct Auth {
 }
 
 /// One authorized signer recorded in [`AUTH_REF`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Signer {
     /// The key it is stored under — its fingerprint.
     pub fingerprint: String,

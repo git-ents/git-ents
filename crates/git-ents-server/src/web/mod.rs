@@ -4,13 +4,15 @@
 //! smart-HTTP gateway in [`crate::http`] delegates plain browser GETs here.
 //!
 //! The module is split by concern: [`assets`] bundles the CSS/JS, [`icons`]
-//! holds the inline SVGs, [`git`] is the data layer over `git`, and [`pages`]
-//! renders each tab. This file owns routing and the shared page shell.
+//! holds the inline SVGs, [`git`] is the data layer over `git`, [`render`]
+//! turns reflected meta-ref values into HTML, and [`pages`] renders each tab.
+//! This file owns routing and the shared page shell.
 
 mod assets;
 mod git;
 mod icons;
 mod pages;
+mod render;
 
 use std::path::{Path, PathBuf};
 
