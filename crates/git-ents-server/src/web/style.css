@@ -220,7 +220,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 
 .blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
 .blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
-.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1rem; padding-right: 1rem; min-width: 2.5rem; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+.blob pre.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1ch; padding-right: 1ch; user-select: none; -webkit-user-select: none; }
 .blob-code { overflow-x: auto; min-width: 0; }
 .blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
