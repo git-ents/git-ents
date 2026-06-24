@@ -1,0 +1,83 @@
+//! Shared test helpers for the meta-ref modules: a throwaway git repository and
+//! a builder that lays an on-disk `refs/meta/*` document out with raw git
+//! plumbing.
+//!
+//! Building the tree directly — rather than through [`git_store::Store`] — pins
+//! the *on-disk* layout each document type promises: a `<subtree>/<key>` blob
+//! per entry. A load test against a fixture written this way fails the moment an
+//! incompatible change to a document's [`facet::Facet`] shape stops reading data
+//! already in the wild, the failure mode that broke every push once before.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::let_underscore_must_use,
+    reason = "test support"
+)]
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A freshly initialized, uniquely named git repository under the temp dir.
+#[must_use]
+pub(crate) fn unique_repo(label: &str) -> PathBuf {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("git-ents-{label}-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["init", "-q"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    dir
+}
+
+/// Lay a document out at `refname` as the real on-disk format: one
+/// `<subtree>/<key>` blob per pair, committed and pointed to by the ref. Used to
+/// assert that loaders still read the format independent of the writer.
+pub(crate) fn write_meta_doc(repo: &Path, refname: &str, subtree: &str, pairs: &[(&str, &str)]) {
+    let mut entries = String::new();
+    for (key, value) in pairs {
+        let blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
+        entries.push_str(&format!("100644 blob {blob}\t{key}\n"));
+    }
+    let sub = git_with_stdin(repo, &["mktree"], &entries);
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {sub}\t{subtree}\n"),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Run git in `repo` with `input` on stdin, returning its trimmed stdout.
+fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}

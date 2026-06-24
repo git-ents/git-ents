@@ -7,6 +7,16 @@
 //! timestamp, so nothing about versioning has to be modeled in the tree
 //! itself. This is the single home for the plumbing that the signer set, the
 //! check set, and the run log all share.
+//!
+//! # Format stability
+//!
+//! A document's [`Facet`] shape *is* its on-disk format: the tree git holds is
+//! derived from it, so an incompatible change (a renamed field, a changed
+//! field type) silently stops reading data already on a ref and only surfaces
+//! at load time. The policy is therefore to never change a meta-ref document
+//! type incompatibly; each type carries a load test against a hand-built
+//! fixture in the real layout to catch a regression at compile-and-test time
+//! rather than in production.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;

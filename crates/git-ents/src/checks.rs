@@ -211,25 +211,11 @@ mod tests {
         reason = "unit test"
     )]
 
-    use std::path::PathBuf;
-    use std::process::Command;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
+    use crate::testutil::{unique_repo as new_repo, write_meta_doc};
 
-    fn unique_repo() -> PathBuf {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("git-ents-checks-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        dir
+    fn unique_repo() -> std::path::PathBuf {
+        new_repo("checks")
     }
 
     fn check(name: &str, command: &str) -> Check {
@@ -270,6 +256,53 @@ mod tests {
     fn empty_when_the_checks_ref_is_absent() {
         let repo = unique_repo();
         assert!(load(&repo).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn loads_the_on_disk_checks_format() {
+        // A fixture written as the real `checks/<name>` blob layout must keep
+        // loading, guarding the Checks document's shape against an incompatible
+        // change to data already on a ref.
+        let repo = unique_repo();
+        write_meta_doc(
+            &repo,
+            CHECKS_REF,
+            "checks",
+            &[("fmt", "cargo fmt --check"), ("test", "cargo nextest run")],
+        );
+        let mut loaded = load(&repo).unwrap();
+        loaded.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(
+            loaded,
+            vec![
+                check("fmt", "cargo fmt --check"),
+                check("test", "cargo nextest run")
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn loads_the_on_disk_runs_format() {
+        // A fixture written as the real `results/<name>` blob layout on a run ref
+        // must keep loading, guarding the RunDoc document's shape.
+        let repo = unique_repo();
+        let commit = "0123456789012345678901234567890123456789";
+        write_meta_doc(
+            &repo,
+            &format!("{RUNS_NS}/{commit}"),
+            "results",
+            &[("fmt", "pass"), ("test", "fail")],
+        );
+        let commits = runs(&repo).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].commit, commit);
+        assert_eq!(commits[0].runs.len(), 1);
+        assert_eq!(
+            commits[0].runs[0].results,
+            vec![outcome("fmt", "pass"), outcome("test", "fail")]
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 

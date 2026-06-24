@@ -2,6 +2,8 @@
 
 pub mod checks;
 pub mod signers;
+#[cfg(test)]
+mod testutil;
 
 /// The all-zero object id git uses for a created or deleted ref in a push
 /// (`<old> <new> <ref>` lines): a zero `<old>` is a create, a zero `<new>` a

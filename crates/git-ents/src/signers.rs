@@ -101,30 +101,16 @@ mod tests {
         reason = "unit test"
     )]
 
-    use std::path::PathBuf;
-    use std::process::Command;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
+    use crate::testutil::{unique_repo as new_repo, write_meta_doc};
 
     const KEY_A: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA alice";
     const KEY_B: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbB bob";
 
-    fn unique_repo() -> PathBuf {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("git-ents-signers-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        dir
+    fn unique_repo() -> std::path::PathBuf {
+        new_repo("signers")
     }
 
     fn signer(fingerprint: &str, key: &str) -> Signer {
@@ -159,6 +145,27 @@ mod tests {
     fn empty_when_the_auth_ref_is_absent() {
         let repo = unique_repo();
         assert!(load(&repo).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn loads_the_on_disk_signers_format() {
+        // A fixture written as the real `signers/<fingerprint>` blob layout must
+        // keep loading; this fails if the Auth document's shape changes
+        // incompatibly with data already on a ref.
+        let repo = unique_repo();
+        write_meta_doc(
+            &repo,
+            AUTH_REF,
+            "signers",
+            &[("aa:bb:cc", KEY_A), ("dd:ee:ff", KEY_B)],
+        );
+        let mut loaded = load(&repo).unwrap();
+        loaded.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+        assert_eq!(
+            loaded,
+            vec![signer("aa:bb:cc", KEY_A), signer("dd:ee:ff", KEY_B)]
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
