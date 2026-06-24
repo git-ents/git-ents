@@ -1,6 +1,7 @@
 //! Git Ents — helpful guardians of your git trees.
 
 pub mod checks;
+pub mod config;
 pub mod signers;
 #[cfg(test)]
 mod testutil;
