@@ -21,13 +21,17 @@
 //!
 //! [Sprite]: https://sprites.dev
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use git_ents::checks::{self, Check, RunOutcome};
+use tokio::sync::Mutex;
 
 /// Where the pushed tree is unpacked inside the Sprite.
 const WORKDIR: &str = "/work";
@@ -105,37 +109,74 @@ fn statuses(checks: &[Check], status: &str) -> Vec<RunOutcome> {
 /// Run the worker that drains the queue directory, running and recording the
 /// checks for each queued push. Runs for the life of the server; the blocking
 /// Sprite work is offloaded so it never stalls the async runtime.
+///
+/// Jobs are processed per repository: each tick, every repository with pending
+/// jobs that is not already being worked gets its own blocking task that drains
+/// its jobs in order. Because a check can run up to [`CHECK_TIMEOUT`], serving
+/// all repositories from one queue scan would let a single slow repository stall
+/// every other repository's checks; isolating them by repository keeps a slow
+/// repository's backlog from blocking the rest. Jobs for *one* repository stay
+/// serialized so concurrent runs never collide in its single Sprite.
 pub async fn worker(queue: PathBuf) {
     if let Err(e) = std::fs::create_dir_all(&queue) {
         eprintln!("checks: could not create queue directory {queue:?}: {e}");
         return;
     }
+    let inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut tick = tokio::time::interval(POLL);
     loop {
         tick.tick().await;
-        let queue = queue.clone();
-        let _drained = tokio::task::spawn_blocking(move || drain(&queue)).await;
+        let mut guard = inflight.lock().await;
+        for (repo, jobs) in pending_jobs(&queue) {
+            // Skip a repository already draining; its task will pick up any jobs
+            // that arrived since on its next scan.
+            if !guard.insert(repo.clone()) {
+                continue;
+            }
+            let inflight = Arc::clone(&inflight);
+            let handle = tokio::task::spawn_blocking(move || drain_repo(&jobs));
+            tokio::spawn(async move {
+                let _done = handle.await;
+                inflight.lock().await.remove(&repo);
+            });
+        }
     }
 }
 
-/// Process every job currently in the queue directory once, deleting each job
-/// file after it is handled (whether it ran cleanly, failed, or was malformed) —
-/// a poison job is dropped rather than retried forever.
-fn drain(queue: &Path) {
+/// The pending jobs in the queue directory grouped by repository, so each
+/// repository can be drained independently. A malformed job file is dropped here
+/// rather than grouped — a poison job is never retried.
+fn pending_jobs(queue: &Path) -> HashMap<PathBuf, Vec<(PathBuf, Job)>> {
+    let mut groups: HashMap<PathBuf, Vec<(PathBuf, Job)>> = HashMap::new();
     let Ok(entries) = std::fs::read_dir(queue) else {
-        return;
+        return groups;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|ext| ext != "job") {
             continue;
         }
-        if let Some(job) = read_job(&path)
-            && let Err(e) = process_job(&job)
-        {
+        match read_job(&path) {
+            Some(job) => groups
+                .entry(job.repo.clone())
+                .or_default()
+                .push((path, job)),
+            None => {
+                let _removed = std::fs::remove_file(&path);
+            }
+        }
+    }
+    groups
+}
+
+/// Drain one repository's queued jobs in order, deleting each job file after it
+/// is handled (whether it ran cleanly or failed) so it is never retried.
+fn drain_repo(jobs: &[(PathBuf, Job)]) {
+    for (path, job) in jobs {
+        if let Err(e) = process_job(job) {
             eprintln!("checks: {e}");
         }
-        let _removed = std::fs::remove_file(&path);
+        let _removed = std::fs::remove_file(path);
     }
 }
 
@@ -447,5 +488,48 @@ fn wait_bounded(child: std::process::Child, timeout: Duration) -> Option<std::pr
             let _killed = Command::new("kill").args(["-9", &pid.to_string()]).status();
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "unit test")]
+
+    use super::*;
+
+    #[test]
+    fn parse_updates_keeps_content_branches_only() {
+        let new = "1111111111111111111111111111111111111111";
+        let input = format!(
+            "{zero} {new} refs/heads/main\n\
+             {new} {zero} refs/heads/old\n\
+             {new} {new} refs/meta/checks\n\
+             {new} {new} refs/heads/feature\n",
+            zero = git_ents::ZERO_OID,
+        );
+        let updates = parse_updates(&input);
+        let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
+        assert_eq!(refs, vec!["refs/heads/main", "refs/heads/feature"]);
+    }
+
+    #[test]
+    fn pending_jobs_groups_by_repo_and_drops_malformed() {
+        let queue = tempfile::tempdir().unwrap();
+        let write = |name: &str, body: &str| {
+            std::fs::write(queue.path().join(name), body).unwrap();
+        };
+        write("a.job", "/repos/one\naaa\nrefs/heads/main\n");
+        write("b.job", "/repos/one\nbbb\nrefs/heads/dev\n");
+        write("c.job", "/repos/two\nccc\nrefs/heads/main\n");
+        write("d.job", "garbage\n");
+        write("ignored.tmp", "/repos/one\nddd\nrefs/heads/main\n");
+
+        let groups = pending_jobs(queue.path());
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[&PathBuf::from("/repos/one")].len(), 2);
+        assert_eq!(groups[&PathBuf::from("/repos/two")].len(), 1);
+        // The malformed job is dropped from the queue, the .tmp left untouched.
+        assert!(!queue.path().join("d.job").exists());
+        assert!(queue.path().join("ignored.tmp").exists());
     }
 }
