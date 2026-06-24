@@ -127,40 +127,148 @@ fn main() -> ExitCode {
 fn run_auth(action: Action) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
-        Action::List { remote } => list(&remote),
+        Action::List { remote } => list::<Signers>(&remote),
         Action::Add { remote, key } => add(&remote, key.as_deref()),
         Action::Remove {
             fingerprint,
             remote,
-        } => remove(&fingerprint, &remote),
+        } => remove::<Signers>(&fingerprint, &remote),
         Action::Check { remote, key } => check(&remote, key.as_deref()),
     }
 }
 
 fn run_checks(action: ChecksAction) -> Result<(), String> {
     match action {
-        ChecksAction::List { remote } => list_checks(&remote),
+        ChecksAction::List { remote } => list::<Checks>(&remote),
         ChecksAction::Add {
             name,
             command,
             remote,
         } => add_check(&name, &command, &remote),
-        ChecksAction::Remove { name, remote } => remove_check(&name, &remote),
+        ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
     }
 }
 
-/// Print each check configured on `remote` as `<name>  <command>`.
-fn list_checks(remote: &str) -> Result<(), String> {
+/// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
+/// and pushed to a remote, holding `(key, value)` entries the CLI lists and
+/// removes from. The two sets — authorized signers and configured checks —
+/// share that flow and differ only in how a row reads and what the messages
+/// call an entry; the type-specific [`load`](Set::load)/[`store`](Set::store)
+/// keep each on its own typed module.
+trait Set {
+    /// The ref the set lives on.
+    const REF: &'static str;
+    /// The singular noun used in messages ("signer", "check").
+    const NOUN: &'static str;
+
+    /// The set's entries as `(key, value)` pairs.
+    fn load(repo: &Path) -> Result<Vec<(String, String)>, String>;
+    /// Replace the set with `entries`.
+    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String>;
+    /// The line printed when the set is empty on `remote`.
+    fn empty_listing(remote: &str) -> String;
+    /// The value column for a row, given its key and stored value.
+    fn row_value(key: &str, value: &str) -> String;
+}
+
+/// The authorized signer set at `refs/meta/auth`.
+struct Signers;
+
+impl Set for Signers {
+    const REF: &'static str = AUTH_REF;
+    const NOUN: &'static str = "signer";
+
+    fn load(repo: &Path) -> Result<Vec<(String, String)>, String> {
+        Ok(signers::load(repo)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|signer| (signer.fingerprint, signer.key))
+            .collect())
+    }
+
+    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String> {
+        let signers: Vec<Signer> = entries
+            .iter()
+            .map(|(fingerprint, key)| Signer {
+                fingerprint: fingerprint.clone(),
+                key: key.clone(),
+            })
+            .collect();
+        signers::store(repo, &signers).map_err(|error| error.to_string())
+    }
+
+    fn empty_listing(remote: &str) -> String {
+        format!("no authorized signers on {remote} (open bootstrap window)")
+    }
+
+    fn row_value(_key: &str, value: &str) -> String {
+        key_comment(value)
+    }
+}
+
+/// The configured check set at `refs/meta/checks`.
+struct Checks;
+
+impl Set for Checks {
+    const REF: &'static str = CHECKS_REF;
+    const NOUN: &'static str = "check";
+
+    fn load(repo: &Path) -> Result<Vec<(String, String)>, String> {
+        Ok(checks::load(repo)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|check| (check.name, check.command))
+            .collect())
+    }
+
+    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String> {
+        let checks: Vec<Check> = entries
+            .iter()
+            .map(|(name, command)| Check {
+                name: name.clone(),
+                command: command.clone(),
+            })
+            .collect();
+        checks::store(repo, &checks).map_err(|error| error.to_string())
+    }
+
+    fn empty_listing(remote: &str) -> String {
+        format!("no checks configured on {remote}")
+    }
+
+    fn row_value(_key: &str, value: &str) -> String {
+        value.to_owned()
+    }
+}
+
+/// Print each entry of the set `S` on `remote` as `<key>  <value>`.
+fn list<S: Set>(remote: &str) -> Result<(), String> {
     let repo = repo()?;
-    sync_checks(remote)?;
-    let checks = checks::load(&repo).map_err(|error| error.to_string())?;
-    if checks.is_empty() {
-        println!("no checks configured on {remote}");
+    sync(remote, S::REF)?;
+    let entries = S::load(&repo)?;
+    if entries.is_empty() {
+        println!("{}", S::empty_listing(remote));
         return Ok(());
     }
-    for check in &checks {
-        println!("{}  {}", check.name, check.command);
+    for (key, value) in &entries {
+        println!("{key}  {}", S::row_value(key, value));
     }
+    Ok(())
+}
+
+/// Drop the entry keyed `key` from the set `S` on `remote` and push the update.
+fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    let expected = sync(remote, S::REF)?;
+    let before = S::load(&repo)?;
+    let count = before.len();
+    let after: Vec<(String, String)> = before.into_iter().filter(|(k, _v)| k != key).collect();
+    if after.len() == count {
+        return Err(format!("no {} named {key} on {remote}", S::NOUN));
+    }
+    S::store(&repo, &after)?;
+    push_signed(remote, S::REF, expected.as_deref())?;
+    println!("removed {key}");
     Ok(())
 }
 
@@ -168,7 +276,7 @@ fn list_checks(remote: &str) -> Result<(), String> {
 /// recorded under that name, and push the update.
 fn add_check(name: &str, command: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
-    let expected = sync_checks(remote)?;
+    let expected = sync(remote, CHECKS_REF)?;
     let mut checks = checks::load(&repo).map_err(|error| error.to_string())?;
     checks.retain(|check| check.name != name);
     checks.push(Check {
@@ -176,27 +284,8 @@ fn add_check(name: &str, command: &str, remote: &str) -> Result<(), String> {
         command: command.to_owned(),
     });
     checks::store(&repo, &checks).map_err(|error| error.to_string())?;
-    push_checks(remote, expected.as_deref())?;
+    push_signed(remote, CHECKS_REF, expected.as_deref())?;
     println!("recorded check {name}");
-    Ok(())
-}
-
-/// Drop the check named `name` from `remote` and push the update.
-fn remove_check(name: &str, remote: &str) -> Result<(), String> {
-    let repo = repo()?;
-    let expected = sync_checks(remote)?;
-    let before = checks::load(&repo).map_err(|error| error.to_string())?;
-    let count = before.len();
-    let after: Vec<Check> = before
-        .into_iter()
-        .filter(|check| check.name != name)
-        .collect();
-    if after.len() == count {
-        return Err(format!("no check named {name} on {remote}"));
-    }
-    checks::store(&repo, &after).map_err(|error| error.to_string())?;
-    push_checks(remote, expected.as_deref())?;
-    println!("removed {name}");
     Ok(())
 }
 
@@ -346,27 +435,12 @@ fn default_key_path() -> Result<PathBuf, String> {
     Ok(Path::new(&home).join(".ssh").join("id_ed25519"))
 }
 
-/// Print each authorized signer on `remote` as `<fingerprint>  <comment>`.
-fn list(remote: &str) -> Result<(), String> {
-    let repo = repo()?;
-    sync_auth(remote)?;
-    let signers = signers::load(&repo).map_err(|error| error.to_string())?;
-    if signers.is_empty() {
-        println!("no authorized signers on {remote} (open bootstrap window)");
-        return Ok(());
-    }
-    for signer in &signers {
-        println!("{}  {}", signer.fingerprint, key_comment(&signer.key));
-    }
-    Ok(())
-}
-
 /// Authorize `key` on `remote` and push the updated set.
 fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    let expected = sync_auth(remote)?;
+    let expected = sync(remote, AUTH_REF)?;
     let mut signers = signers::load(&repo).map_err(|error| error.to_string())?;
     if signers
         .iter()
@@ -380,27 +454,8 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
         key: public_key,
     });
     signers::store(&repo, &signers).map_err(|error| error.to_string())?;
-    push_auth(remote, expected.as_deref())?;
+    push_signed(remote, AUTH_REF, expected.as_deref())?;
     println!("authorized {fingerprint}");
-    Ok(())
-}
-
-/// Drop the signer named `fingerprint` from `remote` and push the update.
-fn remove(fingerprint: &str, remote: &str) -> Result<(), String> {
-    let repo = repo()?;
-    let expected = sync_auth(remote)?;
-    let before = signers::load(&repo).map_err(|error| error.to_string())?;
-    let count = before.len();
-    let after: Vec<Signer> = before
-        .into_iter()
-        .filter(|signer| signer.fingerprint != fingerprint)
-        .collect();
-    if after.len() == count {
-        return Err(format!("no signer named {fingerprint} on {remote}"));
-    }
-    signers::store(&repo, &after).map_err(|error| error.to_string())?;
-    push_auth(remote, expected.as_deref())?;
-    println!("removed {fingerprint}");
     Ok(())
 }
 
@@ -409,7 +464,7 @@ fn check(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    sync_auth(remote)?;
+    sync(remote, AUTH_REF)?;
     let signers = signers::load(&repo).map_err(|error| error.to_string())?;
     if signers.is_empty() {
         println!("{remote}: open bootstrap window (no signers yet)");
@@ -437,61 +492,34 @@ fn repo() -> Result<PathBuf, String> {
     std::env::current_dir().map_err(|error| format!("cannot resolve current directory: {error}"))
 }
 
-/// Mirror `remote`'s `refs/meta/auth` into the local repository so the signer
-/// helpers see the current set, returning the remote's current object id (or
-/// `None` when it has no such ref — the open bootstrap window). When the remote
-/// has none, clear any stale local ref so the set reads empty.
-fn sync_auth(remote: &str) -> Result<Option<String>, String> {
-    let listing = git_capture(&["ls-remote", remote, AUTH_REF])?;
+/// Mirror `remote`'s `refname` into the local repository so the set helpers see
+/// the current value, returning the remote's current object id (or `None` when
+/// it has no such ref — for the signer set, the open bootstrap window). When the
+/// remote has none, clear any stale local ref so the set reads empty.
+fn sync(remote: &str, refname: &str) -> Result<Option<String>, String> {
+    let listing = git_capture(&["ls-remote", remote, refname])?;
     let oid = listing.split_whitespace().next().map(str::to_owned);
     if oid.is_some() {
-        let refspec = format!("+{AUTH_REF}:{AUTH_REF}");
+        let refspec = format!("+{refname}:{refname}");
         git_run(&["fetch", "--quiet", remote, &refspec])?;
     } else {
-        let _deleted = git_capture(&["update-ref", "-d", AUTH_REF]);
+        let _deleted = git_capture(&["update-ref", "-d", refname]);
     }
     Ok(oid)
 }
 
-/// Push the local `refs/meta/auth` to `remote`, signed per the client's config.
+/// Push the local `refname` to `remote`, signed per the client's config.
 ///
 /// `expected` is the remote tip observed at sync time (`None` when the ref did
 /// not exist). Pushing with `--force-with-lease` pinned to that value, plus
 /// `--force-if-includes`, makes the update a clean compare-and-swap: it is
 /// rejected rather than clobbering a set someone changed since the fetch.
-fn push_auth(remote: &str, expected: Option<&str>) -> Result<(), String> {
+fn push_signed(remote: &str, refname: &str, expected: Option<&str>) -> Result<(), String> {
     let lease = format!(
-        "--force-with-lease={AUTH_REF}:{}",
+        "--force-with-lease={refname}:{}",
         expected.unwrap_or(git_ents::ZERO_OID)
     );
-    git_run(&["push", "--force-if-includes", &lease, remote, AUTH_REF])
-}
-
-/// Mirror `remote`'s `refs/meta/checks` into the local repository so the check
-/// helpers see the current set, returning the remote's current object id (or
-/// `None` when it has no such ref). When the remote has none, clear any stale
-/// local ref so the set reads empty.
-fn sync_checks(remote: &str) -> Result<Option<String>, String> {
-    let listing = git_capture(&["ls-remote", remote, CHECKS_REF])?;
-    let oid = listing.split_whitespace().next().map(str::to_owned);
-    if oid.is_some() {
-        let refspec = format!("+{CHECKS_REF}:{CHECKS_REF}");
-        git_run(&["fetch", "--quiet", remote, &refspec])?;
-    } else {
-        let _deleted = git_capture(&["update-ref", "-d", CHECKS_REF]);
-    }
-    Ok(oid)
-}
-
-/// Push the local `refs/meta/checks` to `remote`, signed per the client's
-/// config. As with the signer set, the update is a compare-and-swap against
-/// `expected` so a set someone changed since the fetch is not clobbered.
-fn push_checks(remote: &str, expected: Option<&str>) -> Result<(), String> {
-    let lease = format!(
-        "--force-with-lease={CHECKS_REF}:{}",
-        expected.unwrap_or(git_ents::ZERO_OID)
-    );
-    git_run(&["push", "--force-if-includes", &lease, remote, CHECKS_REF])
+    git_run(&["push", "--force-if-includes", &lease, remote, refname])
 }
 
 /// Resolve the OpenSSH public key to operate on, defaulting to the key behind
