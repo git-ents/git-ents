@@ -24,10 +24,39 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
-/// Delegate a single request to `git http-backend` and reply with its output.
-pub async fn git(
+/// Serve a GET: the HTML web UI for browser requests, or `git http-backend` for
+/// a git wire-protocol read (the ref advertisement or a dumb-HTTP object fetch).
+pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: HeaderMap) -> Response {
+    let path_info = uri.path().to_owned();
+    let query_string = uri.query().unwrap_or_default().to_owned();
+
+    if path_info.contains("..") {
+        return (StatusCode::BAD_REQUEST, "bad request").into_response();
+    }
+
+    // Anything that is not part of the git wire protocol is served the HTML web
+    // UI rather than handed to the CGI backend.
+    if is_web_get(&path_info, &query_string) {
+        let host = header_value(&headers, "Host");
+        return crate::web::render(&state, &path_info, host.as_deref()).await;
+    }
+
+    backend(
+        &state,
+        Method::GET,
+        &path_info,
+        &query_string,
+        &headers,
+        Bytes::new(),
+    )
+    .await
+}
+
+/// Serve a POST: always a git smart-HTTP RPC (`git-upload-pack` for fetch or
+/// `git-receive-pack` for push). The browser UI never POSTs, so there is no web
+/// branch here.
+pub async fn post_request(
     State(state): State<AppState>,
-    method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
@@ -39,20 +68,35 @@ pub async fn git(
         return (StatusCode::BAD_REQUEST, "bad request").into_response();
     }
 
-    // A plain browser GET (anything that is not part of the git wire protocol)
-    // is served the HTML web UI rather than handed to the CGI backend.
-    if method == Method::GET && wants_web_ui(&path_info, &query_string) {
-        let host = header_value(&headers, "Host");
-        return crate::web::render(&state, &path_info, host.as_deref()).await;
-    }
+    backend(
+        &state,
+        Method::POST,
+        &path_info,
+        &query_string,
+        &headers,
+        body,
+    )
+    .await
+}
 
+/// Hand a git wire-protocol request to `git http-backend` and reply with its
+/// output. A receive-pack request (push) auto-creates its bare repository before
+/// the backend runs and reconciles `HEAD` after a successful push.
+async fn backend(
+    state: &AppState,
+    method: Method,
+    path_info: &str,
+    query_string: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Response {
     // A push uses exactly two endpoints: the receive-pack advertisement
     // (`GET /<repo>/info/refs?service=git-receive-pack`) and the receive-pack
     // RPC (`POST /<repo>/git-receive-pack`). Recognize the target so the bare
     // repo can be auto-created on the very first request; reject an
     // unacceptable repository path here rather than handing it to the backend.
-    let push_repo = if is_receive_pack(&path_info, &query_string) {
-        match repo_path(&path_info) {
+    let push_repo = if is_receive_pack(path_info, query_string) {
+        match repo_path(path_info) {
             Some(relative) => Some(state.data_dir.join(relative)),
             None => return (StatusCode::BAD_REQUEST, "invalid repository path").into_response(),
         }
@@ -60,20 +104,20 @@ pub async fn git(
         None
     };
     if let Some(repo) = &push_repo
-        && let Err(response) = ensure_repo(&state, repo).await
+        && let Err(response) = ensure_repo(state, repo).await
     {
         return response;
     }
 
-    let content_type = header_value(&headers, "Content-Type");
-    let content_length = header_value(&headers, "Content-Length");
+    let content_type = header_value(headers, "Content-Type");
+    let content_length = header_value(headers, "Content-Length");
 
     let mut cmd = Command::new("git");
     cmd.arg("http-backend")
         .env("GIT_PROJECT_ROOT", &state.data_dir)
         .env("GIT_HTTP_EXPORT_ALL", "1")
-        .env("PATH_INFO", &path_info)
-        .env("QUERY_STRING", &query_string)
+        .env("PATH_INFO", path_info)
+        .env("QUERY_STRING", query_string)
         .env("REQUEST_METHOD", method.as_str())
         // Hand the `post-receive` hook the queue it drops jobs into; it inherits
         // this through the receive-pack process tree git spawns.
@@ -94,7 +138,7 @@ pub async fn git(
     // Push these through `GIT_CONFIG_*` rather than `git -c` so they reach the
     // `receive-pack` and `pre-receive` processes http-backend spawns, where the
     // nonce and hook actually take effect.
-    let overrides = backend_config(&state);
+    let overrides = backend_config(state);
     if !overrides.is_empty() {
         cmd.env("GIT_CONFIG_COUNT", overrides.len().to_string());
         for (index, (key, value)) in overrides.iter().enumerate() {
@@ -218,19 +262,17 @@ pub(crate) const MAX_REPO_DEPTH: usize = 3;
 /// Whether a GET should be answered with the HTML web UI rather than handed to
 /// `git http-backend`.
 ///
-/// Anything that is not a git wire-protocol request is web. In addition, the
-/// browse routes (`/tree/`, `/blob/`, `/commit/`) are claimed for the web UI
-/// even when a file path within them happens to resemble a dumb-HTTP git path
-/// (e.g. a file named `HEAD`, or a directory named `objects`) — but never when
-/// it is an actual smart-HTTP service request, so a repository named `commit`
-/// can still be pushed to and cloned.
-fn wants_web_ui(path: &str, query: &str) -> bool {
-    !is_git_path(path, query) || (is_browse_route(path) && !is_service_request(path, query))
-}
-
-/// Whether `path` selects one of the web UI's browse views.
-fn is_browse_route(path: &str) -> bool {
-    path.contains("/tree/") || path.contains("/blob/") || path.contains("/commit/")
+/// Anything that is not a git wire-protocol request (smart or dumb HTTP) is web.
+/// In addition, the browse routes (`/tree/`, `/blob/`, `/commit/`) are claimed
+/// for the web UI even when a file path within them happens to resemble a
+/// dumb-HTTP git path (e.g. a file named `HEAD`, or a directory named
+/// `objects`) — but never when it is an actual smart-HTTP service request, so a
+/// repository named `commit` can still be pushed to and cloned.
+fn is_web_get(path: &str, query: &str) -> bool {
+    let is_wire =
+        is_service_request(path, query) || path.ends_with("/HEAD") || path.contains("/objects/");
+    let is_browse = path.contains("/tree/") || path.contains("/blob/") || path.contains("/commit/");
+    !is_wire || (is_browse && !is_service_request(path, query))
 }
 
 /// Whether `path`/`query` is an unambiguous smart-HTTP service request (the
@@ -240,13 +282,6 @@ fn is_service_request(path: &str, query: &str) -> bool {
         || path.ends_with("/git-upload-pack")
         || path.ends_with("/git-receive-pack")
         || query.contains("service=")
-}
-
-/// Whether `path`/`query` belong to git's wire protocol (smart or dumb HTTP)
-/// rather than the browser-facing web UI. Anything matching here is delegated
-/// to `git http-backend`; everything else is rendered as HTML.
-fn is_git_path(path: &str, query: &str) -> bool {
-    is_service_request(path, query) || path.ends_with("/HEAD") || path.contains("/objects/")
 }
 
 /// Whether this request is a push: the smart-HTTP receive-pack advertisement
@@ -577,6 +612,6 @@ mod tests {
     #[case("/repo/git-upload-pack", "", false)]
     #[case("/repo/objects/12/abcdef", "", false)]
     fn routes_browser_gets(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
-        assert_eq!(wants_web_ui(path, query), expected);
+        assert_eq!(is_web_get(path, query), expected);
     }
 }

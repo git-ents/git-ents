@@ -143,7 +143,8 @@ async fn serve(args: Args) -> ExitCode {
     // body, so the default 2 MiB cap would reject any non-trivial push.
     let app = Router::new()
         .route("/healthz", get(http::health))
-        .fallback(http::git)
+        .route("/", get(http::get_request))
+        .route("/{*path}", get(http::get_request).post(http::post_request))
         .layer(DefaultBodyLimit::disable())
         .with_state(state);
 
