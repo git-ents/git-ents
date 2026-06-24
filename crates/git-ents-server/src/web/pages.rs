@@ -814,12 +814,13 @@ async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue
         .map_err(|err| err.to_string())
 }
 
-/// The Settings tab. Persisting changes needs a config store that does not
-/// exist yet, so the controls reflect the repository's current real values and
-/// are presented read-only.
+/// The Settings tab: a read-only projection over the repository's typed meta
+/// refs — `refs/meta/config` (General), `refs/meta/members` (Members), and the
+/// derived feature and check status. Editing is a members-gated write path that
+/// does not exist yet, so the values are presented as the current configuration.
 pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let name = meta.name();
     let signers = load_signers(repo).await;
+    let checks = load_checks(repo).await;
     repo_shell(
         meta,
         Tab::Settings,
@@ -827,21 +828,28 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
         html! {
             div.settings {
                 div.page-header { h1.page-title { "Repository settings" } }
-                p.shell-note { "These reflect the repository's current configuration." }
+                p.shell-note {
+                    "The repository's configuration on " code { "refs/meta/config" }
+                    " and " code { "refs/meta/members" } "."
+                }
 
                 div.card {
                     div.card-header { "General" }
-                    div.field {
-                        label { "Repository name" }
-                        input type="text" value=(name) disabled title="Not editable yet";
-                    }
-                    div.field {
-                        label { "Description" }
-                        textarea rows="2" disabled title="Not editable yet" { (meta.description.as_deref().unwrap_or_default()) }
-                    }
-                    div.field {
-                        label { "Default branch" }
-                        input type="text" value=(meta.branch.as_deref().unwrap_or("—")) disabled title="Not editable yet";
+                    (setting_row("Repository name", meta.name()))
+                    (setting_row("Description", meta.description.as_deref().unwrap_or("—")))
+                    (setting_row("Homepage", meta.homepage.as_deref().unwrap_or("—")))
+                    (setting_row("Default branch", meta.branch.as_deref().unwrap_or("—")))
+                    div.card-row {
+                        span.setting-label { "Topics" }
+                        @if meta.topics.is_empty() {
+                            span.muted { "—" }
+                        } @else {
+                            div.topics {
+                                @for topic in &meta.topics {
+                                    span.topic { (topic) }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -849,8 +857,7 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                     div.card-header { "Features" }
                     (feature_row("Bug reports", "Track and triage bugs.", meta.issues > 0))
                     (feature_row("Releases", "Publish tagged releases.", meta.releases > 0))
-                    (feature_row("Checks (CI)", "Run signed CI records on push.", false))
-                    (feature_row("Wiki", "A separate documentation space.", false))
+                    (feature_row("Checks (CI)", "Run signed CI records on push.", matches!(&checks, Ok(c) if !c.is_empty())))
                 }
 
                 div.card {
@@ -878,26 +885,24 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                 }
 
                 div.card {
-                    div.card-header { "Visibility" }
-                    (visibility_row("Public", "Anyone can read this repository.", true))
-                    (visibility_row("Private", "Only collaborators can read it.", false))
-                }
-
-                div.card.danger {
-                    div.card-header { "Danger zone" }
-                    div.danger-row {
-                        div {
-                            strong { "Archive this repository" }
-                            p.muted { "Make it read-only." }
-                        }
-                        button.btn-danger-outline type="button" disabled title="Not available yet" { "Archive" }
+                    div.card-header {
+                        "Checks"
+                        @if let Ok(checks) = &checks { span.count { (checks.len()) } }
                     }
-                    div.danger-row {
-                        div {
-                            strong { "Delete this repository" }
-                            p.muted { "This cannot be undone." }
+                    p.shell-note {
+                        "Commands on " code { "refs/meta/checks" } " run against each push "
+                        "(" code { "git ents checks list" } ")."
+                    }
+                    @match &checks {
+                        Err(err) => div.card-row.muted { "Could not read checks: " (err) }
+                        Ok(checks) if checks.is_empty() => {
+                            div.card-row.muted { "No checks configured." }
                         }
-                        button.btn-danger type="button" disabled title="Not available yet" { "Delete" }
+                        Ok(checks) => {
+                            @for check in checks {
+                                (check.render())
+                            }
+                        }
                     }
                 }
             }
@@ -915,7 +920,18 @@ async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Signer>, Str
         .map_err(|err| err.to_string())
 }
 
-/// A Features row with a static toggle reflecting `on`.
+/// A read-only setting row: a label and its current value.
+fn setting_row(label: &str, value: &str) -> Markup {
+    html! {
+        div.card-row {
+            span.setting-label { (label) }
+            span.muted { (value) }
+        }
+    }
+}
+
+/// A Features row showing the derived, read-only status of `title`: active when
+/// the feature has backing data, empty otherwise.
 fn feature_row(title: &str, desc: &str, on: bool) -> Markup {
     html! {
         div.feature-row {
@@ -923,20 +939,7 @@ fn feature_row(title: &str, desc: &str, on: bool) -> Markup {
                 strong { (title) }
                 p.muted { (desc) }
             }
-            span.toggle.on[on].stub title="Not editable yet" { span.knob {} }
-        }
-    }
-}
-
-/// A Visibility radio row, selected when `on`.
-fn visibility_row(title: &str, desc: &str, on: bool) -> Markup {
-    html! {
-        div.visibility-row.sel[on] {
-            span.radio.on[on].stub title="Not editable yet" {}
-            div {
-                strong { (title) }
-                p.muted { (desc) }
-            }
+            span.feature-status.on[on] { @if on { "Active" } @else { "Empty" } }
         }
     }
 }
