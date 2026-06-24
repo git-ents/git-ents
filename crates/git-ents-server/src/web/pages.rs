@@ -16,12 +16,19 @@ use gix_object::tree::Entry;
 use maud::{Markup, PreEscaped, html};
 
 use super::git::{
-    browse_path, git_output, git_output_bytes, languages, latest_release, list_tree, parse_iso,
-    releases, root_tree,
+    browse_path, git_output, git_output_bytes, git_output_capped, languages, latest_release,
+    list_tree, parse_iso, releases, root_tree,
 };
 use super::icons::*;
 use super::render::Render;
 use super::{RepoMeta, Tab, not_found, repo_shell};
+
+/// The largest blob or diff rendered in full. Past it a request would read an
+/// unbounded object into memory and highlight it, so the view shows a truncation
+/// notice instead — a cap on what one page can cost. 2 MiB comfortably covers
+/// real source files while ruling out the multi-hundred-MiB objects that would
+/// exhaust the server.
+const MAX_RENDER_BYTES: usize = 2 * 1024 * 1024;
 
 /// A single repository's overview: the rendered README beside an aside of
 /// clone, about, releases, and language cards.
@@ -327,7 +334,12 @@ pub(super) async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Re
 /// The right-hand pane of the Files view: a file's path, line/size meta, and its
 /// syntax-highlighted source (or a binary notice).
 async fn blob_pane(repo: &Path, path: &str) -> Markup {
-    let Some(bytes) = git_output_bytes(repo, &["cat-file", "-p", &format!("HEAD:{path}")]).await
+    let Some((bytes, truncated)) = git_output_capped(
+        repo,
+        &["cat-file", "-p", &format!("HEAD:{path}")],
+        MAX_RENDER_BYTES,
+    )
+    .await
     else {
         return html! { div.files-empty { "File not found." } };
     };
@@ -336,14 +348,18 @@ async fn blob_pane(repo: &Path, path: &str) -> Markup {
         div.blob-head {
             span { (path) }
             span.meta {
-                @if !is_binary(&bytes) {
+                @if !truncated && !is_binary(&bytes) {
                     span { (String::from_utf8_lossy(&bytes).lines().count()) " lines" }
                 }
-                span { (human_size(bytes.len())) }
-                button.copy-btn data-copy=(String::from_utf8_lossy(&bytes)) { "Copy" }
+                span { (human_size(bytes.len())) @if truncated { "+" } }
+                @if !truncated {
+                    button.copy-btn data-copy=(String::from_utf8_lossy(&bytes)) { "Copy" }
+                }
             }
         }
-        @if is_binary(&bytes) {
+        @if truncated {
+            div.binary { "File too large to display (over " (human_size(MAX_RENDER_BYTES)) ")." }
+        } @else if is_binary(&bytes) {
             div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." }
         } @else {
             (blob_body(name, &String::from_utf8_lossy(&bytes)))
@@ -465,11 +481,15 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
     {
         return not_found().into_response();
     }
-    let Some(bytes) = git_output_bytes(repo, &["cat-file", "-p", &spec]).await else {
+    let Some((bytes, truncated)) =
+        git_output_capped(repo, &["cat-file", "-p", &spec], MAX_RENDER_BYTES).await
+    else {
         return not_found().into_response();
     };
     let name = path.rsplit('/').next().unwrap_or(&path);
-    let body = if is_binary(&bytes) {
+    let body = if truncated {
+        html! { div.blob { div.binary { "File too large to display (over " (human_size(MAX_RENDER_BYTES)) ")." } } }
+    } else if is_binary(&bytes) {
         html! { div.blob { div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." } } }
     } else {
         let text = String::from_utf8_lossy(&bytes);
@@ -562,9 +582,14 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
     let subject = parts.next().unwrap_or_default().to_owned();
     let body = parts.next().unwrap_or_default().trim_end().to_owned();
     let short = short_oid(&oid);
-    let patch = git_output(repo, &["show", "--no-color", "--format=", "--patch", sha])
-        .await
-        .unwrap_or_default();
+    let (patch_bytes, patch_truncated) = git_output_capped(
+        repo,
+        &["show", "--no-color", "--format=", "--patch", sha],
+        MAX_RENDER_BYTES,
+    )
+    .await
+    .unwrap_or_default();
+    let patch = String::from_utf8_lossy(&patch_bytes);
 
     repo_shell(
         meta,
@@ -582,6 +607,9 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
                 }
             }
             (diff_view(&patch))
+            @if patch_truncated {
+                div.card { div.binary { "Diff truncated (over " (human_size(MAX_RENDER_BYTES)) ")." } }
+            }
         },
     )
     .into_response()

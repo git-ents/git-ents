@@ -8,6 +8,7 @@ use std::process::Stdio;
 use gix_date::Time;
 use gix_hash::ObjectId;
 use gix_object::tree::{Entry, EntryKind, EntryMode};
+use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
 
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo};
@@ -35,6 +36,46 @@ pub(super) async fn git_output_bytes(repo: &Path, args: &[&str]) -> Option<Vec<u
         return None;
     }
     Some(out.stdout)
+}
+
+/// Run `git -C <repo> <args>` capturing at most `cap` bytes of stdout, returning
+/// the captured bytes and whether stdout exceeded `cap`. `None` on a spawn
+/// failure or, for output that fit under the cap, a non-zero exit.
+///
+/// Reading at most `cap + 1` bytes and killing git once the cap is reached
+/// bounds the memory a single request can consume, so an arbitrarily large blob
+/// or diff renders as a truncation notice instead of being slurped whole — the
+/// difference between a capped response and an out-of-memory kill.
+pub(super) async fn git_output_capped(
+    repo: &Path,
+    args: &[&str],
+    cap: usize,
+) -> Option<(Vec<u8>, bool)> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut buf = Vec::new();
+    let probe = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
+    (&mut stdout).take(probe).read_to_end(&mut buf).await.ok()?;
+    if buf.len() > cap {
+        // Over the cap: keep what we have, stop git, and report truncation.
+        buf.truncate(cap);
+        let _killed = child.start_kill();
+        let _reaped = child.wait().await;
+        return Some((buf, true));
+    }
+    let status = child.wait().await.ok()?;
+    if status.success() {
+        Some((buf, false))
+    } else {
+        None
+    }
 }
 
 /// The entries of the root tree at `HEAD`, directories first then by name.
@@ -265,4 +306,77 @@ pub(super) async fn releases(repo: &Path) -> Vec<Release> {
 /// The newest release, if any.
 pub(super) async fn latest_release(repo: &Path) -> Option<Release> {
     releases(repo).await.into_iter().next()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "unit test")]
+
+    use std::process::Command as SyncCommand;
+
+    use super::*;
+
+    fn commit_blob(repo: &Path, name: &str, bytes: usize) {
+        SyncCommand::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        std::fs::write(repo.join(name), vec![b'x'; bytes]).unwrap();
+        for args in [
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "commit",
+                "-qm",
+                "x",
+            ],
+        ] {
+            SyncCommand::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(&args)
+                .status()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn capped_read_flags_oversized_output() {
+        let dir = tempfile::tempdir().unwrap();
+        commit_blob(dir.path(), "big.txt", 4096);
+        let (bytes, truncated) =
+            git_output_capped(dir.path(), &["cat-file", "-p", "HEAD:big.txt"], 1024)
+                .await
+                .unwrap();
+        assert!(truncated);
+        assert_eq!(bytes.len(), 1024);
+    }
+
+    #[tokio::test]
+    async fn capped_read_returns_full_small_output() {
+        let dir = tempfile::tempdir().unwrap();
+        commit_blob(dir.path(), "small.txt", 100);
+        let (bytes, truncated) =
+            git_output_capped(dir.path(), &["cat-file", "-p", "HEAD:small.txt"], 1024)
+                .await
+                .unwrap();
+        assert!(!truncated);
+        assert_eq!(bytes.len(), 100);
+    }
+
+    #[tokio::test]
+    async fn capped_read_reports_failure_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        commit_blob(dir.path(), "small.txt", 10);
+        assert!(
+            git_output_capped(dir.path(), &["cat-file", "-p", "HEAD:missing"], 1024)
+                .await
+                .is_none()
+        );
+    }
 }
