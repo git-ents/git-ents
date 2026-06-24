@@ -742,9 +742,54 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, Str
         .map_err(|err| err.to_string())
 }
 
-/// The Issues ("Bug reports") tab. There is no issue store yet, so the filters
-/// are present for the design and the list is an empty state.
-pub(super) fn issues_page(meta: &RepoMeta) -> Markup {
+/// The Issues ("Bug reports") tab: the real issue list from
+/// `refs/meta/issues/<id>`, split into open and closed, with the filter chips
+/// derived from the labels that exist. Issue creation is a write path that does
+/// not exist yet, so the "New issue" button stays disabled.
+pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
+    let issues = load_issues(repo).await;
+    let body = match &issues {
+        Err(err) => html! { div.card { div.card-row.muted { "Could not read issues: " (err) } } },
+        Ok(issues) => {
+            let open: Vec<&(String, git_ents::issues::Issue)> =
+                issues.iter().filter(|(_id, i)| i.is_open()).collect();
+            let closed = issues.len().saturating_sub(open.len());
+            let mut labels: Vec<&str> = issues
+                .iter()
+                .flat_map(|(_id, i)| i.labels.iter().map(String::as_str))
+                .collect();
+            labels.sort_unstable();
+            labels.dedup();
+            html! {
+                div.filter-row {
+                    div.filter-search {
+                        (icon_search())
+                        input type="search" placeholder="Filter bug reports" aria-label="Filter" disabled;
+                    }
+                    span.chip.active { "All" }
+                    @for label in &labels {
+                        span.chip { (label) }
+                    }
+                }
+                div.card {
+                    div.card-header.subtabs {
+                        span.subtab.active { (icon_issue()) "Open" span.tab-count { (open.len()) } }
+                        span.subtab { (icon_check()) "Closed" span.tab-count { (closed) } }
+                    }
+                    @if open.is_empty() {
+                        div.blankslate {
+                            h2 { "No open bug reports" }
+                            p { "Open one to start tracking a bug." }
+                        }
+                    } @else {
+                        @for (_id, issue) in &open {
+                            (issue.render())
+                        }
+                    }
+                }
+            }
+        }
+    };
     repo_shell(
         meta,
         Tab::Issues,
@@ -754,28 +799,19 @@ pub(super) fn issues_page(meta: &RepoMeta) -> Markup {
                 h1.page-title { "Bug reports" }
                 button.btn-primary type="button" disabled title="Not available yet" { (icon_plus()) "New issue" }
             }
-            div.filter-row.stub title="Not available yet" {
-                div.filter-search {
-                    (icon_search())
-                    input type="search" placeholder="Filter bug reports" aria-label="Filter" disabled;
-                }
-                span.chip.active { "All" }
-                span.chip { "bug" }
-                span.chip { "enhancement" }
-                span.chip { "question" }
-            }
-            div.card {
-                div.card-header.subtabs.stub title="Not available yet" {
-                    span.subtab.active { (icon_issue()) "Open" span.tab-count { "0" } }
-                    span.subtab { (icon_check()) "Closed" span.tab-count { "0" } }
-                }
-                div.blankslate {
-                    h2 { "No bug reports yet" }
-                    p { "Open one to start tracking a bug." }
-                }
-            }
+            (body)
         },
     )
+}
+
+/// Load the repository's issues off the async runtime, since `issues::list`
+/// reads the object database synchronously.
+async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue)>, String> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::issues::list(&repo))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 /// The Settings tab. Persisting changes needs a config store that does not

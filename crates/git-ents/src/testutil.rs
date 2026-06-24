@@ -99,6 +99,50 @@ pub(crate) fn write_config_doc(
     assert!(status.success());
 }
 
+/// Lay an `Issue` document out at `refname` as the real on-disk format:
+/// `title`, `body`, `state`, and `author` blobs plus an index-keyed (`0000`,
+/// `0001`, …) `labels/` subtree, committed and pointed to by the ref. Asserts
+/// the loader still reads the format independent of the writer.
+pub(crate) fn write_issue_doc(
+    repo: &Path,
+    refname: &str,
+    title: &str,
+    body: &str,
+    state: &str,
+    labels: &[&str],
+    author: &str,
+) {
+    let blob = |value: &str| git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
+    let title_blob = blob(title);
+    let body_blob = blob(body);
+    let state_blob = blob(state);
+    let author_blob = blob(author);
+    let mut label_entries = String::new();
+    for (index, label) in labels.iter().enumerate() {
+        label_entries.push_str(&format!("100644 blob {}\t{index:04}\n", blob(label)));
+    }
+    let labels_tree = git_with_stdin(repo, &["mktree"], &label_entries);
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!(
+            "100644 blob {title_blob}\ttitle\n\
+             100644 blob {body_blob}\tbody\n\
+             100644 blob {state_blob}\tstate\n\
+             040000 tree {labels_tree}\tlabels\n\
+             100644 blob {author_blob}\tauthor\n"
+        ),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 /// Run git in `repo` with `input` on stdin, returning its trimmed stdout.
 fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
     let mut child = Command::new("git")

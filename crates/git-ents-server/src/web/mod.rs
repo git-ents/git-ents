@@ -74,7 +74,7 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
-        Some((&"issues", &[])) => pages::issues_page(&meta).into_response(),
+        Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
         Some((&"settings", &[])) => pages::settings_page(repo, &meta).await.into_response(),
         _ => not_found().into_response(),
     }
@@ -129,6 +129,7 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         .await
         .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
+    let issues = open_issue_count(repo).await;
     RepoMeta {
         rel: rel.to_owned(),
         branch,
@@ -136,7 +137,7 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         homepage,
         topics,
         releases,
-        issues: 0,
+        issues,
     }
 }
 
@@ -147,6 +148,16 @@ async fn load_config(repo: &Path) -> Option<git_ents::config::Config> {
         .await
         .ok()?
         .ok()
+}
+
+/// Count the repository's open issues off the async runtime.
+async fn open_issue_count(repo: &Path) -> usize {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::issues::open_count(&repo))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0)
 }
 
 /// Wrap a repository view in the shared header band and tab bar, then the page
