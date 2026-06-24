@@ -10,13 +10,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use clap::{CommandFactory, Parser, Subcommand};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(
@@ -56,10 +55,6 @@ struct Args {
         default_value = "/data/checks-queue"
     )]
     checks_queue: PathBuf,
-
-    /// Stop after handling this many requests.
-    #[arg(long)]
-    max_requests: Option<usize>,
 }
 
 /// Subcommands that run instead of serving HTTP.
@@ -146,33 +141,11 @@ async fn serve(args: Args) -> ExitCode {
 
     // The git smart-HTTP protocol streams whole packfiles through the request
     // body, so the default 2 MiB cap would reject any non-trivial push.
-    let mut app = Router::new()
+    let app = Router::new()
         .route("/healthz", get(http::health))
         .fallback(http::git)
         .layer(DefaultBodyLimit::disable())
         .with_state(state);
-
-    // When `--max-requests` is set, count every response and signal shutdown
-    // once the limit is reached so the process exits on its own.
-    let shutdown = Arc::new(Notify::new());
-    if let Some(max) = args.max_requests {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let notify = shutdown.clone();
-        app = app.layer(axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let counter = counter.clone();
-                let notify = notify.clone();
-                async move {
-                    let response = next.run(req).await;
-                    let handled = counter.fetch_add(1, Ordering::SeqCst).saturating_add(1);
-                    if handled >= max {
-                        notify.notify_one();
-                    }
-                    response
-                }
-            },
-        ));
-    }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -183,9 +156,7 @@ async fn serve(args: Args) -> ExitCode {
         }
     };
 
-    let server =
-        axum::serve(listener, app).with_graceful_shutdown(async move { shutdown.notified().await });
-    if let Err(e) = server.await {
+    if let Err(e) = axum::serve(listener, app).await {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
     }
