@@ -1,0 +1,254 @@
+= P5 / P6 Handoff: meta-ref structure & routing
+:doctype: article
+:toc:
+:toclevels: 2
+
+NOTE: This continues `docs/simplification-plan.adoc`. P8, P3, P7, P2, P1, P4
+(no-op), and correctness items C1/C2/C3 are *done and committed*. C4 was
+*skipped* (its premise no longer holds — see below). C5 folds into P5. What
+remains is *P5* (make Settings & Issues functional via typed meta refs) and
+*P6* (routing). Read the simplification plan's "New direction" section first;
+the layout decisions there are settled and this document assumes them.
+
+== Decisions already made (do not re-litigate)
+
+* **`refs/meta/auth` → `refs/meta/members`: hard rename, no fallback.** The
+  owner will kill and redeploy the server; the live trust list is intentionally
+  discarded and re-pushed. *Do not* write a read-fallback that reads `auth` when
+  `members` is absent. One ref name, `refs/meta/members`, period.
+* Config altitude is **Path A** (compile-time `Facet` structs; the compiler
+  holds the schema).
+* `config = { description: String, homepage: String, topics: Vec<String> }`.
+* **No worktree metadata — there is never a `.gitents` directory.**
+* Decomposed refs, aggregated views: no `refs/meta/settings` god-doc; the
+  Settings page is a *projection* over multiple refs.
+
+== Ground rules (carried from CLAUDE.md + work so far)
+
+* Tests run with `cargo nextest run`, never `cargo test`.
+* Every meta-ref document is loaded/stored through `git_store` (`crates/git-store/src/lib.rs`).
+  Single-field `BTreeMap<String,String>` "set" docs use the `MapDoc` trait +
+  `Store::load_entries`/`store_entries`. Mixed-field docs (like `Config`) use
+  `Store::load`/`store` directly with a plain `Facet` struct.
+* **Format stability is load-bearing.** A doc's `Facet` shape *is* its on-disk
+  format. Every new meta-ref type MUST get a fixed-format load test built with
+  raw git plumbing, exactly like the existing ones — see
+  `crates/git-ents/src/signers.rs::tests::loads_the_on_disk_signers_format` and
+  the shared builder `crate::testutil::write_meta_doc`. This is the C1 policy,
+  documented in `git-store`'s module docs.
+* `git_ents::ZERO_OID` is the canonical all-zero push oid; don't re-introduce
+  string literals.
+* Commit per logical change, Conventional Commit headers + footers, terse body,
+  `Assisted-by: Claude:<model-id>` last. Run the `prek` hooks (they auto-fmt;
+  re-`git add` and re-commit if `cargo fmt`/eof hooks modify files). Never push.
+* Confirm `cargo clippy --workspace --all-targets` and
+  `cargo nextest run --workspace` are clean before each commit.
+
+== Current state the next agent inherits
+
+* `crates/git-ents/src/signers.rs` — `AUTH_REF = "refs/meta/auth"`, `Auth`
+  doc (`signers: BTreeMap`), `Signer { fingerprint, key }`, implements
+  `git_store::MapDoc`. `load`/`store`/`allowed_signers`.
+* `crates/git-ents/src/checks.rs` — `CHECKS_REF`, `RUNS_NS`, `Checks`/`RunDoc`
+  (both `MapDoc`), `Check`, `Run`, `RunOutcome`, `CommitRuns`.
+* `crates/git-ents/src/main.rs` — the porcelain. `Set` trait drives generic
+  `list::<S>` / `remove::<S>`; `sync(remote, refname)` and
+  `push_signed(remote, refname, expected)` are the shared git plumbing. `add`
+  is per-noun. Top-level subcommands: `Auth` and `Checks`.
+* `crates/git-ents-server/src/verify.rs` — `pre_receive` calls `signers::load`;
+  it picks up the ref name purely through the `signers` module constant.
+* `crates/git-ents-server/src/web/` — `mod.rs` (routing into the web UI +
+  `RepoMeta` + `gather_meta` + shell/header/tab bar), `pages.rs` (per-tab
+  renderers, incl. the **stub** `issues_page` and read-only `settings_page`),
+  `render.rs` (the `Render` trait: structural `Peek` walk + `Signer`/`Run`
+  overrides), `git.rs` (git data layer incl. the new `git_output_capped`).
+* `crates/git-ents-server/src/http.rs` — the routing heuristics P6 targets:
+  `wants_web_ui`, `is_browse_route`, `is_service_request`, `is_git_path`,
+  `is_receive_pack`, `query_service`, all feeding the single `fallback(http::git)`.
+
+NOTE on **C4** (skipped): every page renders through `repo_shell`, whose header
+band + tab bar use branch/description/topics/releases on *every* tab. So
+`gather_meta`'s git calls already feed visible chrome; "gather lazily per tab"
+saves nothing. After P5 moves topics/description into `refs/meta/config`,
+re-check this — `gather_meta` should then read config once instead of shelling
+out, which is the real win.
+
+== P5 — work breakdown
+
+Do these as separate commits in roughly this order; tests between.
+
+=== P5.1 — Rename the trust ref to `refs/meta/members` (hard break)
+
+Files: `crates/git-ents/src/signers.rs`, `crates/git-ents/src/main.rs`,
+`crates/git-ents-server/tests/pre_receive.rs` (any fixtures), and the C1 test.
+
+* In `signers.rs`: rename `pub const AUTH_REF` → `pub const MEMBERS_REF` with
+  value `"refs/meta/members"`. Update its doc comment and the module docs (drop
+  "open bootstrap window" wording only if you keep the behavior — keep it; an
+  empty members ref still means open bootstrap).
+* **Subtree name decision:** the `Auth` struct's field is `signers`, which fixes
+  the on-disk subtree `signers/`. Since the trust list is being discarded
+  anyway, rename the field to `members` for coherence (struct `Members { members:
+  BTreeMap }`), OR keep `signers`. Either is fine — but whatever you pick, the
+  C1 fixed-format test (`loads_the_on_disk_signers_format`) MUST be updated to
+  build the matching subtree, and it is your guardrail that load still works.
+  Recommended: rename struct `Auth`→`Members`, keep the public `Signer` type
+  name (a member *is* one or more keys; the doc stays keyed by fingerprint→key).
+* In `main.rs`: every `AUTH_REF` → `MEMBERS_REF`. **Command-name decision:**
+  keep `git ents auth …` as the verb OR rename the subcommand group to
+  `git ents members …`. The plan names the *concept* "members"; renaming the
+  command is more honest but is user-facing porcelain churn. Recommended: rename
+  to `members` and update help text, since there is no compatibility to keep.
+  The `Set` impl `Signers` should point `REF` at `MEMBERS_REF`.
+* `pre_receive` needs no logic change — it flows through `signers::load`.
+* Grep the whole tree for `refs/meta/auth` and `AUTH_REF` to catch stragglers
+  (docs, comments, the README if it names the ref).
+
+=== P5.2 — Add `refs/meta/config`
+
+New file: `crates/git-ents/src/config.rs`; register `pub mod config;` in
+`crates/git-ents/src/lib.rs`.
+
+[source,rust]
+----
+pub const CONFIG_REF: &str = "refs/meta/config";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Facet)]
+pub struct Config {
+    pub description: String, // was git's .git/description file
+    pub homepage: String,    // "" when unset
+    pub topics: Vec<String>, // migrated off HEAD:.gitents/topics
+}
+----
+
+* This is NOT a `MapDoc` (mixed fields) — use `git_store::Store::load`/`store`
+  directly. Provide `pub fn load(repo) -> Result<Config, Error>` (absent ref →
+  `Config::default()`) and `pub fn store(repo, &Config)`.
+* Add the C1 fixed-format test. `Config` serializes as a tree with a
+  `description` blob, a `homepage` blob, and a `topics/` subtree (list) — verify
+  the actual on-disk shape `facet-git-tree` produces by writing one with
+  `Store::store` and inspecting `git ls-tree -r` in a scratch repo first, THEN
+  pin it with a hand-built fixture so the test is independent of the writer.
+  `write_meta_doc` only builds single-subtree map docs; you will need a small
+  extra builder (or extend `testutil`) for the `Config` shape. Match the
+  builder to whatever `facet-git-tree` actually emits.
+
+=== P5.3 — Migrate topics off the worktree, source chrome from config
+
+Files: `crates/git-ents-server/src/web/mod.rs`.
+
+* `gather_meta` currently reads `description` from the `description` file and
+  `topics` from `git cat-file -p HEAD:.gitents/topics` (≈ line 122). Replace
+  both with a single `git_ents::config::load(repo)` (off the async runtime via
+  `spawn_blocking`, like `load_checks` in `pages.rs`). `branch` and `releases`
+  stay as git calls.
+* Delete the `.gitents/topics` read entirely. After this there must be **no**
+  reference to `.gitents` anywhere (grep to confirm). This is the "no worktree
+  metadata" principle landing.
+* `RepoMeta.description`/`topics` now come from `Config`. Keep the
+  `homepage` available for the About card (P5.4 / overview aside).
+
+=== P5.4 — Settings as a projection
+
+Files: `crates/git-ents-server/src/web/pages.rs` (`settings_page`).
+
+* Make it a real projection over `members` (`signers::load`) + `config`
+  (`config::load`) + derived checks (`load_checks`) + releases. Sections:
+  General (description, homepage — now editable-shaped, but see below), Members
+  (the signer rows, reuse the `Render` impl for `Signer`), Features (derived,
+  read-only status — keep `feature_row`), Checks summary.
+* **Editing:** the plan's model is per-section save (one ref per form) or one
+  `git push --atomic`. A server-side write path does not exist yet and is a
+  larger lift. Minimum bar for P5: render the *real* values from the typed refs
+  (not stubs) and drop the "Not available yet"/"reflect current configuration"
+  read-only hedging where the data is now real. If you add write endpoints,
+  that is new routing (coordinate with P6) and needs members-gated auth — flag
+  it and confirm scope before building.
+* This removes the C5 dead wiring indirectly: see P5.5.
+
+=== P5.5 — Issues as typed meta-ref docs (fixes C5)
+
+New file: `crates/git-ents/src/issues.rs`; `pub mod issues;` in lib.rs.
+
+* Layout: `refs/meta/issues/<id>` per issue (self-contained; labels are plain
+  strings). Mirror the `runs` pattern in `checks.rs` (`RUNS_NS` + `Store::list`
+  + per-ref `Store::history`/`load`).
+* Suggested doc:
++
+[source,rust]
+----
+pub const ISSUES_NS: &str = "refs/meta/issues";
+
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct Issue {
+    pub title: String,
+    pub body: String,
+    pub state: String,        // "open" / "closed"
+    pub labels: Vec<String>,
+    pub author: String,
+}
+----
+* Provide `load(repo, id)`, `list(repo) -> Vec<(id, Issue)>` (via
+  `Store::list(ISSUES_NS)`), and a count helper. Add the C1 fixed-format test.
+* `gather_meta`: set `RepoMeta.issues` to the open-issue count (kills the
+  hardcoded `0` — C5). The tab-count rendering in `tab_bar` already keys off
+  `meta.issues > 0`.
+* `pages.rs::issues_page`: render the real list + an empty state, and derive the
+  label filter chips from the labels that actually exist. Drop the
+  "Not available yet" stubs for what is now backed by data.
+* Issue *creation/editing* is a write path — same caveat as P5.4; confirm scope
+  before adding endpoints.
+
+=== P5.6 — Rendering
+
+Files: `crates/git-ents-server/src/web/render.rs`.
+
+* `Config` and `Issue` should render through the existing `Render` structural
+  walk (`render_peek`). Add `impl Render for Config {}` / `impl Render for
+  Issue {}` and only override `render` if a field needs domain formatting (e.g.
+  labels as chips). The whole point of keeping `Render` (P4) is that new typed
+  docs render for free; lean on that before writing bespoke markup.
+
+== P6 — routing (do last, High risk)
+
+Files: `crates/git-ents-server/src/http.rs`, `crates/git-ents-server/src/main.rs`.
+
+* Today everything hangs off `fallback(http::git)` plus the overlapping string
+  heuristics `wants_web_ui` / `is_git_path` / `is_browse_route` /
+  `is_service_request` / `is_receive_pack` / `query_service`.
+* Target: explicit Axum routes for the git wire endpoints, and a separate web
+  router for the browser UI. The git wire surface is small and well-defined:
+  ** `GET  /:repo*/info/refs?service=git-upload-pack|git-receive-pack`
+  ** `POST /:repo*/git-upload-pack`
+  ** `POST /:repo*/git-receive-pack`
+  ** dumb-HTTP: `GET /:repo*/HEAD`, `GET /:repo*/objects/*`
+  These go to `http-backend`; `is_receive_pack` (push detection for auto-init)
+  stays but becomes a property of the matched route, not a string sniff.
+  Everything else is the web router → `crate::web::render`.
+* The nested-repo depth resolution (a repo is the shortest valid bare-repo
+  prefix, up to `MAX_REPO_DEPTH`) currently lives in `web::render` and
+  `repo_path`/`enclosing_repo`. Axum path patterns don't natively express
+  "shortest existing prefix", so you will likely keep a wildcard capture and
+  resolve the repo boundary inside the handler — but you can still split git vs.
+  web into two handlers/routers and delete the `wants_web_ui` disambiguation.
+* **Safety net:** `tests/server.rs` (push/clone round-trips, nested repos,
+  colliding pushes) and `tests/pre_receive.rs` are the contract. They must stay
+  green. Add route-level tests (`http::tests::routes_browser_gets`,
+  `validates_segments`) for any new explicit routes. Because a repo can be named
+  `tree`/`blob`/`commit`/`HEAD`, keep those collision tests — push/clone to a
+  repo named `commit` must still work.
+* `reconcile_head` (~45 lines fixing an unborn HEAD after first push) may shrink
+  once the matched route knows the pushed branch — opportunistic, not required.
+
+== Definition of done
+
+* `refs/meta/auth` no longer exists anywhere; `refs/meta/members` is the trust
+  root; `git ents` manages it.
+* `refs/meta/config` and `refs/meta/issues/<id>` exist as typed docs, each with a
+  fixed-format load test.
+* No `.gitents` reference remains in the tree.
+* Settings and Issues render real data, not stubs; `RepoMeta.issues` is live.
+* `http.rs` serves git via explicit routes; the heuristic predicates are gone or
+  reduced to route-local checks; all integration tests green.
+* `cargo nextest run --workspace` and `cargo clippy --workspace --all-targets`
+  clean; `prek` hooks pass.

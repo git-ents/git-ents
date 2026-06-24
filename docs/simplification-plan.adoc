@@ -16,6 +16,15 @@ and the `tempfile` dependency promotion (P3).
   loading a check set written before the change failed with "object … is not a
   tree" and broke every push. Reverted to a plain command map, which both
   restores compatibility with the live data and removes the indirection.
+* *Done and committed:* P8, P3, P7, P2, P1, P4 (no-op — `Render` kept), and
+  correctness items C1, C2, C3. C4 was *not* done — its premise no longer holds
+  (every page renders through `repo_shell`, so `gather_meta`'s git calls feed
+  visible chrome on every tab; re-evaluate after P5 moves topics/description
+  into `refs/meta/config`). C5 folds into P5 (Issues).
+* *Remaining:* P5 and P6, handed off in `docs/p5-p6-handoff.adoc`. Decision
+  recorded there: the `refs/meta/auth` → `refs/meta/members` rename is a *hard
+  break with no fallback* — the live trust list is discarded and re-pushed after
+  a redeploy.
 
 == Correctness / robustness findings (open)
 
