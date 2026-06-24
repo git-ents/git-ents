@@ -1,18 +1,17 @@
 //! `git ents` — the git-ents command-line porcelain.
 //!
-//! Today it carries a single command, `git ents auth`, for managing the
-//! authorized push signers recorded at `refs/meta/auth` and for configuring
-//! this client to produce the signed pushes the server requires. The signer
-//! commands read and write a remote's set by fetching `refs/meta/auth` into the
-//! local repository, editing it through [`git_ents::signers`], and pushing it
-//! back.
+//! Today it carries a single command, `git ents members`, for managing the
+//! repository members recorded at `refs/meta/members` and for configuring this
+//! client to produce the signed pushes the server requires. The member commands
+//! read and write a remote's set by fetching `refs/meta/members` into the local
+//! repository, editing it through [`git_ents::signers`], and pushing it back.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use clap::{Parser, Subcommand};
 use git_ents::checks::{self, CHECKS_REF, Check};
-use git_ents::signers::{self, AUTH_REF, Signer};
+use git_ents::signers::{self, MEMBERS_REF, Signer};
 
 #[derive(Parser)]
 #[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
@@ -23,8 +22,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Top {
-    /// Manage the authorized push signers at `refs/meta/auth`.
-    Auth {
+    /// Manage the repository members at `refs/meta/members`.
+    Members {
         #[command(subcommand)]
         action: Action,
     },
@@ -47,32 +46,32 @@ enum Action {
         #[arg(long)]
         local: bool,
     },
-    /// List the authorized signers on a remote.
+    /// List the members on a remote.
     List {
-        /// Remote to read `refs/meta/auth` from.
+        /// Remote to read `refs/meta/members` from.
         #[arg(default_value = "origin")]
         remote: String,
     },
-    /// Add a signer to a remote's set and push the update.
+    /// Add a member to a remote's set and push the update.
     Add {
-        /// Remote whose `refs/meta/auth` to update.
+        /// Remote whose `refs/meta/members` to update.
         #[arg(default_value = "origin")]
         remote: String,
         /// Key to authorize; defaults to `user.signingkey`.
         #[arg(long)]
         key: Option<PathBuf>,
     },
-    /// Remove a signer from a remote's set and push the update.
+    /// Remove a member from a remote's set and push the update.
     Remove {
-        /// Fingerprint (`signers/<name>`) to drop.
+        /// Fingerprint (`members/<name>`) to drop.
         fingerprint: String,
-        /// Remote whose `refs/meta/auth` to update.
+        /// Remote whose `refs/meta/members` to update.
         #[arg(default_value = "origin")]
         remote: String,
     },
-    /// Report whether a key is authorized and the client is configured.
+    /// Report whether a key is a member and the client is configured.
     Check {
-        /// Remote to read `refs/meta/auth` from.
+        /// Remote to read `refs/meta/members` from.
         #[arg(default_value = "origin")]
         remote: String,
         /// Key to look for; defaults to `user.signingkey`.
@@ -112,7 +111,7 @@ enum ChecksAction {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Top::Auth { action } => run_auth(action),
+        Top::Members { action } => run_members(action),
         Top::Checks { action } => run_checks(action),
     };
     match result {
@@ -124,7 +123,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_auth(action: Action) -> Result<(), String> {
+fn run_members(action: Action) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
         Action::List { remote } => list::<Signers>(&remote),
@@ -171,12 +170,12 @@ trait Set {
     fn row_value(key: &str, value: &str) -> String;
 }
 
-/// The authorized signer set at `refs/meta/auth`.
+/// The repository member set at `refs/meta/members`.
 struct Signers;
 
 impl Set for Signers {
-    const REF: &'static str = AUTH_REF;
-    const NOUN: &'static str = "signer";
+    const REF: &'static str = MEMBERS_REF;
+    const NOUN: &'static str = "member";
 
     fn load(repo: &Path) -> Result<Vec<(String, String)>, String> {
         Ok(signers::load(repo)
@@ -198,7 +197,7 @@ impl Set for Signers {
     }
 
     fn empty_listing(remote: &str) -> String {
-        format!("no authorized signers on {remote} (open bootstrap window)")
+        format!("no members on {remote} (open bootstrap window)")
     }
 
     fn row_value(_key: &str, value: &str) -> String {
@@ -314,7 +313,7 @@ fn setup(key: Option<&Path>, local: bool) -> Result<(), String> {
         scope.trim_start_matches('-')
     );
     println!("signing key: {signing_key} ({fingerprint})");
-    println!("authorize it on a server with `git ents auth add <remote>`");
+    println!("authorize it on a server with `git ents members add <remote>`");
     Ok(())
 }
 
@@ -440,13 +439,13 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    let expected = sync(remote, AUTH_REF)?;
+    let expected = sync(remote, MEMBERS_REF)?;
     let mut signers = signers::load(&repo).map_err(|error| error.to_string())?;
     if signers
         .iter()
         .any(|signer| same_key(&signer.key, &public_key))
     {
-        println!("{fingerprint} is already authorized");
+        println!("{fingerprint} is already a member");
         return Ok(());
     }
     signers.push(Signer {
@@ -454,7 +453,7 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
         key: public_key,
     });
     signers::store(&repo, &signers).map_err(|error| error.to_string())?;
-    push_signed(remote, AUTH_REF, expected.as_deref())?;
+    push_signed(remote, MEMBERS_REF, expected.as_deref())?;
     println!("authorized {fingerprint}");
     Ok(())
 }
@@ -464,17 +463,17 @@ fn check(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    sync(remote, AUTH_REF)?;
+    sync(remote, MEMBERS_REF)?;
     let signers = signers::load(&repo).map_err(|error| error.to_string())?;
     if signers.is_empty() {
-        println!("{remote}: open bootstrap window (no signers yet)");
+        println!("{remote}: open bootstrap window (no members yet)");
     } else if signers
         .iter()
         .any(|signer| same_key(&signer.key, &public_key))
     {
-        println!("{remote}: {fingerprint} is authorized");
+        println!("{remote}: {fingerprint} is a member");
     } else {
-        println!("{remote}: {fingerprint} is NOT authorized");
+        println!("{remote}: {fingerprint} is NOT a member");
     }
     println!(
         "client: gpg.format={}, user.signingkey={}, push.gpgSign={}",
@@ -587,7 +586,7 @@ fn expand_tilde(value: &str) -> PathBuf {
 
 /// The key's MD5 fingerprint in colon form (`aa:bb:…`). Colon-separated pairs
 /// are filesystem-safe, unlike the slashes in a base64 SHA256 fingerprint that
-/// would split the `signers/<name>` entry into a subtree.
+/// would split the `members/<name>` entry into a subtree.
 fn fingerprint(public_key: &str) -> Result<String, String> {
     let scratch =
         tempfile::tempdir().map_err(|error| format!("could not create temp dir: {error}"))?;

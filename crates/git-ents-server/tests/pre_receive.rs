@@ -95,10 +95,10 @@ fn server_repo(base: &Path, authorized: &[&Path]) -> PathBuf {
             let oid = hash_object(&repo, key.as_bytes());
             tree_entries.push_str(&format!("100644 blob {oid}\tkey-{index}\n"));
         }
-        let signers_tree = mktree(&repo, &tree_entries);
-        let root_tree = mktree(&repo, &format!("040000 tree {signers_tree}\tsigners\n"));
-        let commit = ok(&repo, "git", &["commit-tree", &root_tree, "-m", "auth"]);
-        ok(&repo, "git", &["update-ref", "refs/meta/auth", &commit]);
+        let members_tree = mktree(&repo, &tree_entries);
+        let root_tree = mktree(&repo, &format!("040000 tree {members_tree}\tmembers\n"));
+        let commit = ok(&repo, "git", &["commit-tree", &root_tree, "-m", "members"]);
+        ok(&repo, "git", &["update-ref", "refs/meta/members", &commit]);
     }
     repo
 }

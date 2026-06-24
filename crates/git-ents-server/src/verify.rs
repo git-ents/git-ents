@@ -1,9 +1,9 @@
 //! The `pre-receive` verifier: a git hook that gates pushes on a signature from
-//! an authorized signer.
+//! a member.
 //!
-//! When the trust list at `refs/meta/auth` is empty the server is still in its
-//! open bootstrap window and every push is allowed, so the first signer can be
-//! pushed in. Once any signer is listed, a push must carry a signed-push
+//! When the trust list at `refs/meta/members` is empty the server is still in
+//! its open bootstrap window and every push is allowed, so the first member can
+//! be pushed in. Once any member is listed, a push must carry a signed-push
 //! certificate (`git push --signed`) whose anti-replay nonce git accepted and
 //! whose signature verifies against one of those keys.
 

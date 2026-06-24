@@ -814,18 +814,18 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
 
                 div.card {
                     div.card-header {
-                        "Authorized signers"
+                        "Members"
                         @if let Ok(signers) = &signers { span.count { (signers.len()) } }
                     }
                     p.shell-note {
-                        "Keys on " code { "refs/meta/auth" } " whose signed pushes are accepted "
-                        "(" code { "git ents auth list" } ")."
+                        "Keys on " code { "refs/meta/members" } " whose signed pushes are accepted "
+                        "(" code { "git ents members list" } ")."
                     }
                     @match &signers {
-                        Err(err) => div.card-row.muted { "Could not read signers: " (err) }
+                        Err(err) => div.card-row.muted { "Could not read members: " (err) }
                         Ok(signers) if signers.is_empty() => {
                             div.card-row.muted {
-                                "No authorized signers — pushes are open until the first key is added."
+                                "No members — pushes are open until the first key is added."
                             }
                         }
                         Ok(signers) => {

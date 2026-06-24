@@ -1,37 +1,37 @@
-//! The authorized signer set, sourced from the `refs/meta/auth` ref.
+//! The repository's members, sourced from the `refs/meta/members` ref.
 //!
-//! Push authentication trusts exactly one place: the `refs/meta/auth` ref. Its
-//! tree is an [`Auth`] document mapping each fingerprint to its OpenSSH public
-//! key. The document is read and written through [`git_store`], so the trust
-//! list is a typed value that lives in git — versioned, auditable, and itself
-//! pushable.
+//! Push authentication trusts exactly one place: the `refs/meta/members` ref.
+//! Its tree is a [`Members`] document mapping each fingerprint to its OpenSSH
+//! public key. A member *is* one or more keys whose signed pushes are accepted.
+//! The document is read and written through [`git_store`], so the trust list is
+//! a typed value that lives in git — versioned, auditable, and itself pushable.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
 
-/// The ref whose tree holds the authorized signer set.
-pub const AUTH_REF: &str = "refs/meta/auth";
+/// The ref whose tree holds the member set — the push trust root.
+pub const MEMBERS_REF: &str = "refs/meta/members";
 
-/// The authorization document stored at [`AUTH_REF`]: its `signers/` subtree
+/// The membership document stored at [`MEMBERS_REF`]: its `members/` subtree
 /// maps each fingerprint to the OpenSSH public key held there.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct Auth {
-    signers: BTreeMap<String, String>,
+struct Members {
+    members: BTreeMap<String, String>,
 }
 
-impl git_store::MapDoc for Auth {
+impl git_store::MapDoc for Members {
     fn from_entries(entries: BTreeMap<String, String>) -> Self {
-        Self { signers: entries }
+        Self { members: entries }
     }
 
     fn into_entries(self) -> BTreeMap<String, String> {
-        self.signers
+        self.members
     }
 }
 
-/// One authorized signer recorded in [`AUTH_REF`].
+/// One member's authorized signing key recorded in [`MEMBERS_REF`].
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Signer {
     /// The key it is stored under — its fingerprint.
@@ -40,22 +40,22 @@ pub struct Signer {
     pub key: String,
 }
 
-/// A failure reading or writing the signer set.
+/// A failure reading or writing the member set.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The signer set could not be read from or written to its ref.
+    /// The member set could not be read from or written to its ref.
     #[error(transparent)]
     Store(#[from] git_store::Error),
 }
 
-/// Load the authorized signers recorded at [`AUTH_REF`] in `repo`.
+/// Load the members recorded at [`MEMBERS_REF`] in `repo`.
 ///
 /// An absent ref yields an empty set, as on a fresh server whose trust list has
 /// not been pushed yet. A present but unreadable ref is an error so callers can
-/// fail closed rather than mistake corruption for "no signers".
+/// fail closed rather than mistake corruption for "no members".
 pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
     Ok(git_store::Store::open(repo)?
-        .load_entries::<Auth>(AUTH_REF)?
+        .load_entries::<Members>(MEMBERS_REF)?
         .into_iter()
         .map(|(fingerprint, key)| Signer {
             fingerprint,
@@ -64,16 +64,17 @@ pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
         .collect())
 }
 
-/// Write `signers` to [`AUTH_REF`], replacing any existing set, as a new commit.
+/// Write `signers` to [`MEMBERS_REF`], replacing any existing set, as a new
+/// commit.
 pub fn store(repo: &Path, signers: &[Signer]) -> Result<(), Error> {
     let entries = signers
         .iter()
         .map(|signer| (signer.fingerprint.clone(), signer.key.clone()))
         .collect();
-    git_store::Store::open(repo)?.store_entries::<Auth>(
-        AUTH_REF,
+    git_store::Store::open(repo)?.store_entries::<Members>(
+        MEMBERS_REF,
         entries,
-        "Update authorized signers",
+        "Update members",
     )?;
     Ok(())
 }
@@ -142,22 +143,22 @@ mod tests {
     }
 
     #[test]
-    fn empty_when_the_auth_ref_is_absent() {
+    fn empty_when_the_members_ref_is_absent() {
         let repo = unique_repo();
         assert!(load(&repo).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
-    fn loads_the_on_disk_signers_format() {
-        // A fixture written as the real `signers/<fingerprint>` blob layout must
-        // keep loading; this fails if the Auth document's shape changes
+    fn loads_the_on_disk_members_format() {
+        // A fixture written as the real `members/<fingerprint>` blob layout must
+        // keep loading; this fails if the Members document's shape changes
         // incompatibly with data already on a ref.
         let repo = unique_repo();
         write_meta_doc(
             &repo,
-            AUTH_REF,
-            "signers",
+            MEMBERS_REF,
+            "members",
             &[("aa:bb:cc", KEY_A), ("dd:ee:ff", KEY_B)],
         );
         let mut loaded = load(&repo).unwrap();
