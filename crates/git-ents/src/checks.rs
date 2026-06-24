@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
+use git_store::MapDoc as _;
 
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";
@@ -22,6 +23,16 @@ pub const CHECKS_REF: &str = "refs/meta/checks";
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Checks {
     checks: BTreeMap<String, String>,
+}
+
+impl git_store::MapDoc for Checks {
+    fn from_entries(entries: BTreeMap<String, String>) -> Self {
+        Self { checks: entries }
+    }
+
+    fn into_entries(self) -> BTreeMap<String, String> {
+        self.checks
+    }
 }
 
 /// One configured check recorded in [`CHECKS_REF`].
@@ -47,12 +58,8 @@ pub enum Error {
 /// been pushed yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no checks configured".
 pub fn load(repo: &Path) -> Result<Vec<Check>, Error> {
-    let store = git_store::Store::open(repo)?;
-    let Some(document) = store.load::<Checks>(CHECKS_REF)? else {
-        return Ok(Vec::new());
-    };
-    Ok(document
-        .checks
+    Ok(git_store::Store::open(repo)?
+        .load_entries::<Checks>(CHECKS_REF)?
         .into_iter()
         .map(|(name, command)| Check {
             name,
@@ -64,13 +71,11 @@ pub fn load(repo: &Path) -> Result<Vec<Check>, Error> {
 /// Write `checks` to [`CHECKS_REF`], replacing any existing set, as a new
 /// commit.
 pub fn store(repo: &Path, checks: &[Check]) -> Result<(), Error> {
-    let document = Checks {
-        checks: checks
-            .iter()
-            .map(|check| (check.name.clone(), check.command.clone()))
-            .collect(),
-    };
-    git_store::Store::open(repo)?.store(CHECKS_REF, &document, "Update checks")?;
+    let entries = checks
+        .iter()
+        .map(|check| (check.name.clone(), check.command.clone()))
+        .collect();
+    git_store::Store::open(repo)?.store_entries::<Checks>(CHECKS_REF, entries, "Update checks")?;
     Ok(())
 }
 
@@ -86,6 +91,16 @@ pub const RUNS_NS: &str = "refs/meta/runs";
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct RunDoc {
     results: BTreeMap<String, String>,
+}
+
+impl git_store::MapDoc for RunDoc {
+    fn from_entries(entries: BTreeMap<String, String>) -> Self {
+        Self { results: entries }
+    }
+
+    fn into_entries(self) -> BTreeMap<String, String> {
+        self.results
+    }
 }
 
 /// One check's outcome within a [`Run`].
@@ -163,7 +178,7 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, Error> {
             .map(|(at, doc)| Run {
                 at,
                 results: doc
-                    .results
+                    .into_entries()
                     .into_iter()
                     .map(|(name, outcome)| RunOutcome { name, outcome })
                     .collect(),
@@ -179,12 +194,12 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, Error> {
 
 /// Build a [`RunDoc`] from a run's `outcomes`.
 fn run_doc(outcomes: &[RunOutcome]) -> RunDoc {
-    RunDoc {
-        results: outcomes
+    RunDoc::from_entries(
+        outcomes
             .iter()
             .map(|outcome| (outcome.name.clone(), outcome.outcome.clone()))
             .collect(),
-    }
+    )
 }
 
 #[cfg(test)]

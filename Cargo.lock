@@ -1059,6 +1059,7 @@ dependencies = [
  "facet",
  "facet-git-tree",
  "gix",
+ "tempfile",
  "thiserror",
 ]
 

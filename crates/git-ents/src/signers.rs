@@ -21,6 +21,16 @@ struct Auth {
     signers: BTreeMap<String, String>,
 }
 
+impl git_store::MapDoc for Auth {
+    fn from_entries(entries: BTreeMap<String, String>) -> Self {
+        Self { signers: entries }
+    }
+
+    fn into_entries(self) -> BTreeMap<String, String> {
+        self.signers
+    }
+}
+
 /// One authorized signer recorded in [`AUTH_REF`].
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Signer {
@@ -44,12 +54,8 @@ pub enum Error {
 /// not been pushed yet. A present but unreadable ref is an error so callers can
 /// fail closed rather than mistake corruption for "no signers".
 pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
-    let store = git_store::Store::open(repo)?;
-    let Some(auth) = store.load::<Auth>(AUTH_REF)? else {
-        return Ok(Vec::new());
-    };
-    Ok(auth
-        .signers
+    Ok(git_store::Store::open(repo)?
+        .load_entries::<Auth>(AUTH_REF)?
         .into_iter()
         .map(|(fingerprint, key)| Signer {
             fingerprint,
@@ -60,13 +66,15 @@ pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
 
 /// Write `signers` to [`AUTH_REF`], replacing any existing set, as a new commit.
 pub fn store(repo: &Path, signers: &[Signer]) -> Result<(), Error> {
-    let auth = Auth {
-        signers: signers
-            .iter()
-            .map(|signer| (signer.fingerprint.clone(), signer.key.clone()))
-            .collect(),
-    };
-    git_store::Store::open(repo)?.store(AUTH_REF, &auth, "Update authorized signers")?;
+    let entries = signers
+        .iter()
+        .map(|signer| (signer.fingerprint.clone(), signer.key.clone()))
+        .collect();
+    git_store::Store::open(repo)?.store_entries::<Auth>(
+        AUTH_REF,
+        entries,
+        "Update authorized signers",
+    )?;
     Ok(())
 }
 

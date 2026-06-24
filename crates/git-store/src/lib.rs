@@ -9,6 +9,7 @@
 //! check set, and the run log all share.
 
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
@@ -40,6 +41,19 @@ pub enum Error {
     /// A git object could not be read or written.
     #[error("git object operation failed: {0}")]
     Object(String),
+}
+
+/// A meta-ref document that is a single named map of string keys to string
+/// values — the shape the signer set, the check set, and a run's outcomes all
+/// share. The wrapping struct's one field fixes the on-disk subtree name
+/// (`signers/`, `checks/`, `results/`), so each document stays its own type;
+/// this trait is only the bridge that lets them share the load/store plumbing
+/// in [`Store::load_entries`] and [`Store::store_entries`].
+pub trait MapDoc: for<'a> Facet<'a> {
+    /// Wrap `entries` as the document.
+    fn from_entries(entries: BTreeMap<String, String>) -> Self;
+    /// The document's entries, consuming it.
+    fn into_entries(self) -> BTreeMap<String, String>;
 }
 
 /// A repository's typed `refs/meta/*` store.
@@ -102,6 +116,26 @@ impl Store {
         };
         let commit = self.write_commit(tree, parents, message)?;
         self.set_ref(refname, commit)
+    }
+
+    /// Load the [`MapDoc`] on `refname` as its `(key, value)` entries, or an
+    /// empty vec when the ref is absent. Centralizes the "missing ref reads
+    /// empty" policy the set documents share.
+    pub fn load_entries<T: MapDoc>(&self, refname: &str) -> Result<Vec<(String, String)>, Error> {
+        Ok(self
+            .load::<T>(refname)?
+            .map(|doc| doc.into_entries().into_iter().collect())
+            .unwrap_or_default())
+    }
+
+    /// Store `entries` as the [`MapDoc`] `T` on `refname` as a new commit.
+    pub fn store_entries<T: MapDoc>(
+        &self,
+        refname: &str,
+        entries: BTreeMap<String, String>,
+        message: &str,
+    ) -> Result<(), Error> {
+        self.store(refname, &T::from_entries(entries), message)
     }
 
     /// The documents on `refname`'s commit chain as `(committer date, value)`
@@ -216,4 +250,98 @@ struct CommitFacts {
     tree: ObjectId,
     parents: Vec<ObjectId>,
     seconds: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::let_underscore_must_use,
+        reason = "unit test"
+    )]
+
+    use std::process::Command;
+
+    use super::*;
+
+    /// A single-field map document, the shape [`MapDoc`] abstracts over.
+    #[derive(Facet)]
+    struct Bag {
+        items: BTreeMap<String, String>,
+    }
+
+    impl MapDoc for Bag {
+        fn from_entries(entries: BTreeMap<String, String>) -> Self {
+            Self { items: entries }
+        }
+
+        fn into_entries(self) -> BTreeMap<String, String> {
+            self.items
+        }
+    }
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        dir
+    }
+
+    fn entries(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn absent_ref_loads_no_entries() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        assert!(
+            store
+                .load_entries::<Bag>("refs/meta/bag")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn store_entries_round_trips() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let written = entries(&[("a", "1"), ("b", "2")]);
+        store
+            .store_entries::<Bag>("refs/meta/bag", written.clone(), "write")
+            .unwrap();
+        let loaded: BTreeMap<String, String> = store
+            .load_entries::<Bag>("refs/meta/bag")
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(loaded, written);
+    }
+
+    #[test]
+    fn store_entries_replaces_the_previous_set() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        store
+            .store_entries::<Bag>("refs/meta/bag", entries(&[("a", "1")]), "write")
+            .unwrap();
+        store
+            .store_entries::<Bag>("refs/meta/bag", entries(&[("b", "2")]), "write")
+            .unwrap();
+        let loaded: BTreeMap<String, String> = store
+            .load_entries::<Bag>("refs/meta/bag")
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(loaded, entries(&[("b", "2")]));
+    }
 }
