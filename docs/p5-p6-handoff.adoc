@@ -3,12 +3,19 @@
 :toc:
 :toclevels: 2
 
-NOTE: This continues `docs/simplification-plan.adoc`. P8, P3, P7, P2, P1, P4
-(no-op), and correctness items C1/C2/C3 are *done and committed*. C4 was
-*skipped* (its premise no longer holds — see below). C5 folds into P5. What
-remains is *P5* (make Settings & Issues functional via typed meta refs) and
-*P6* (routing). Read the simplification plan's "New direction" section first;
-the layout decisions there are settled and this document assumes them.
+NOTE: *Complete.* P5 (members rename, `refs/meta/config`, topics migration,
+Settings projection, `refs/meta/issues/<id>`, rendering) and P6 (explicit
+`get`/`post` wire routes) are all done and committed; every item in the
+Definition of done below holds. This document is kept as the record of the
+work and the decisions behind it.
+
+NOTE: This continued `docs/simplification-plan.adoc`. P8, P3, P7, P2, P1, P4
+(no-op), and correctness items C1/C2/C3 were *done and committed* before this
+handoff. C4 was *skipped* (its premise no longer holds — see below). C5 folded
+into P5. The remaining work was *P5* (make Settings & Issues functional via
+typed meta refs) and *P6* (routing); both are now landed. Read the
+simplification plan's "New direction" section first; the layout decisions there
+are settled and this document assumes them.
 
 == Decisions already made (do not re-litigate)
 

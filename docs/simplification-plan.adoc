@@ -21,10 +21,17 @@ and the `tempfile` dependency promotion (P3).
   (every page renders through `repo_shell`, so `gather_meta`'s git calls feed
   visible chrome on every tab; re-evaluate after P5 moves topics/description
   into `refs/meta/config`). C5 folds into P5 (Issues).
-* *Remaining:* P5 and P6, handed off in `docs/p5-p6-handoff.adoc`. Decision
-  recorded there: the `refs/meta/auth` → `refs/meta/members` rename is a *hard
-  break with no fallback* — the live trust list is discarded and re-pushed after
-  a redeploy.
+* *Done and committed:* P5 and P6 (handed off in `docs/p5-p6-handoff.adoc`).
+  The `refs/meta/auth` → `refs/meta/members` rename landed as a *hard break with
+  no fallback* — the live trust list is discarded and re-pushed after a
+  redeploy. `refs/meta/config` and `refs/meta/issues/<id>` are now typed
+  documents (each with a fixed-format load test); no `.gitents` worktree
+  metadata remains; Settings and Issues render real data through the `Render`
+  trait; and the git wire endpoints are served by explicit `get`/`post` routes
+  rather than the predicate-laden catch-all. C4 stays skipped — `gather_meta`
+  now reads `config` once instead of shelling out for description/topics, which
+  was its only real win.
+* *Remaining:* nothing. The plan is fully executed.
 
 == Correctness / robustness findings (open)
 
