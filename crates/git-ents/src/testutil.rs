@@ -33,6 +33,15 @@ pub(crate) fn unique_repo(label: &str) -> PathBuf {
         .status()
         .unwrap();
     assert!(status.success());
+    for (key, value) in [("user.email", "test@example.com"), ("user.name", "Test")] {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["config", key, value])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
     dir
 }
 
