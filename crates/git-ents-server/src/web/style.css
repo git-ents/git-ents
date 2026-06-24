@@ -322,7 +322,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .subtab .icon { width: 13px; height: 13px; }
 .subtab.active .icon { color: var(--s-func); }
 
-.settings { max-width: 46rem; }
+.settings { max-width: 50rem; margin: 0 auto; }
 .setting-label { flex-shrink: 0; min-width: 11rem; font-weight: 600; font-family: var(--font-sans); }
 .feature-row { display: flex; align-items: center; gap: 1rem; padding: .85rem 1.1rem; }
 .feature-row + .feature-row { border-top: 1px solid var(--color-border); }
