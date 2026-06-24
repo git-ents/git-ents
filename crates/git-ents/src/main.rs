@@ -460,8 +460,10 @@ fn sync_auth(remote: &str) -> Result<Option<String>, String> {
 /// `--force-if-includes`, makes the update a clean compare-and-swap: it is
 /// rejected rather than clobbering a set someone changed since the fetch.
 fn push_auth(remote: &str, expected: Option<&str>) -> Result<(), String> {
-    const ZERO: &str = "0000000000000000000000000000000000000000";
-    let lease = format!("--force-with-lease={AUTH_REF}:{}", expected.unwrap_or(ZERO));
+    let lease = format!(
+        "--force-with-lease={AUTH_REF}:{}",
+        expected.unwrap_or(git_ents::ZERO_OID)
+    );
     git_run(&["push", "--force-if-includes", &lease, remote, AUTH_REF])
 }
 
@@ -485,10 +487,9 @@ fn sync_checks(remote: &str) -> Result<Option<String>, String> {
 /// config. As with the signer set, the update is a compare-and-swap against
 /// `expected` so a set someone changed since the fetch is not clobbered.
 fn push_checks(remote: &str, expected: Option<&str>) -> Result<(), String> {
-    const ZERO: &str = "0000000000000000000000000000000000000000";
     let lease = format!(
         "--force-with-lease={CHECKS_REF}:{}",
-        expected.unwrap_or(ZERO)
+        expected.unwrap_or(git_ents::ZERO_OID)
     );
     git_run(&["push", "--force-if-includes", &lease, remote, CHECKS_REF])
 }

@@ -260,7 +260,6 @@ struct Update<'a> {
 /// the `refs/meta/*` control refs (auth, the check set itself) are skipped — the
 /// checks gate ordinary content, not the trust plumbing.
 fn parse_updates(input: &str) -> Vec<Update<'_>> {
-    const ZERO: &str = "0000000000000000000000000000000000000000";
     input
         .lines()
         .filter_map(|line| {
@@ -268,7 +267,7 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
             let _old = fields.next()?;
             let new = fields.next()?;
             let ref_name = fields.next()?;
-            if new == ZERO || ref_name.starts_with("refs/meta/") {
+            if new == git_ents::ZERO_OID || ref_name.starts_with("refs/meta/") {
                 None
             } else {
                 Some(Update { new, ref_name })

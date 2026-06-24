@@ -3,14 +3,7 @@
 pub mod checks;
 pub mod signers;
 
-/// Returns the tagline describing what the ents do.
-///
-/// # Examples
-///
-/// ```
-/// assert_eq!(git_ents::tagline(), "Helpful guardians of your git trees.");
-/// ```
-#[must_use]
-pub fn tagline() -> &'static str {
-    "Helpful guardians of your git trees."
-}
+/// The all-zero object id git uses for a created or deleted ref in a push
+/// (`<old> <new> <ref>` lines): a zero `<old>` is a create, a zero `<new>` a
+/// delete.
+pub const ZERO_OID: &str = "0000000000000000000000000000000000000000";
