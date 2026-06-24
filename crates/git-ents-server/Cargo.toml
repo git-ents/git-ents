@@ -20,11 +20,11 @@ gix-date = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 maud = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

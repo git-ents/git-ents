@@ -8,9 +8,8 @@
 //! whose signature verifies against one of those keys.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use git_ents::signers::{self, Signer};
 
@@ -50,7 +49,7 @@ fn verify_certificate(authorized: &[Signer], certificate: &str) -> Result<(), St
     let (payload, signature) = certificate.split_at(split);
     let principal = signer_principal(certificate);
 
-    let workdir = TempDir::new()?;
+    let workdir = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
     let allowed_path = workdir.path().join("allowed_signers");
     let signature_path = workdir.path().join("cert.sig");
     write_file(
@@ -118,30 +117,4 @@ fn cat_blob(repo: &Path, oid: &str) -> Result<String, String> {
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
-}
-
-/// A uniquely named temporary directory removed when dropped, holding the short
-/// files `ssh-keygen` needs to read from disk.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Result<Self, String> {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("git-ents-verify-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create temp dir: {e}"))?;
-        Ok(Self(dir))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        match std::fs::remove_dir_all(&self.0) {
-            Ok(()) | Err(_) => {}
-        }
-    }
 }

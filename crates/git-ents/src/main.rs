@@ -9,7 +9,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Parser, Subcommand};
 use git_ents::checks::{self, CHECKS_REF, Check};
@@ -561,7 +560,8 @@ fn expand_tilde(value: &str) -> PathBuf {
 /// are filesystem-safe, unlike the slashes in a base64 SHA256 fingerprint that
 /// would split the `signers/<name>` entry into a subtree.
 fn fingerprint(public_key: &str) -> Result<String, String> {
-    let scratch = Scratch::new()?;
+    let scratch =
+        tempfile::tempdir().map_err(|error| format!("could not create temp dir: {error}"))?;
     let path = scratch.path().join("key.pub");
     std::fs::write(&path, public_key).map_err(|error| format!("could not stage key: {error}"))?;
     let output = Command::new("ssh-keygen")
@@ -657,30 +657,4 @@ fn git_capture(args: &[&str]) -> Result<String, String> {
         ));
     }
     String::from_utf8(output.stdout).map_err(|_invalid| "git produced non-UTF-8 output".to_owned())
-}
-
-/// A uniquely named temporary directory removed when dropped.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new() -> Result<Self, String> {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("git-ents-cli-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir)
-            .map_err(|error| format!("could not create temp dir: {error}"))?;
-        Ok(Self(dir))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        match std::fs::remove_dir_all(&self.0) {
-            Ok(()) | Err(_) => {}
-        }
-    }
 }

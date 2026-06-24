@@ -1025,6 +1025,7 @@ dependencies = [
  "clap",
  "facet",
  "git-store",
+ "tempfile",
  "thiserror",
 ]
 

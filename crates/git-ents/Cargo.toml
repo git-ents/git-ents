@@ -9,6 +9,7 @@ license.workspace = true
 clap = { workspace = true }
 facet = { workspace = true }
 git-store = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
