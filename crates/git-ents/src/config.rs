@@ -22,7 +22,8 @@ pub struct Config {
     pub description: String,
     /// The repository's homepage URL; `""` when unset.
     pub homepage: String,
-    /// The repository's topics (migrated off the tracked `HEAD:.gitents/topics`).
+    /// The repository's topics, members-gated metadata rather than worktree
+    /// content.
     pub topics: Vec<String>,
 }
 

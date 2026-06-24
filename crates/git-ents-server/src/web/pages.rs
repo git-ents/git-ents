@@ -82,6 +82,11 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
             }
             div.card {
                 div.card-header { "About" }
+                @if let Some(homepage) = &meta.homepage {
+                    div.aside-row {
+                        a href=(homepage) rel="noreferrer" { (homepage) }
+                    }
+                }
                 @if let Some((lang, color, _)) = langs.first() {
                     div.aside-row {
                         span.dot style={ "background:" (color) } {}

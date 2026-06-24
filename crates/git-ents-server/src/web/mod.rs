@@ -24,7 +24,7 @@ use crate::AppState;
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo, valid_segment};
 
 use self::assets::{COPY_SCRIPT, FONTS, STYLE};
-use self::git::{discover_repos, git_output, git_output_bytes};
+use self::git::{discover_repos, git_output};
 use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, icon_search};
 
 /// Render the page for `path`: the repository index at the root, a repository
@@ -97,6 +97,7 @@ struct RepoMeta {
     rel: String,
     branch: Option<String>,
     description: Option<String>,
+    homepage: Option<String>,
     topics: Vec<String>,
     releases: usize,
     issues: usize,
@@ -115,20 +116,15 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         .await
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    let description = std::fs::read_to_string(repo.join("description"))
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty() && !s.starts_with("Unnamed repository"));
-    let topics = git_output_bytes(repo, &["cat-file", "-p", "HEAD:.gitents/topics"])
-        .await
-        .map(|b| {
-            String::from_utf8_lossy(&b)
-                .split([',', '\n', ' ', '\t'])
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let config = load_config(repo).await.unwrap_or_default();
+    let description = Some(config.description.trim().to_owned()).filter(|s| !s.is_empty());
+    let homepage = Some(config.homepage.trim().to_owned()).filter(|s| !s.is_empty());
+    let topics = config
+        .topics
+        .into_iter()
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .collect();
     let releases = git_output(repo, &["tag", "--list"])
         .await
         .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
@@ -137,10 +133,20 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
         rel: rel.to_owned(),
         branch,
         description,
+        homepage,
         topics,
         releases,
         issues: 0,
     }
+}
+
+/// Load the repository's `refs/meta/config` document off the async runtime.
+async fn load_config(repo: &Path) -> Option<git_ents::config::Config> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::config::load(&repo))
+        .await
+        .ok()?
+        .ok()
 }
 
 /// Wrap a repository view in the shared header band and tab bar, then the page
