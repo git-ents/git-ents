@@ -866,7 +866,7 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                         @if let Ok(signers) = &signers { span.count { (signers.len()) } }
                     }
                     p.shell-note {
-                        "Keys on " code { "refs/meta/members" } " whose signed pushes are accepted "
+                        "People on " code { "refs/meta/member/*" } " whose signed pushes are accepted "
                         "(" code { "git ents members list" } ")."
                     }
                     @match &signers {
@@ -877,8 +877,8 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                             }
                         }
                         Ok(signers) => {
-                            @for signer in signers {
-                                (signer.render())
+                            @for member in signers {
+                                (member.render())
                             }
                         }
                     }
@@ -910,11 +910,11 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
-/// Load the authorized signer set off the async runtime, since `signers::load`
-/// shells out to git and reads the object database synchronously.
-async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Signer>, String> {
+/// Load the member set off the async runtime, since `signers::load_all` shells
+/// out to git and reads the object database synchronously.
+async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Member>, String> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::signers::load(&repo))
+    tokio::task::spawn_blocking(move || git_ents::signers::load_all(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())

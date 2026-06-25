@@ -1,17 +1,21 @@
 //! `git ents` — the git-ents command-line porcelain.
 //!
-//! Today it carries a single command, `git ents members`, for managing the
-//! repository members recorded at `refs/meta/members` and for configuring this
-//! client to produce the signed pushes the server requires. The member commands
-//! read and write a remote's set by fetching `refs/meta/members` into the local
-//! repository, editing it through [`git_ents::signers`], and pushing it back.
+//! It carries `git ents members` for managing the repository members recorded
+//! one-ref-per-person at `refs/meta/member/<username>`, `git ents account` for
+//! the account identity at `refs/meta/account`, `git ents checks` for the check
+//! set, and the client setup that produces the signed pushes the server
+//! requires. The member commands read and write a remote's set by fetching the
+//! `refs/meta/member/*` refs into the local repository, editing them through
+//! [`git_ents::signers`], and pushing them back.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use clap::{Parser, Subcommand};
+use git_ents::account::{self, Account};
 use git_ents::checks::{self, CHECKS_REF, Check};
-use git_ents::signers::{self, MEMBERS_REF, Signer};
+use git_ents::signers::{self, MEMBER_NS, Member, Trust, member_ref};
 
 #[derive(Parser)]
 #[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
@@ -22,10 +26,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Top {
-    /// Manage the repository members at `refs/meta/members`.
+    /// Manage the repository members at `refs/meta/member/<username>`.
     Members {
         #[command(subcommand)]
         action: Action,
+    },
+    /// Manage this repository's account identity at `refs/meta/account`.
+    Account {
+        #[command(subcommand)]
+        action: AccountAction,
     },
     /// Manage the configured checks at `refs/meta/checks`.
     Checks {
@@ -48,43 +57,65 @@ enum Action {
     },
     /// List the members on a remote.
     List {
-        /// Remote to read `refs/meta/members` from.
+        /// Remote to read the `refs/meta/member/*` refs from.
         #[arg(default_value = "origin")]
         remote: String,
     },
-    /// Add a member to a remote's set and push the update.
+    /// Authorize a key for a member on a remote and push the update.
     Add {
-        /// Remote whose `refs/meta/members` to update.
+        /// Member (username) to authorize the key under — its
+        /// `refs/meta/member/<username>` ref.
+        username: String,
+        /// Remote whose member refs to update.
         #[arg(default_value = "origin")]
         remote: String,
         /// Key to authorize; defaults to `user.signingkey`.
         #[arg(long)]
         key: Option<PathBuf>,
-        /// Trust the key only at or after this OpenSSH timestamp
+        /// Trust the member only at or after this OpenSSH timestamp
         /// (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`; append `Z` for UTC).
         #[arg(long, value_name = "TIMESTAMP")]
         valid_after: Option<String>,
-        /// Stop trusting the key after this OpenSSH timestamp; omit for trust
+        /// Stop trusting the member after this OpenSSH timestamp; omit for trust
         /// that never lapses on its own.
         #[arg(long, value_name = "TIMESTAMP")]
         valid_before: Option<String>,
     },
-    /// Remove a member from a remote's set and push the update.
+    /// Revoke a member, deleting its ref on a remote and pushing the update.
     Remove {
-        /// Fingerprint (`members/<name>`) to drop.
-        fingerprint: String,
-        /// Remote whose `refs/meta/members` to update.
+        /// Member (username) to revoke — its `refs/meta/member/<username>` ref.
+        username: String,
+        /// Remote whose member ref to delete.
         #[arg(default_value = "origin")]
         remote: String,
     },
     /// Report whether a key is a member and the client is configured.
     Check {
-        /// Remote to read `refs/meta/members` from.
+        /// Remote to read the `refs/meta/member/*` refs from.
         #[arg(default_value = "origin")]
         remote: String,
         /// Key to look for; defaults to `user.signingkey`.
         #[arg(long)]
         key: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AccountAction {
+    /// Create or update this repository's account identity and push it. The
+    /// presence of `refs/meta/account` is what marks the repo as an account.
+    Create {
+        /// The account username — by convention the `user/<username>` repo name.
+        username: String,
+        /// Remote whose `refs/meta/account` to update.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Human-facing display name; defaults to the username.
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Short free-text bio.
+        #[arg(long, default_value = "")]
+        bio: String,
     },
 }
 
@@ -120,6 +151,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Top::Members { action } => run_members(action),
+        Top::Account { action } => run_account(action),
         Top::Checks { action } => run_checks(action),
     };
     match result {
@@ -134,18 +166,33 @@ fn main() -> ExitCode {
 fn run_members(action: Action) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
-        Action::List { remote } => list::<Signers>(&remote),
+        Action::List { remote } => members_list(&remote),
         Action::Add {
+            username,
             remote,
             key,
             valid_after,
             valid_before,
-        } => add(&remote, key.as_deref(), valid_after, valid_before),
-        Action::Remove {
-            fingerprint,
-            remote,
-        } => remove::<Signers>(&fingerprint, &remote),
+        } => members_add(
+            &username,
+            &remote,
+            key.as_deref(),
+            valid_after,
+            valid_before,
+        ),
+        Action::Remove { username, remote } => members_remove(&username, &remote),
         Action::Check { remote, key } => check(&remote, key.as_deref()),
+    }
+}
+
+fn run_account(action: AccountAction) -> Result<(), String> {
+    match action {
+        AccountAction::Create {
+            username,
+            remote,
+            display_name,
+            bio,
+        } => account_create(&username, &remote, display_name, bio),
     }
 }
 
@@ -163,10 +210,10 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
 
 /// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
 /// and pushed to a remote, holding entries the CLI lists and removes from. The
-/// two sets — authorized signers and configured checks — share that flow and
-/// differ only in their item type, what the messages call an entry, and how a
-/// row presents; the thin [`load`](Set::load)/[`store`](Set::store) keep each on
-/// its own typed module.
+/// check set runs through this; the member set is decomposed across
+/// `refs/meta/member/*` and handled on its own. A set differs only in its item
+/// type, what the messages call an entry, and how a row presents; the thin
+/// [`load`](Set::load)/[`store`](Set::store) keep each on its own typed module.
 trait Set {
     /// The set's item type.
     type Item;
@@ -185,35 +232,6 @@ trait Set {
     fn key(item: &Self::Item) -> String;
     /// The right list column for an item.
     fn value(item: &Self::Item) -> String;
-}
-
-/// The repository member set at `refs/meta/members`.
-struct Signers;
-
-impl Set for Signers {
-    type Item = Signer;
-    const REF: &'static str = MEMBERS_REF;
-    const NOUN: &'static str = "member";
-
-    fn load(repo: &Path) -> Result<Vec<Signer>, String> {
-        signers::load(repo).map_err(|error| error.to_string())
-    }
-
-    fn store(repo: &Path, items: &[Signer]) -> Result<(), String> {
-        signers::store(repo, items).map_err(|error| error.to_string())
-    }
-
-    fn empty_listing(remote: &str) -> String {
-        format!("no members on {remote} (open bootstrap window)")
-    }
-
-    fn key(item: &Signer) -> String {
-        item.fingerprint.clone()
-    }
-
-    fn value(item: &Signer) -> String {
-        signer_label(item)
-    }
 }
 
 /// The configured check set at `refs/meta/checks`.
@@ -245,25 +263,22 @@ impl Set for Checks {
     }
 }
 
-/// The list column for a member: its key comment and validity window, so an
-/// expiry that has been set is visible at a glance rather than hidden in the
-/// stored `allowed_signers` options.
-fn signer_label(signer: &Signer) -> String {
-    let mut label = key_comment(&signer.key);
+/// The trailing ` (after …, before …)` annotation for a member's validity
+/// window, or `""` when unbounded — so an expiry that has been set is visible at
+/// a glance rather than hidden in the stored `allowed_signers` options.
+fn window_suffix(member: &Member) -> String {
     let mut window = Vec::new();
-    if let Some(after) = &signer.valid_after {
+    if let Some(after) = &member.valid_after {
         window.push(format!("after {after}"));
     }
-    if let Some(before) = &signer.valid_before {
+    if let Some(before) = &member.valid_before {
         window.push(format!("before {before}"));
     }
-    if !window.is_empty() {
-        if !label.is_empty() {
-            label.push(' ');
-        }
-        label.push_str(&format!("({})", window.join(", ")));
+    if window.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", window.join(", "))
     }
-    label
 }
 
 /// Print each entry of the set `S` on `remote` as `<key>  <value>`.
@@ -463,9 +478,33 @@ fn default_key_path() -> Result<PathBuf, String> {
     Ok(Path::new(&home).join(".ssh").join("id_ed25519"))
 }
 
-/// Authorize `key` on `remote`, trusting it within the given validity window,
-/// and push the updated set.
-fn add(
+/// List every member on `remote` — one line per authorized key — as
+/// `<username>/<fingerprint>  <key label><window>`.
+fn members_list(remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, MEMBER_NS)?;
+    let members = signers::load_all(&repo).map_err(|error| error.to_string())?;
+    if members.is_empty() {
+        println!("no members on {remote} (open bootstrap window)");
+        return Ok(());
+    }
+    for member in members {
+        let suffix = window_suffix(&member);
+        for (fingerprint, key) in member.keys() {
+            println!(
+                "{}/{fingerprint}  {}{suffix}",
+                member.principal,
+                key_comment(key)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Authorize `key` for the member `username` on `remote`, trusting the member
+/// within the given validity window, and push the updated member ref.
+fn members_add(
+    username: &str,
     remote: &str,
     key: Option<&Path>,
     valid_after: Option<String>,
@@ -480,25 +519,72 @@ fn add(
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    let expected = sync(remote, MEMBERS_REF)?;
-    let mut signers = signers::load(&repo).map_err(|error| error.to_string())?;
-    if signers
-        .iter()
-        .any(|signer| same_key(&signer.key, &public_key))
+    let refname = member_ref(username);
+    let expected = sync(remote, &refname)?;
+    let mut member = signers::load(&repo, username)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| Member::with_keys(username.to_owned(), BTreeMap::new()));
+    if valid_after.is_some() {
+        member.valid_after = valid_after;
+    }
+    if valid_before.is_some() {
+        member.valid_before = valid_before;
+    }
+    let Trust::Keys(keys) = &mut member.trust;
+    if keys
+        .values()
+        .any(|existing| same_key(existing, &public_key))
     {
-        println!("{fingerprint} is already a member");
+        println!("{fingerprint} is already authorized for {username}");
         return Ok(());
     }
-    signers.push(Signer {
-        fingerprint: fingerprint.clone(),
-        key: public_key,
-        valid_after,
-        valid_before,
-    });
-    signers::store(&repo, &signers).map_err(|error| error.to_string())?;
-    push_signed(remote, MEMBERS_REF, expected.as_deref())?;
-    println!("authorized {fingerprint}");
+    keys.insert(fingerprint.clone(), public_key);
+    signers::store(&repo, &member).map_err(|error| error.to_string())?;
+    push_signed(remote, &refname, expected.as_deref())?;
+    println!("authorized {fingerprint} for {username}");
     Ok(())
+}
+
+/// Revoke the member `username` on `remote`, deleting its ref and pushing the
+/// deletion. Removal here is a plain signed delete; quorum-gated removal is a
+/// later server-side policy.
+fn members_remove(username: &str, remote: &str) -> Result<(), String> {
+    let refname = member_ref(username);
+    let expected =
+        sync(remote, &refname)?.ok_or_else(|| format!("no member named {username} on {remote}"))?;
+    push_delete(remote, &refname, &expected)?;
+    println!("revoked {username}");
+    Ok(())
+}
+
+/// Create or update this repository's account identity on `remote` and push it.
+fn account_create(
+    username: &str,
+    remote: &str,
+    display_name: Option<String>,
+    bio: String,
+) -> Result<(), String> {
+    let repo = repo()?;
+    let expected = sync(remote, account::ACCOUNT_REF)?;
+    let existing = account::load(&repo).map_err(|error| error.to_string())?;
+    let account = Account {
+        username: username.to_owned(),
+        display_name: display_name.unwrap_or_else(|| username.to_owned()),
+        bio,
+        // Preserve the original creation time when updating an existing account.
+        created_at: existing.map_or_else(now_seconds, |account| account.created_at),
+    };
+    account::store(&repo, &account).map_err(|error| error.to_string())?;
+    push_signed(remote, account::ACCOUNT_REF, expected.as_deref())?;
+    println!("created account {username}");
+    Ok(())
+}
+
+/// The current time as seconds since the Unix epoch.
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Check that `value` is an OpenSSH `allowed_signers` timestamp: `YYYYMMDD`,
@@ -517,20 +603,23 @@ fn validate_timestamp(value: &str) -> Result<(), String> {
     }
 }
 
-/// Report whether `key` is in `remote`'s set and how this client is configured.
+/// Report whether `key` is a member on `remote` and how this client is
+/// configured.
 fn check(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
-    sync(remote, MEMBERS_REF)?;
-    let signers = signers::load(&repo).map_err(|error| error.to_string())?;
-    if signers.is_empty() {
+    sync_namespace(remote, MEMBER_NS)?;
+    let members = signers::load_all(&repo).map_err(|error| error.to_string())?;
+    if members.is_empty() {
         println!("{remote}: open bootstrap window (no members yet)");
-    } else if signers
-        .iter()
-        .any(|signer| same_key(&signer.key, &public_key))
-    {
-        println!("{remote}: {fingerprint} is a member");
+    } else if let Some(member) = members.iter().find(|member| {
+        member
+            .keys()
+            .iter()
+            .any(|(_fp, k)| same_key(k, &public_key))
+    }) {
+        println!("{remote}: {fingerprint} is a member ({})", member.principal);
     } else {
         println!("{remote}: {fingerprint} is NOT a member");
     }
@@ -566,6 +655,14 @@ fn sync(remote: &str, refname: &str) -> Result<Option<String>, String> {
     Ok(oid)
 }
 
+/// Mirror every ref under `remote`'s `namespace` (e.g. `refs/meta/member`) into
+/// the local repository, pruning local refs the remote no longer has, so the
+/// glob helpers see the remote's current set.
+fn sync_namespace(remote: &str, namespace: &str) -> Result<(), String> {
+    let refspec = format!("+{namespace}/*:{namespace}/*");
+    git_run(&["fetch", "--quiet", "--prune", remote, &refspec])
+}
+
 /// Push the local `refname` to `remote`, signed per the client's config.
 ///
 /// `expected` is the remote tip observed at sync time (`None` when the ref did
@@ -578,6 +675,15 @@ fn push_signed(remote: &str, refname: &str, expected: Option<&str>) -> Result<()
         expected.unwrap_or(git_ents::ZERO_OID)
     );
     git_run(&["push", "--force-if-includes", &lease, remote, refname])
+}
+
+/// Delete `refname` on `remote`, signed per the client's config and pinned with
+/// `--force-with-lease` to the `expected` tip so a member changed since the
+/// fetch is not clobbered.
+fn push_delete(remote: &str, refname: &str, expected: &str) -> Result<(), String> {
+    let lease = format!("--force-with-lease={refname}:{expected}");
+    let refspec = format!(":{refname}");
+    git_run(&["push", "--force-if-includes", &lease, remote, &refspec])
 }
 
 /// Resolve the OpenSSH public key to operate on, defaulting to the key behind

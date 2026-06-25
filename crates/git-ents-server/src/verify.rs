@@ -1,17 +1,17 @@
 //! The `pre-receive` verifier: a git hook that gates pushes on a signature from
 //! a member.
 //!
-//! When the trust list at `refs/meta/members` is empty the server is still in
+//! When no member is listed under `refs/meta/member/*` the server is still in
 //! its open bootstrap window and every push is allowed, so the first member can
 //! be pushed in. Once any member is listed, a push must carry a signed-push
 //! certificate (`git push --signed`) whose anti-replay nonce git accepted and
-//! whose signature verifies against one of those keys.
+//! whose signature verifies against one of those members' in-window keys.
 
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use git_ents::signers::{self, Signer};
+use git_ents::signers::{self, Member};
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the
@@ -19,7 +19,7 @@ use git_ents::signers::{self, Signer};
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
     let authorized =
-        signers::load(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
+        signers::load_all(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
     if authorized.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
         return Ok(());
@@ -41,7 +41,7 @@ pub fn pre_receive() -> Result<(), String> {
 /// Split the certificate into its signed payload and SSH signature, then accept
 /// it only when `ssh-keygen -Y verify` trusts the signature against one of the
 /// authorized keys.
-fn verify_certificate(authorized: &[Signer], certificate: &str) -> Result<(), String> {
+fn verify_certificate(authorized: &[Member], certificate: &str) -> Result<(), String> {
     const MARKER: &str = "-----BEGIN SSH SIGNATURE-----";
     let split = certificate
         .find(MARKER)

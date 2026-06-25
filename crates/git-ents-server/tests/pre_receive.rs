@@ -87,10 +87,10 @@ struct Member<'a> {
     valid_before: Option<&'a str>,
 }
 
-/// Create a bare server repo wired to the `pre-receive` verifier whose
-/// `refs/meta/members` lists `members` in the real on-disk layout — a
-/// `members/<key-n>/` subtree per member holding a `key` blob and an
-/// `valid_after`/`valid_before` `Option` subtree each.
+/// Create a bare server repo wired to the `pre-receive` verifier with one
+/// `refs/meta/member/member-<n>` ref per member in the real on-disk layout — a
+/// `principal` blob, `valid_after`/`valid_before` `Option` subtrees, and a
+/// `trust/Keys/key` blob.
 fn server_repo_with(base: &Path, members: &[Member]) -> PathBuf {
     let repo = base.join("srv.git");
     ok(
@@ -112,34 +112,41 @@ fn server_repo_with(base: &Path, members: &[Member]) -> PathBuf {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    if !members.is_empty() {
-        let option_tree = |bound: Option<&str>| match bound {
-            None => mktree(&repo, ""),
-            Some(value) => {
-                let blob = hash_object(&repo, value.as_bytes());
-                mktree(&repo, &format!("100644 blob {blob}\tsome\n"))
-            }
-        };
-        let mut tree_entries = String::new();
-        for (index, member) in members.iter().enumerate() {
-            let key = std::fs::read_to_string(member.pubkey).unwrap();
-            let key_blob = hash_object(&repo, key.as_bytes());
-            let after_tree = option_tree(member.valid_after);
-            let before_tree = option_tree(member.valid_before);
-            let member_tree = mktree(
-                &repo,
-                &format!(
-                    "100644 blob {key_blob}\tkey\n\
-                     040000 tree {after_tree}\tvalid_after\n\
-                     040000 tree {before_tree}\tvalid_before\n"
-                ),
-            );
-            tree_entries.push_str(&format!("040000 tree {member_tree}\tkey-{index}\n"));
+    let option_tree = |bound: Option<&str>| match bound {
+        None => mktree(&repo, ""),
+        Some(value) => {
+            let blob = hash_object(&repo, value.as_bytes());
+            mktree(&repo, &format!("100644 blob {blob}\tsome\n"))
         }
-        let members_tree = mktree(&repo, &tree_entries);
-        let root_tree = mktree(&repo, &format!("040000 tree {members_tree}\tmembers\n"));
-        let commit = ok(&repo, "git", &["commit-tree", &root_tree, "-m", "members"]);
-        ok(&repo, "git", &["update-ref", "refs/meta/members", &commit]);
+    };
+    for (index, member) in members.iter().enumerate() {
+        let username = format!("member-{index}");
+        let principal_blob = hash_object(&repo, username.as_bytes());
+        let key = std::fs::read_to_string(member.pubkey).unwrap();
+        let key_blob = hash_object(&repo, key.as_bytes());
+        let keys_tree = mktree(&repo, &format!("100644 blob {key_blob}\tkey\n"));
+        let trust_tree = mktree(&repo, &format!("040000 tree {keys_tree}\tKeys\n"));
+        let after_tree = option_tree(member.valid_after);
+        let before_tree = option_tree(member.valid_before);
+        let root_tree = mktree(
+            &repo,
+            &format!(
+                "100644 blob {principal_blob}\tprincipal\n\
+                 040000 tree {after_tree}\tvalid_after\n\
+                 040000 tree {before_tree}\tvalid_before\n\
+                 040000 tree {trust_tree}\ttrust\n"
+            ),
+        );
+        let commit = ok(&repo, "git", &["commit-tree", &root_tree, "-m", "member"]);
+        ok(
+            &repo,
+            "git",
+            &[
+                "update-ref",
+                &format!("refs/meta/member/{username}"),
+                &commit,
+            ],
+        );
     }
     repo
 }

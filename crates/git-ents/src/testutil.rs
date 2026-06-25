@@ -70,15 +70,18 @@ pub(crate) fn write_meta_doc(repo: &Path, refname: &str, subtree: &str, pairs: &
     assert!(status.success());
 }
 
-/// Lay a `Members` document out at `refname` as the real on-disk format: a
-/// `members/<fingerprint>/` subtree per member holding a `key` blob and an
-/// `valid_after`/`valid_before` `Option` subtree each (empty tree for `None`, a
-/// single `some` blob for a bound). Asserts the loader still reads the format
-/// independent of the writer.
-pub(crate) fn write_members_doc(
+/// Lay a `Member` document out at `refs/meta/member/<username>` as the real
+/// on-disk format: a `principal` blob, `valid_after`/`valid_before` `Option`
+/// subtrees (empty tree for `None`, a single `some` blob for a bound), and a
+/// `trust/Keys/<fingerprint>` blob per key (the `Trust::Keys` newtype enum
+/// variant resolving directly to its map). Asserts the loader still reads the
+/// format independent of the writer.
+pub(crate) fn write_member_doc(
     repo: &Path,
-    refname: &str,
-    members: &[(&str, &str, Option<&str>, Option<&str>)],
+    username: &str,
+    valid_after: Option<&str>,
+    valid_before: Option<&str>,
+    keys: &[(&str, &str)],
 ) {
     let option_tree = |bound: Option<&str>| match bound {
         None => git_with_stdin(repo, &["mktree"], ""),
@@ -87,33 +90,72 @@ pub(crate) fn write_members_doc(
             git_with_stdin(repo, &["mktree"], &format!("100644 blob {blob}\tsome\n"))
         }
     };
-    let mut member_entries = String::new();
-    for (fingerprint, key, valid_after, valid_before) in members {
+    let principal_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], username);
+    let after_tree = option_tree(valid_after);
+    let before_tree = option_tree(valid_before);
+    let mut key_entries = String::new();
+    for (fingerprint, key) in keys {
         let key_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], key);
-        let after_tree = option_tree(*valid_after);
-        let before_tree = option_tree(*valid_before);
-        let member_tree = git_with_stdin(
-            repo,
-            &["mktree"],
-            &format!(
-                "100644 blob {key_blob}\tkey\n\
-                 040000 tree {after_tree}\tvalid_after\n\
-                 040000 tree {before_tree}\tvalid_before\n"
-            ),
-        );
-        member_entries.push_str(&format!("040000 tree {member_tree}\t{fingerprint}\n"));
+        key_entries.push_str(&format!("100644 blob {key_blob}\t{fingerprint}\n"));
     }
-    let members_tree = git_with_stdin(repo, &["mktree"], &member_entries);
+    let keys_tree = git_with_stdin(repo, &["mktree"], &key_entries);
+    let trust_tree = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {keys_tree}\tKeys\n"),
+    );
     let root = git_with_stdin(
         repo,
         &["mktree"],
-        &format!("040000 tree {members_tree}\tmembers\n"),
+        &format!(
+            "100644 blob {principal_blob}\tprincipal\n\
+             040000 tree {after_tree}\tvalid_after\n\
+             040000 tree {before_tree}\tvalid_before\n\
+             040000 tree {trust_tree}\ttrust\n"
+        ),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let refname = format!("refs/meta/member/{username}");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", &refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Lay an `Account` document out at `refs/meta/account` as the real on-disk
+/// format: `username`, `display_name`, `bio`, and `created_at` blobs (the
+/// integer in its decimal `Display` form). Asserts the loader still reads the
+/// format independent of the writer.
+pub(crate) fn write_account_doc(
+    repo: &Path,
+    username: &str,
+    display_name: &str,
+    bio: &str,
+    created_at: u64,
+) {
+    let blob = |value: &str| git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
+    let username_blob = blob(username);
+    let display_blob = blob(display_name);
+    let bio_blob = blob(bio);
+    let created_blob = blob(&created_at.to_string());
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!(
+            "100644 blob {created_blob}\tcreated_at\n\
+             100644 blob {display_blob}\tdisplay_name\n\
+             100644 blob {bio_blob}\tbio\n\
+             100644 blob {username_blob}\tusername\n"
+        ),
     );
     let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
     let status = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["update-ref", refname, &commit])
+        .args(["update-ref", "refs/meta/account", &commit])
         .status()
         .unwrap();
     assert!(status.success());

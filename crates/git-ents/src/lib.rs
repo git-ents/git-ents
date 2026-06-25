@@ -1,5 +1,6 @@
 //! Git Ents — helpful guardians of your git trees.
 
+pub mod account;
 pub mod checks;
 pub mod config;
 pub mod issues;

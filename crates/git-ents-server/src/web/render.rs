@@ -14,7 +14,7 @@ use maud::{Markup, html};
 use git_ents::checks::{Check, Run};
 use git_ents::config::Config;
 use git_ents::issues::Issue;
-use git_ents::signers::Signer;
+use git_ents::signers::Member;
 
 /// HTML rendering for a meta-ref value. The default walks the value's [`Facet`]
 /// shape structurally; a type overrides [`render`](Render::render) when its
@@ -47,11 +47,16 @@ impl Render for Issue {
     }
 }
 
-/// A signer's stored key is too long for a row, so show a short label beside the
-/// fingerprint instead of the raw key the structural walk would print.
-impl Render for Signer {
+/// A member renders one row per authorized key — the username as the key column,
+/// a short key label beside it — rather than the raw keys and trust enum the
+/// structural walk would print.
+impl Render for Member {
     fn render(&self) -> Markup {
-        row(&self.fingerprint, &signer_label(&self.key))
+        html! {
+            @for (_fingerprint, key) in self.keys() {
+                (row(&self.principal, &signer_label(key)))
+            }
+        }
     }
 }
 
