@@ -66,6 +66,18 @@ pub trait MapDoc: for<'a> Facet<'a> {
     fn into_entries(self) -> BTreeMap<String, String>;
 }
 
+/// One `(key, value)` entry of a [`MapDoc`] presented as a named type. The set
+/// documents expose legible structs (`Signer`, `Check`, `RunOutcome`) rather
+/// than bare pairs; this trait is the single bridge between such a struct and
+/// the `(key, value)` shape stored on disk, so the wrap/unwrap is written once
+/// here instead of at every load and store.
+pub trait Row {
+    /// Build a row from its stored `key` and `value`.
+    fn from_pair(key: String, value: String) -> Self;
+    /// The row's `(key, value)`, consuming it.
+    fn into_pair(self) -> (String, String);
+}
+
 /// A repository's typed `refs/meta/*` store.
 ///
 /// Refs are read and updated through the high-level [`gix`] API, while all
@@ -146,6 +158,30 @@ impl Store {
         message: &str,
     ) -> Result<(), Error> {
         self.store(refname, &T::from_entries(entries), message)
+    }
+
+    /// Load the [`MapDoc`] `D` on `refname` as its [`Row`] values `R`, or an
+    /// empty vec when the ref is absent.
+    pub fn load_rows<D: MapDoc, R: Row>(&self, refname: &str) -> Result<Vec<R>, Error> {
+        Ok(self
+            .load_entries::<D>(refname)?
+            .into_iter()
+            .map(|(key, value)| R::from_pair(key, value))
+            .collect())
+    }
+
+    /// Store `rows` as the [`MapDoc`] `D` on `refname` as a new commit.
+    pub fn store_rows<D: MapDoc, R: Row>(
+        &self,
+        refname: &str,
+        rows: impl IntoIterator<Item = R>,
+        message: &str,
+    ) -> Result<(), Error> {
+        self.store_entries::<D>(
+            refname,
+            rows.into_iter().map(Row::into_pair).collect(),
+            message,
+        )
     }
 
     /// The documents on `refname`'s commit chain as `(committer date, value)`
