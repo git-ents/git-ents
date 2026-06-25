@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
-use git_store::MapDoc as _;
+use git_store::{MapDoc as _, Row as _};
 
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";
@@ -44,12 +44,17 @@ pub struct Check {
     pub command: String,
 }
 
-/// A failure reading or writing the check set.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The check set could not be read from or written to its ref.
-    #[error(transparent)]
-    Store(#[from] git_store::Error),
+impl git_store::Row for Check {
+    fn from_pair(name: String, command: String) -> Self {
+        Self {
+            name,
+            command: command.trim_end().to_owned(),
+        }
+    }
+
+    fn into_pair(self) -> (String, String) {
+        (self.name, self.command)
+    }
 }
 
 /// Load the configured checks recorded at [`CHECKS_REF`] in `repo`.
@@ -57,26 +62,18 @@ pub enum Error {
 /// An absent ref yields an empty set, as on a server whose check set has not
 /// been pushed yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no checks configured".
-pub fn load(repo: &Path) -> Result<Vec<Check>, Error> {
-    Ok(git_store::Store::open(repo)?
-        .load_entries::<Checks>(CHECKS_REF)?
-        .into_iter()
-        .map(|(name, command)| Check {
-            name,
-            command: command.trim_end().to_owned(),
-        })
-        .collect())
+pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
+    git_store::Store::open(repo)?.load_rows::<Checks, Check>(CHECKS_REF)
 }
 
 /// Write `checks` to [`CHECKS_REF`], replacing any existing set, as a new
 /// commit.
-pub fn store(repo: &Path, checks: &[Check]) -> Result<(), Error> {
-    let entries = checks
-        .iter()
-        .map(|check| (check.name.clone(), check.command.clone()))
-        .collect();
-    git_store::Store::open(repo)?.store_entries::<Checks>(CHECKS_REF, entries, "Update checks")?;
-    Ok(())
+pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store_rows::<Checks, _>(
+        CHECKS_REF,
+        checks.iter().cloned(),
+        "Update checks",
+    )
 }
 
 /// The namespace under which a commit's check runs are recorded: one ref,
@@ -113,6 +110,16 @@ pub struct RunOutcome {
     pub outcome: String,
 }
 
+impl git_store::Row for RunOutcome {
+    fn from_pair(name: String, outcome: String) -> Self {
+        Self { name, outcome }
+    }
+
+    fn into_pair(self) -> (String, String) {
+        (self.name, self.outcome)
+    }
+}
+
 /// One recorded execution of the check set against a commit.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Run {
@@ -136,7 +143,7 @@ pub struct CommitRuns {
 /// Record a run of `outcomes` for `commit` as a new commit on
 /// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
 /// chain is the run history. The commit's date is the run time.
-pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), Error> {
+pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), git_store::Error> {
     git_store::Store::open(repo)?.store(
         &format!("{RUNS_NS}/{commit}"),
         &run_doc(outcomes),
@@ -152,7 +159,11 @@ pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), 
 ///
 /// When no run has been recorded yet the update starts one, so a worker that
 /// advances a run is self-healing even if the `queued` record never landed.
-pub fn update_run(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), Error> {
+pub fn update_run(
+    repo: &Path,
+    commit: &str,
+    outcomes: &[RunOutcome],
+) -> Result<(), git_store::Error> {
     git_store::Store::open(repo)?.amend(
         &format!("{RUNS_NS}/{commit}"),
         &run_doc(outcomes),
@@ -164,7 +175,7 @@ pub fn update_run(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<
 /// List the recorded runs per commit, newest commit first. Each commit's runs
 /// are the ref's commit chain, newest first, with the run time taken from each
 /// commit's date.
-pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, Error> {
+pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
     let store = git_store::Store::open(repo)?;
     let prefix = format!("{RUNS_NS}/");
     let mut commits = Vec::new();
@@ -180,7 +191,7 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, Error> {
                 results: doc
                     .into_entries()
                     .into_iter()
-                    .map(|(name, outcome)| RunOutcome { name, outcome })
+                    .map(|(name, outcome)| RunOutcome::from_pair(name, outcome))
                     .collect(),
             })
             .collect();
@@ -197,7 +208,8 @@ fn run_doc(outcomes: &[RunOutcome]) -> RunDoc {
     RunDoc::from_entries(
         outcomes
             .iter()
-            .map(|outcome| (outcome.name.clone(), outcome.outcome.clone()))
+            .cloned()
+            .map(git_store::Row::into_pair)
             .collect(),
     )
 }

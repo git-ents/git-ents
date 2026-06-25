@@ -38,29 +38,21 @@ impl Issue {
     }
 }
 
-/// A failure reading or writing an issue.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// An issue could not be read from or written to its ref.
-    #[error(transparent)]
-    Store(#[from] git_store::Error),
-}
-
 /// Load the issue recorded at `refs/meta/issues/<id>` in `repo`, or `None` when
 /// no such issue exists.
-pub fn load(repo: &Path, id: &str) -> Result<Option<Issue>, Error> {
-    Ok(git_store::Store::open(repo)?.load::<Issue>(&format!("{ISSUES_NS}/{id}"))?)
+pub fn load(repo: &Path, id: &str) -> Result<Option<Issue>, git_store::Error> {
+    git_store::Store::open(repo)?.load::<Issue>(&format!("{ISSUES_NS}/{id}"))
 }
 
 /// Write `issue` to `refs/meta/issues/<id>`, replacing any existing value, as a
 /// new commit so the ref's commit chain is the issue's edit history.
-pub fn store(repo: &Path, id: &str, issue: &Issue) -> Result<(), Error> {
+pub fn store(repo: &Path, id: &str, issue: &Issue) -> Result<(), git_store::Error> {
     git_store::Store::open(repo)?.store(&format!("{ISSUES_NS}/{id}"), issue, "Update issue")?;
     Ok(())
 }
 
 /// List every issue as `(id, issue)` pairs, newest issue ref first.
-pub fn list(repo: &Path) -> Result<Vec<(String, Issue)>, Error> {
+pub fn list(repo: &Path) -> Result<Vec<(String, Issue)>, git_store::Error> {
     let store = git_store::Store::open(repo)?;
     let prefix = format!("{ISSUES_NS}/");
     let mut issues = Vec::new();
@@ -76,7 +68,7 @@ pub fn list(repo: &Path) -> Result<Vec<(String, Issue)>, Error> {
 }
 
 /// The number of open issues in `repo`.
-pub fn open_count(repo: &Path) -> Result<usize, Error> {
+pub fn open_count(repo: &Path) -> Result<usize, git_store::Error> {
     Ok(list(repo)?
         .into_iter()
         .filter(|(_id, issue)| issue.is_open())

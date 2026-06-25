@@ -27,20 +27,12 @@ pub struct Config {
     pub topics: Vec<String>,
 }
 
-/// A failure reading or writing the configuration.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The configuration could not be read from or written to its ref.
-    #[error(transparent)]
-    Store(#[from] git_store::Error),
-}
-
 /// Load the configuration recorded at [`CONFIG_REF`] in `repo`.
 ///
 /// An absent ref yields [`Config::default`], as on a repository whose metadata
 /// has not been set yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no configuration set".
-pub fn load(repo: &Path) -> Result<Config, Error> {
+pub fn load(repo: &Path) -> Result<Config, git_store::Error> {
     Ok(git_store::Store::open(repo)?
         .load::<Config>(CONFIG_REF)?
         .unwrap_or_default())
@@ -48,7 +40,7 @@ pub fn load(repo: &Path) -> Result<Config, Error> {
 
 /// Write `config` to [`CONFIG_REF`], replacing any existing value, as a new
 /// commit.
-pub fn store(repo: &Path, config: &Config) -> Result<(), Error> {
+pub fn store(repo: &Path, config: &Config) -> Result<(), git_store::Error> {
     git_store::Store::open(repo)?.store(CONFIG_REF, config, "Update configuration")?;
     Ok(())
 }

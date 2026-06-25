@@ -40,12 +40,17 @@ pub struct Signer {
     pub key: String,
 }
 
-/// A failure reading or writing the member set.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The member set could not be read from or written to its ref.
-    #[error(transparent)]
-    Store(#[from] git_store::Error),
+impl git_store::Row for Signer {
+    fn from_pair(fingerprint: String, key: String) -> Self {
+        Self {
+            fingerprint,
+            key: key.trim_end().to_owned(),
+        }
+    }
+
+    fn into_pair(self) -> (String, String) {
+        (self.fingerprint, self.key)
+    }
 }
 
 /// Load the members recorded at [`MEMBERS_REF`] in `repo`.
@@ -53,30 +58,18 @@ pub enum Error {
 /// An absent ref yields an empty set, as on a fresh server whose trust list has
 /// not been pushed yet. A present but unreadable ref is an error so callers can
 /// fail closed rather than mistake corruption for "no members".
-pub fn load(repo: &Path) -> Result<Vec<Signer>, Error> {
-    Ok(git_store::Store::open(repo)?
-        .load_entries::<Members>(MEMBERS_REF)?
-        .into_iter()
-        .map(|(fingerprint, key)| Signer {
-            fingerprint,
-            key: key.trim_end().to_owned(),
-        })
-        .collect())
+pub fn load(repo: &Path) -> Result<Vec<Signer>, git_store::Error> {
+    git_store::Store::open(repo)?.load_rows::<Members, Signer>(MEMBERS_REF)
 }
 
 /// Write `signers` to [`MEMBERS_REF`], replacing any existing set, as a new
 /// commit.
-pub fn store(repo: &Path, signers: &[Signer]) -> Result<(), Error> {
-    let entries = signers
-        .iter()
-        .map(|signer| (signer.fingerprint.clone(), signer.key.clone()))
-        .collect();
-    git_store::Store::open(repo)?.store_entries::<Members>(
+pub fn store(repo: &Path, signers: &[Signer]) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store_rows::<Members, _>(
         MEMBERS_REF,
-        entries,
+        signers.iter().cloned(),
         "Update members",
-    )?;
-    Ok(())
+    )
 }
 
 /// Render `signers` as an OpenSSH `allowed_signers` file that authorizes any
