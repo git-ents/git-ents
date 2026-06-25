@@ -15,6 +15,7 @@ use std::process::{Command, ExitCode, Stdio};
 use clap::{Parser, Subcommand};
 use git_ents::account::{self, Account};
 use git_ents::checks::{self, CHECKS_REF, Check};
+use git_ents::revocations::{self, REVOKED_REF, Revocation};
 use git_ents::signers::{self, MEMBER_NS, Member, Trust, member_ref};
 
 #[derive(Parser)]
@@ -85,11 +86,32 @@ enum Action {
         #[arg(long, value_name = "TIMESTAMP")]
         valid_before: Option<String>,
     },
-    /// Revoke a member, deleting its ref on a remote and pushing the update.
+    /// Remove a member, deleting its ref on a remote and pushing the update.
     Remove {
-        /// Member (username) to revoke — its `refs/meta/member/<username>` ref.
+        /// Member (username) to remove — its `refs/meta/member/<username>` ref.
         username: String,
         /// Remote whose member ref to delete.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+    /// Revoke a key fast: add its fingerprint to the `refs/meta/revoked` deny
+    /// list so it is refused before its window expires, and push the update.
+    Revoke {
+        /// Fingerprint of the key to deny (as shown by `members list`).
+        fingerprint: String,
+        /// Remote whose `refs/meta/revoked` to update.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Free-text reason recorded alongside the revocation.
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Lift a revocation, removing a fingerprint from the `refs/meta/revoked`
+    /// deny list and pushing the update.
+    Unrevoke {
+        /// Fingerprint to stop denying.
+        fingerprint: String,
+        /// Remote whose `refs/meta/revoked` to update.
         #[arg(default_value = "origin")]
         remote: String,
     },
@@ -187,6 +209,15 @@ fn run_members(action: Action) -> Result<(), String> {
             valid_before,
         ),
         Action::Remove { username, remote } => members_remove(&username, &remote),
+        Action::Revoke {
+            fingerprint,
+            remote,
+            reason,
+        } => members_revoke(&fingerprint, &remote, reason),
+        Action::Unrevoke {
+            fingerprint,
+            remote,
+        } => members_unrevoke(&fingerprint, &remote),
         Action::Check { remote, key } => check(&remote, key.as_deref()),
     }
 }
@@ -486,15 +517,18 @@ fn default_key_path() -> Result<PathBuf, String> {
 
 /// List every member on `remote` — one line per authorized key, or one
 /// `cert-authority` line per pinned-CA member — as
-/// `<username>[/<fingerprint>]  <label><window>`.
+/// `<username>[/<fingerprint>]  <label><window>`, flagging keys on the
+/// `refs/meta/revoked` deny list as `[revoked]`.
 fn members_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, MEMBER_NS)?;
+    sync(remote, REVOKED_REF)?;
     let members = signers::load_all(&repo).map_err(|error| error.to_string())?;
     if members.is_empty() {
         println!("no members on {remote} (open bootstrap window)");
         return Ok(());
     }
+    let revoked = revocations::fingerprints(&repo).map_err(|error| error.to_string())?;
     for member in members {
         let suffix = window_suffix(&member);
         if let Some(ca) = member.ca() {
@@ -505,14 +539,70 @@ fn members_list(remote: &str) -> Result<(), String> {
             );
         } else {
             for (fingerprint, key) in member.keys() {
+                let flag = if revoked.contains(fingerprint) {
+                    " [revoked]"
+                } else {
+                    ""
+                };
                 println!(
-                    "{}/{fingerprint}  {}{suffix}",
+                    "{}/{fingerprint}  {}{suffix}{flag}",
                     member.principal,
                     key_comment(key)
                 );
             }
         }
     }
+    Ok(())
+}
+
+/// Add `fingerprint` to `remote`'s `refs/meta/revoked` deny list and push the
+/// update, so the key is refused before its window would expire.
+fn members_revoke(fingerprint: &str, remote: &str, reason: String) -> Result<(), String> {
+    let repo = repo()?;
+    // Revoking your own key fails closed against you too: if it is the last key
+    // that authorizes your pushes, you cannot even push the un-revoke. Warn
+    // before locking yourself out.
+    if own_fingerprint().is_some_and(|own| own == fingerprint)
+        && !confirm(&format!(
+            "{fingerprint} is your own signing key; \
+             revoking it may lock you out of {remote}. Continue?"
+        ))?
+    {
+        return Err("revocation cancelled".to_owned());
+    }
+    let expected = sync(remote, REVOKED_REF)?;
+    let mut revocations = revocations::load(&repo).map_err(|error| error.to_string())?;
+    if let Some(existing) = revocations
+        .iter_mut()
+        .find(|revocation| revocation.fingerprint == fingerprint)
+    {
+        existing.reason = reason;
+    } else {
+        revocations.push(Revocation {
+            fingerprint: fingerprint.to_owned(),
+            reason,
+        });
+    }
+    revocations::store(&repo, &revocations).map_err(|error| error.to_string())?;
+    push_signed(remote, REVOKED_REF, expected.as_deref())?;
+    println!("revoked {fingerprint}");
+    Ok(())
+}
+
+/// Remove `fingerprint` from `remote`'s `refs/meta/revoked` deny list and push
+/// the update.
+fn members_unrevoke(fingerprint: &str, remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    let expected = sync(remote, REVOKED_REF)?;
+    let mut revocations = revocations::load(&repo).map_err(|error| error.to_string())?;
+    let before = revocations.len();
+    revocations.retain(|revocation| revocation.fingerprint != fingerprint);
+    if revocations.len() == before {
+        return Err(format!("{fingerprint} is not revoked on {remote}"));
+    }
+    revocations::store(&repo, &revocations).map_err(|error| error.to_string())?;
+    push_signed(remote, REVOKED_REF, expected.as_deref())?;
+    println!("lifted revocation of {fingerprint}");
     Ok(())
 }
 
@@ -614,6 +704,13 @@ fn account_create(
     push_signed(remote, account::ACCOUNT_REF, expected.as_deref())?;
     println!("created account {username}");
     Ok(())
+}
+
+/// This client's own signing-key fingerprint, best-effort — `None` when no key
+/// is configured or it cannot be read.
+fn own_fingerprint() -> Option<String> {
+    let public_key = public_key(None).ok()?;
+    fingerprint(&public_key).ok()
 }
 
 /// The current time as seconds since the Unix epoch.

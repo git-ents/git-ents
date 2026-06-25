@@ -17,7 +17,7 @@
 //! verifiable forever, since `ssh-keygen -Y verify -Overify-time` can pin the
 //! check to the time the push was made.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use facet::Facet;
@@ -138,6 +138,27 @@ pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
 pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
     git_store::Store::open(repo)?.store(&member_ref(&member.principal), member, "Update member")?;
     Ok(())
+}
+
+/// Drop every `revoked` fingerprint from `members`, returning the trust set the
+/// verifier should actually honor.
+///
+/// A leaf key whose fingerprint is revoked is removed; a member left with no keys
+/// drops out entirely, so a push it would have authorized fails closed. A member
+/// resting on a CA is untouched — a compromised CA is revoked by removing its
+/// member ref, since a CA is named by a ref rather than listed by fingerprint.
+#[must_use]
+pub fn without_revoked(members: Vec<Member>, revoked: &BTreeSet<String>) -> Vec<Member> {
+    members
+        .into_iter()
+        .filter_map(|mut member| match &mut member.trust {
+            Trust::Keys(keys) => {
+                keys.retain(|fingerprint, _key| !revoked.contains(fingerprint));
+                if keys.is_empty() { None } else { Some(member) }
+            }
+            Trust::CertAuthority(_ca) => Some(member),
+        })
+        .collect()
 }
 
 /// Render `members` as an OpenSSH `allowed_signers` file that authorizes any
@@ -322,6 +343,34 @@ mod tests {
         assert_eq!(loaded.ca(), Some(KEY_A));
         assert!(loaded.keys().is_empty());
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn without_revoked_drops_revoked_keys_and_emptied_members() {
+        let alice = Member::with_keys(
+            "alice".to_owned(),
+            keys(&[("aa:bb", KEY_A), ("cc:dd", KEY_B)]),
+        );
+        let bob = Member::with_keys("bob".to_owned(), keys(&[("ee:ff", KEY_A)]));
+        let revoked = BTreeSet::from(["cc:dd".to_owned(), "ee:ff".to_owned()]);
+
+        // bob's only key was revoked, so bob drops out entirely; alice keeps her
+        // un-revoked key.
+        let alice_kept = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
+        assert_eq!(
+            without_revoked(vec![alice, bob], &revoked),
+            vec![alice_kept]
+        );
+    }
+
+    #[test]
+    fn without_revoked_leaves_ca_members_untouched() {
+        let member = Member::with_ca("alice".to_owned(), KEY_A.to_owned());
+        let revoked = BTreeSet::from(["aa:bb".to_owned()]);
+        assert_eq!(
+            without_revoked(vec![member.clone()], &revoked),
+            vec![member]
+        );
     }
 
     #[test]

@@ -1,0 +1,169 @@
+//! Fast revocation, sourced from the `refs/meta/revoked` ref.
+//!
+//! Routine compromise self-heals through expiry: an un-refreshed member key
+//! stops authorizing pushes once its window lapses. Revocation is the "faster
+//! than expiry" override — a deny list of fingerprints the verifier subtracts
+//! from the trust set *before* checking a push, so a compromised key is refused
+//! the moment it is listed, without waiting for its window and without editing
+//! the member refs that may be governed elsewhere.
+//!
+//! The list is one ref — `refs/meta/revoked` — precisely so a forge can fan it
+//! out to every repository it hosts as a single push (that fan-out is a
+//! server-side concern layered on top of this primitive). It denies leaf-key
+//! fingerprints; a compromised certificate authority is revoked by removing the
+//! CA member itself, since a CA is named by a whole ref rather than listed by
+//! fingerprint.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use facet::Facet;
+
+/// The ref whose tree holds the revocation list — the deny overlay on the trust
+/// set.
+pub const REVOKED_REF: &str = "refs/meta/revoked";
+
+/// The revocation document stored at [`REVOKED_REF`]: its `revoked/` subtree maps
+/// each revoked fingerprint to a free-text reason (`""` when none was given).
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+struct Revocations {
+    revoked: BTreeMap<String, String>,
+}
+
+impl git_store::MapDoc for Revocations {
+    fn from_entries(entries: BTreeMap<String, String>) -> Self {
+        Self { revoked: entries }
+    }
+
+    fn into_entries(self) -> BTreeMap<String, String> {
+        self.revoked
+    }
+}
+
+/// One revoked key recorded in [`REVOKED_REF`]: its fingerprint and why it was
+/// revoked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revocation {
+    /// The revoked key's fingerprint — the `members/<fingerprint>` it denies.
+    pub fingerprint: String,
+    /// A free-text reason, or `""` when none was given.
+    pub reason: String,
+}
+
+impl git_store::Row for Revocation {
+    fn from_pair(fingerprint: String, reason: String) -> Self {
+        Self {
+            fingerprint,
+            reason,
+        }
+    }
+
+    fn into_pair(self) -> (String, String) {
+        (self.fingerprint, self.reason)
+    }
+}
+
+/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
+/// yields an empty list — nothing is revoked.
+pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
+    git_store::Store::open(repo)?.load_rows::<Revocations, Revocation>(REVOKED_REF)
+}
+
+/// Write `revocations` to [`REVOKED_REF`], replacing any existing list, as a new
+/// commit.
+pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store_rows::<Revocations, _>(
+        REVOKED_REF,
+        revocations.iter().cloned(),
+        "Update revocations",
+    )
+}
+
+/// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`, for the
+/// verifier to subtract from the trust set.
+pub fn fingerprints(repo: &Path) -> Result<BTreeSet<String>, git_store::Error> {
+    Ok(load(repo)?
+        .into_iter()
+        .map(|revocation| revocation.fingerprint)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::let_underscore_must_use,
+        reason = "unit test"
+    )]
+
+    use super::*;
+    use crate::testutil::{unique_repo as new_repo, write_meta_doc};
+
+    fn unique_repo() -> std::path::PathBuf {
+        new_repo("revocations")
+    }
+
+    fn revocation(fingerprint: &str, reason: &str) -> Revocation {
+        Revocation {
+            fingerprint: fingerprint.to_owned(),
+            reason: reason.to_owned(),
+        }
+    }
+
+    #[test]
+    fn store_then_load_round_trips_the_revocations() {
+        let repo = unique_repo();
+        let written = vec![
+            revocation("aa:bb", "laptop stolen"),
+            revocation("cc:dd", ""),
+        ];
+        store(&repo, &written).unwrap();
+        let mut loaded = load(&repo).unwrap();
+        loaded.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+        assert_eq!(loaded, written);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn empty_when_the_revoked_ref_is_absent() {
+        let repo = unique_repo();
+        assert!(load(&repo).unwrap().is_empty());
+        assert!(fingerprints(&repo).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fingerprints_collects_the_revoked_keys() {
+        let repo = unique_repo();
+        store(&repo, &[revocation("aa:bb", "x"), revocation("cc:dd", "")]).unwrap();
+        assert_eq!(
+            fingerprints(&repo).unwrap(),
+            BTreeSet::from(["aa:bb".to_owned(), "cc:dd".to_owned()])
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn loads_the_on_disk_revoked_format() {
+        // A fixture written as the real `revoked/<fingerprint>` blob layout must
+        // keep loading, guarding the document's shape against an incompatible
+        // change to data already on a ref.
+        let repo = unique_repo();
+        write_meta_doc(
+            &repo,
+            REVOKED_REF,
+            "revoked",
+            &[("aa:bb", "laptop stolen"), ("cc:dd", "")],
+        );
+        let mut loaded = load(&repo).unwrap();
+        loaded.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+        assert_eq!(
+            loaded,
+            vec![
+                revocation("aa:bb", "laptop stolen"),
+                revocation("cc:dd", "")
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}

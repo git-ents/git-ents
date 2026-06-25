@@ -151,6 +151,17 @@ fn server_repo_with(base: &Path, members: &[Member]) -> PathBuf {
     repo
 }
 
+/// Deny `fingerprint` on the server's `refs/meta/revoked` ref, in the real
+/// on-disk `revoked/<fingerprint>` blob layout. The members helper records each
+/// member's key under the fingerprint `key`.
+fn revoke(repo: &Path, fingerprint: &str) {
+    let reason_blob = hash_object(repo, b"compromised");
+    let revoked_tree = mktree(repo, &format!("100644 blob {reason_blob}\t{fingerprint}\n"));
+    let root_tree = mktree(repo, &format!("040000 tree {revoked_tree}\trevoked\n"));
+    let commit = ok(repo, "git", &["commit-tree", &root_tree, "-m", "revoke"]);
+    ok(repo, "git", &["update-ref", "refs/meta/revoked", &commit]);
+}
+
 fn hash_object(repo: &Path, bytes: &[u8]) -> String {
     pipe(repo, &["hash-object", "-w", "--stdin"], bytes)
 }
@@ -311,6 +322,24 @@ fn rejects_a_push_signed_before_a_keys_window_opens() {
     assert!(
         !push(&work, &server, true),
         "push signed before the key's window opened was accepted"
+    );
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn rejects_a_push_signed_by_a_revoked_key() {
+    // The key is a valid, in-window member, but its fingerprint is on the
+    // `refs/meta/revoked` deny list, so the verifier subtracts it and the push
+    // is refused — revocation faster than expiry.
+    let base = unique_dir("revoked");
+    let pubkey = keygen(&base, "id");
+    let server = server_repo(&base, &[&pubkey]);
+    revoke(&server, "key");
+    let work = work_repo(&base, Some(&pubkey));
+
+    assert!(
+        !push(&work, &server, true),
+        "push signed by a revoked key was accepted"
     );
     std::fs::remove_dir_all(&base).ok();
 }

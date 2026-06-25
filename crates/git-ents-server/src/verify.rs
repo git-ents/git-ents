@@ -5,12 +5,16 @@
 //! its open bootstrap window and every push is allowed, so the first member can
 //! be pushed in. Once any member is listed, a push must carry a signed-push
 //! certificate (`git push --signed`) whose anti-replay nonce git accepted and
-//! whose signature verifies against one of those members' in-window keys.
+//! whose signature verifies against one of those members' in-window keys —
+//! minus any fingerprint on the `refs/meta/revoked` deny list, which is
+//! subtracted from the trust set before the check so a revoked key fails the
+//! moment it is listed, faster than its window would expire.
 
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use git_ents::revocations;
 use git_ents::signers::{self, Member};
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
@@ -18,12 +22,18 @@ use git_ents::signers::{self, Member};
 /// environment git populates for the hook.
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
-    let authorized =
+    let members =
         signers::load_all(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
-    if authorized.is_empty() {
+    if members.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
+        // Revocation is keyed on member refs existing, so revoking every member's
+        // keys leaves the set empty and fails closed rather than reopening this
+        // bootstrap window.
         return Ok(());
     }
+    let revoked =
+        revocations::fingerprints(&repo).map_err(|e| format!("could not read revocations: {e}"))?;
+    let authorized = signers::without_revoked(members, &revoked);
 
     let cert_oid = env("GIT_PUSH_CERT")
         .filter(|oid| !oid.is_empty())

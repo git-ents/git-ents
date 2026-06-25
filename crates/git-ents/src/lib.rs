@@ -4,6 +4,7 @@ pub mod account;
 pub mod checks;
 pub mod config;
 pub mod issues;
+pub mod revocations;
 pub mod signers;
 #[cfg(test)]
 mod testutil;
