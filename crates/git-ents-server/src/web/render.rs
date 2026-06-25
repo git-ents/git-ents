@@ -48,10 +48,16 @@ impl Render for Issue {
 }
 
 /// A member renders one row per authorized key — the username as the key column,
-/// a short key label beside it — rather than the raw keys and trust enum the
-/// structural walk would print.
+/// a short key label beside it — or a single `cert-authority` row for a pinned
+/// CA, rather than the raw keys and trust enum the structural walk would print.
 impl Render for Member {
     fn render(&self) -> Markup {
+        if let Some(ca) = self.ca() {
+            return row(
+                &self.principal,
+                &format!("cert-authority · {}", signer_label(ca)),
+            );
+        }
         html! {
             @for (_fingerprint, key) in self.keys() {
                 (row(&self.principal, &signer_label(key)))

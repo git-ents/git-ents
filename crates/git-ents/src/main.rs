@@ -72,6 +72,10 @@ enum Action {
         /// Key to authorize; defaults to `user.signingkey`.
         #[arg(long)]
         key: Option<PathBuf>,
+        /// Pin a certificate authority public key instead of leaf keys: trust
+        /// any certificate it issues for the member, within the cert's validity.
+        #[arg(long, value_name = "CA_PUBKEY", conflicts_with = "key")]
+        cert_authority: Option<PathBuf>,
         /// Trust the member only at or after this OpenSSH timestamp
         /// (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`; append `Z` for UTC).
         #[arg(long, value_name = "TIMESTAMP")]
@@ -171,12 +175,14 @@ fn run_members(action: Action) -> Result<(), String> {
             username,
             remote,
             key,
+            cert_authority,
             valid_after,
             valid_before,
         } => members_add(
             &username,
             &remote,
             key.as_deref(),
+            cert_authority.as_deref(),
             valid_after,
             valid_before,
         ),
@@ -478,8 +484,9 @@ fn default_key_path() -> Result<PathBuf, String> {
     Ok(Path::new(&home).join(".ssh").join("id_ed25519"))
 }
 
-/// List every member on `remote` — one line per authorized key — as
-/// `<username>/<fingerprint>  <key label><window>`.
+/// List every member on `remote` — one line per authorized key, or one
+/// `cert-authority` line per pinned-CA member — as
+/// `<username>[/<fingerprint>]  <label><window>`.
 fn members_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, MEMBER_NS)?;
@@ -490,23 +497,32 @@ fn members_list(remote: &str) -> Result<(), String> {
     }
     for member in members {
         let suffix = window_suffix(&member);
-        for (fingerprint, key) in member.keys() {
+        if let Some(ca) = member.ca() {
             println!(
-                "{}/{fingerprint}  {}{suffix}",
+                "{}  cert-authority {}{suffix}",
                 member.principal,
-                key_comment(key)
+                key_comment(ca)
             );
+        } else {
+            for (fingerprint, key) in member.keys() {
+                println!(
+                    "{}/{fingerprint}  {}{suffix}",
+                    member.principal,
+                    key_comment(key)
+                );
+            }
         }
     }
     Ok(())
 }
 
-/// Authorize `key` for the member `username` on `remote`, trusting the member
-/// within the given validity window, and push the updated member ref.
+/// Authorize a key (or pin a CA) for the member `username` on `remote`, trusting
+/// the member within the given validity window, and push the updated member ref.
 fn members_add(
     username: &str,
     remote: &str,
     key: Option<&Path>,
+    cert_authority: Option<&Path>,
     valid_after: Option<String>,
     valid_before: Option<String>,
 ) -> Result<(), String> {
@@ -517,8 +533,6 @@ fn members_add(
         validate_timestamp(before)?;
     }
     let repo = repo()?;
-    let public_key = public_key(key)?;
-    let fingerprint = fingerprint(&public_key)?;
     let refname = member_ref(username);
     let expected = sync(remote, &refname)?;
     let mut member = signers::load(&repo, username)
@@ -530,7 +544,29 @@ fn members_add(
     if valid_before.is_some() {
         member.valid_before = valid_before;
     }
-    let Trust::Keys(keys) = &mut member.trust;
+
+    // Pinning a CA replaces the member's trust wholesale — a member is either
+    // leaf keys or a CA, never both.
+    if let Some(ca_path) = cert_authority {
+        let ca = read_public_key(ca_path)?;
+        member.trust = Trust::CertAuthority(ca);
+        signers::store(&repo, &member).map_err(|error| error.to_string())?;
+        push_signed(remote, &refname, expected.as_deref())?;
+        println!("pinned a certificate authority for {username}");
+        return Ok(());
+    }
+
+    let public_key = public_key(key)?;
+    let fingerprint = fingerprint(&public_key)?;
+    let keys = match &mut member.trust {
+        Trust::Keys(keys) => keys,
+        Trust::CertAuthority(_ca) => {
+            return Err(format!(
+                "{username} is pinned to a certificate authority; \
+                 revoke and re-add to switch to leaf keys"
+            ));
+        }
+    };
     if keys
         .values()
         .any(|existing| same_key(existing, &public_key))

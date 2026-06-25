@@ -50,14 +50,21 @@ pub struct Member {
 }
 
 /// What a member's trust rests on. A member is *either* a set of leaf keys *or*
-/// (from Phase 3) a pinned certificate authority — additive cases, not a
-/// migration of one another.
+/// a pinned certificate authority — additive cases, not a migration of one
+/// another. Pinning a CA decouples the stable pin from ephemeral device keys, so
+/// rotation, expiry, and new devices cost zero downstream edits; it is a
+/// security win only when the CA lives off the device (hardware token, offline,
+/// or a remote issuer behind SSO).
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Trust {
     /// A set of leaf signing keys, mapping each fingerprint to its OpenSSH public
-    /// key.
+    /// key. The solo/small-team default.
     Keys(BTreeMap<String, String>),
+    /// A pinned certificate authority's OpenSSH public key: any certificate it
+    /// issues for the member's principal, within the cert's own validity window,
+    /// is trusted. The enterprise / many-repos option.
+    CertAuthority(String),
 }
 
 impl Member {
@@ -72,12 +79,35 @@ impl Member {
         }
     }
 
+    /// A member trusting any certificate the CA `ca` issues for them, with no
+    /// validity window.
+    #[must_use]
+    pub fn with_ca(principal: String, ca: String) -> Self {
+        Self {
+            principal,
+            valid_after: None,
+            valid_before: None,
+            trust: Trust::CertAuthority(ca),
+        }
+    }
+
     /// The member's leaf signing keys as `(fingerprint, key)` pairs. A member
-    /// resting on a CA (Phase 3) has no leaf keys and yields none.
+    /// resting on a CA has no leaf keys and yields none.
     #[must_use]
     pub fn keys(&self) -> Vec<(&String, &String)> {
         match &self.trust {
             Trust::Keys(keys) => keys.iter().collect(),
+            Trust::CertAuthority(_ca) => Vec::new(),
+        }
+    }
+
+    /// The member's pinned certificate authority key, or `None` when the member
+    /// rests on leaf keys.
+    #[must_use]
+    pub fn ca(&self) -> Option<&str> {
+        match &self.trust {
+            Trust::CertAuthority(ca) => Some(ca),
+            Trust::Keys(_keys) => None,
         }
     }
 }
@@ -129,20 +159,29 @@ pub fn allowed_signers(members: &[Member]) -> String {
     members.iter().flat_map(member_lines).collect::<String>()
 }
 
-/// The `allowed_signers` lines for one member: one per leaf key, each carrying
-/// the member's validity window.
+/// The `allowed_signers` lines for one member: one per leaf key, or a single
+/// `cert-authority` line for a pinned CA. Each carries the member's validity
+/// window. `ssh-keygen -Y verify` consumes the `cert-authority` flag natively —
+/// it accepts a certificate the CA issued for the verified principal — so no
+/// special verifier logic is needed beyond emitting the line.
 fn member_lines(member: &Member) -> Vec<String> {
-    member
-        .keys()
-        .into_iter()
-        .map(|(_fingerprint, key)| allowed_signers_line(member, key))
-        .collect()
+    match &member.trust {
+        Trust::Keys(keys) => keys
+            .values()
+            .map(|key| allowed_signers_line(member, false, key))
+            .collect(),
+        Trust::CertAuthority(ca) => vec![allowed_signers_line(member, true, ca)],
+    }
 }
 
-/// One `allowed_signers` line: the wildcard principal, the member's validity
-/// window, the git namespace, and the key.
-fn allowed_signers_line(member: &Member, key: &str) -> String {
+/// One `allowed_signers` line: the wildcard principal, the `cert-authority` flag
+/// when `ca` is set, the member's validity window, the git namespace, and the
+/// key. Options are comma-joined, the syntax OpenSSH requires for more than one.
+fn allowed_signers_line(member: &Member, ca: bool, key: &str) -> String {
     let mut options = Vec::new();
+    if ca {
+        options.push("cert-authority".to_owned());
+    }
     if let Some(after) = &member.valid_after {
         options.push(format!("valid-after=\"{after}\""));
     }
@@ -270,6 +309,28 @@ mod tests {
             format!(
                 "* valid-after=\"20260101\",valid-before=\"20270101\",namespaces=\"git\" {KEY_A}\n"
             )
+        );
+    }
+
+    #[test]
+    fn store_then_load_round_trips_a_ca_member() {
+        let repo = unique_repo();
+        let member = Member::with_ca("alice".to_owned(), KEY_A.to_owned());
+        store(&repo, &member).unwrap();
+        let loaded = load(&repo, "alice").unwrap().unwrap();
+        assert_eq!(loaded, member);
+        assert_eq!(loaded.ca(), Some(KEY_A));
+        assert!(loaded.keys().is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn renders_a_pinned_ca_as_a_cert_authority_line() {
+        let mut member = Member::with_ca("alice".to_owned(), KEY_A.to_owned());
+        member.valid_before = Some("20270101".to_owned());
+        assert_eq!(
+            allowed_signers(&[member]),
+            format!("* cert-authority,valid-before=\"20270101\",namespaces=\"git\" {KEY_A}\n")
         );
     }
 }
