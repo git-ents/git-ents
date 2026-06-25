@@ -66,8 +66,32 @@ fn keygen(base: &Path, name: &str) -> PathBuf {
 }
 
 /// Create a bare server repo wired to the `pre-receive` verifier, listing the
-/// public keys at `authorized` as signers.
+/// public keys at `authorized` as signers with no validity window.
 fn server_repo(base: &Path, authorized: &[&Path]) -> PathBuf {
+    let members: Vec<Member> = authorized
+        .iter()
+        .map(|pubkey| Member {
+            pubkey,
+            valid_after: None,
+            valid_before: None,
+        })
+        .collect();
+    server_repo_with(base, &members)
+}
+
+/// One authorized member written into the test `refs/meta/members` doc: a public
+/// key and the validity window it is trusted within.
+struct Member<'a> {
+    pubkey: &'a Path,
+    valid_after: Option<&'a str>,
+    valid_before: Option<&'a str>,
+}
+
+/// Create a bare server repo wired to the `pre-receive` verifier whose
+/// `refs/meta/members` lists `members` in the real on-disk layout — a
+/// `members/<key-n>/` subtree per member holding a `key` blob and an
+/// `valid_after`/`valid_before` `Option` subtree each.
+fn server_repo_with(base: &Path, members: &[Member]) -> PathBuf {
     let repo = base.join("srv.git");
     ok(
         base,
@@ -88,12 +112,29 @@ fn server_repo(base: &Path, authorized: &[&Path]) -> PathBuf {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    if !authorized.is_empty() {
+    if !members.is_empty() {
+        let option_tree = |bound: Option<&str>| match bound {
+            None => mktree(&repo, ""),
+            Some(value) => {
+                let blob = hash_object(&repo, value.as_bytes());
+                mktree(&repo, &format!("100644 blob {blob}\tsome\n"))
+            }
+        };
         let mut tree_entries = String::new();
-        for (index, pubkey) in authorized.iter().enumerate() {
-            let key = std::fs::read_to_string(pubkey).unwrap();
-            let oid = hash_object(&repo, key.as_bytes());
-            tree_entries.push_str(&format!("100644 blob {oid}\tkey-{index}\n"));
+        for (index, member) in members.iter().enumerate() {
+            let key = std::fs::read_to_string(member.pubkey).unwrap();
+            let key_blob = hash_object(&repo, key.as_bytes());
+            let after_tree = option_tree(member.valid_after);
+            let before_tree = option_tree(member.valid_before);
+            let member_tree = mktree(
+                &repo,
+                &format!(
+                    "100644 blob {key_blob}\tkey\n\
+                     040000 tree {after_tree}\tvalid_after\n\
+                     040000 tree {before_tree}\tvalid_before\n"
+                ),
+            );
+            tree_entries.push_str(&format!("040000 tree {member_tree}\tkey-{index}\n"));
         }
         let members_tree = mktree(&repo, &tree_entries);
         let root_tree = mktree(&repo, &format!("040000 tree {members_tree}\tmembers\n"));
@@ -198,6 +239,72 @@ fn rejects_an_unsigned_push_when_signers_exist() {
     let work = work_repo(&base, None);
 
     assert!(!push(&work, &server, false), "unsigned push was accepted");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn accepts_a_push_signed_by_an_in_window_key() {
+    let base = unique_dir("inwindow");
+    let pubkey = keygen(&base, "id");
+    let server = server_repo_with(
+        &base,
+        &[Member {
+            pubkey: &pubkey,
+            valid_after: Some("20200101"),
+            valid_before: Some("20990101"),
+        }],
+    );
+    let work = work_repo(&base, Some(&pubkey));
+
+    assert!(
+        push(&work, &server, true),
+        "in-window signed push was rejected"
+    );
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn rejects_a_push_signed_by_an_expired_key() {
+    // The window lapsed before today, so the key no longer authorizes a new
+    // push — staleness fails closed. This is the Phase 1 security gate: if the
+    // verifier ignored `valid-before`, this push would be accepted.
+    let base = unique_dir("expired");
+    let pubkey = keygen(&base, "id");
+    let server = server_repo_with(
+        &base,
+        &[Member {
+            pubkey: &pubkey,
+            valid_after: None,
+            valid_before: Some("20200101"),
+        }],
+    );
+    let work = work_repo(&base, Some(&pubkey));
+
+    assert!(
+        !push(&work, &server, true),
+        "push signed by an expired-window key was accepted"
+    );
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn rejects_a_push_signed_before_a_keys_window_opens() {
+    let base = unique_dir("future");
+    let pubkey = keygen(&base, "id");
+    let server = server_repo_with(
+        &base,
+        &[Member {
+            pubkey: &pubkey,
+            valid_after: Some("20990101"),
+            valid_before: None,
+        }],
+    );
+    let work = work_repo(&base, Some(&pubkey));
+
+    assert!(
+        !push(&work, &server, true),
+        "push signed before the key's window opened was accepted"
+    );
     std::fs::remove_dir_all(&base).ok();
 }
 

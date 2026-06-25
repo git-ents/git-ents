@@ -12,7 +12,6 @@ use std::process::{Command, ExitCode, Stdio};
 use clap::{Parser, Subcommand};
 use git_ents::checks::{self, CHECKS_REF, Check};
 use git_ents::signers::{self, MEMBERS_REF, Signer};
-use git_store::Row as _;
 
 #[derive(Parser)]
 #[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
@@ -61,6 +60,14 @@ enum Action {
         /// Key to authorize; defaults to `user.signingkey`.
         #[arg(long)]
         key: Option<PathBuf>,
+        /// Trust the key only at or after this OpenSSH timestamp
+        /// (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`; append `Z` for UTC).
+        #[arg(long, value_name = "TIMESTAMP")]
+        valid_after: Option<String>,
+        /// Stop trusting the key after this OpenSSH timestamp; omit for trust
+        /// that never lapses on its own.
+        #[arg(long, value_name = "TIMESTAMP")]
+        valid_before: Option<String>,
     },
     /// Remove a member from a remote's set and push the update.
     Remove {
@@ -128,7 +135,12 @@ fn run_members(action: Action) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
         Action::List { remote } => list::<Signers>(&remote),
-        Action::Add { remote, key } => add(&remote, key.as_deref()),
+        Action::Add {
+            remote,
+            key,
+            valid_after,
+            valid_before,
+        } => add(&remote, key.as_deref(), valid_after, valid_before),
         Action::Remove {
             fingerprint,
             remote,
@@ -150,27 +162,29 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
 }
 
 /// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
-/// and pushed to a remote, holding [`git_store::Row`] entries the CLI lists and
-/// removes from. The two sets — authorized signers and configured checks —
-/// share that flow and differ only in their row type and what the messages call
-/// an entry; the thin [`load`](Set::load)/[`store`](Set::store) keep each on its
-/// own typed module.
+/// and pushed to a remote, holding entries the CLI lists and removes from. The
+/// two sets — authorized signers and configured checks — share that flow and
+/// differ only in their item type, what the messages call an entry, and how a
+/// row presents; the thin [`load`](Set::load)/[`store`](Set::store) keep each on
+/// its own typed module.
 trait Set {
-    /// The set's row type, a `(key, value)` pair under [`git_store::Row`].
-    type Item: git_store::Row;
+    /// The set's item type.
+    type Item;
     /// The ref the set lives on.
     const REF: &'static str;
     /// The singular noun used in messages ("member", "check").
     const NOUN: &'static str;
 
-    /// The set's rows.
+    /// The set's items.
     fn load(repo: &Path) -> Result<Vec<Self::Item>, String>;
     /// Replace the set with `items`.
     fn store(repo: &Path, items: &[Self::Item]) -> Result<(), String>;
     /// The line printed when the set is empty on `remote`.
     fn empty_listing(remote: &str) -> String;
-    /// The value column for a row, given its key and stored value.
-    fn row_value(key: &str, value: &str) -> String;
+    /// An item's key — its identity for removal and the left list column.
+    fn key(item: &Self::Item) -> String;
+    /// The right list column for an item.
+    fn value(item: &Self::Item) -> String;
 }
 
 /// The repository member set at `refs/meta/members`.
@@ -193,8 +207,12 @@ impl Set for Signers {
         format!("no members on {remote} (open bootstrap window)")
     }
 
-    fn row_value(_key: &str, value: &str) -> String {
-        key_comment(value)
+    fn key(item: &Signer) -> String {
+        item.fingerprint.clone()
+    }
+
+    fn value(item: &Signer) -> String {
+        signer_label(item)
     }
 }
 
@@ -218,9 +236,34 @@ impl Set for Checks {
         format!("no checks configured on {remote}")
     }
 
-    fn row_value(_key: &str, value: &str) -> String {
-        value.to_owned()
+    fn key(item: &Check) -> String {
+        item.name.clone()
     }
+
+    fn value(item: &Check) -> String {
+        item.command.clone()
+    }
+}
+
+/// The list column for a member: its key comment and validity window, so an
+/// expiry that has been set is visible at a glance rather than hidden in the
+/// stored `allowed_signers` options.
+fn signer_label(signer: &Signer) -> String {
+    let mut label = key_comment(&signer.key);
+    let mut window = Vec::new();
+    if let Some(after) = &signer.valid_after {
+        window.push(format!("after {after}"));
+    }
+    if let Some(before) = &signer.valid_before {
+        window.push(format!("before {before}"));
+    }
+    if !window.is_empty() {
+        if !label.is_empty() {
+            label.push(' ');
+        }
+        label.push_str(&format!("({})", window.join(", ")));
+    }
+    label
 }
 
 /// Print each entry of the set `S` on `remote` as `<key>  <value>`.
@@ -233,8 +276,7 @@ fn list<S: Set>(remote: &str) -> Result<(), String> {
         return Ok(());
     }
     for item in items {
-        let (key, value) = item.into_pair();
-        println!("{key}  {}", S::row_value(&key, &value));
+        println!("{}  {}", S::key(&item), S::value(&item));
     }
     Ok(())
 }
@@ -243,15 +285,11 @@ fn list<S: Set>(remote: &str) -> Result<(), String> {
 fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
     let expected = sync(remote, S::REF)?;
-    let before: Vec<(String, String)> = S::load(&repo)?
-        .into_iter()
-        .map(git_store::Row::into_pair)
-        .collect();
+    let before = S::load(&repo)?;
     let count = before.len();
     let after: Vec<S::Item> = before
         .into_iter()
-        .filter(|(k, _v)| k != key)
-        .map(|(k, v)| S::Item::from_pair(k, v))
+        .filter(|item| S::key(item) != key)
         .collect();
     if after.len() == count {
         return Err(format!("no {} named {key} on {remote}", S::NOUN));
@@ -425,8 +463,20 @@ fn default_key_path() -> Result<PathBuf, String> {
     Ok(Path::new(&home).join(".ssh").join("id_ed25519"))
 }
 
-/// Authorize `key` on `remote` and push the updated set.
-fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
+/// Authorize `key` on `remote`, trusting it within the given validity window,
+/// and push the updated set.
+fn add(
+    remote: &str,
+    key: Option<&Path>,
+    valid_after: Option<String>,
+    valid_before: Option<String>,
+) -> Result<(), String> {
+    if let Some(after) = &valid_after {
+        validate_timestamp(after)?;
+    }
+    if let Some(before) = &valid_before {
+        validate_timestamp(before)?;
+    }
     let repo = repo()?;
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
@@ -442,11 +492,29 @@ fn add(remote: &str, key: Option<&Path>) -> Result<(), String> {
     signers.push(Signer {
         fingerprint: fingerprint.clone(),
         key: public_key,
+        valid_after,
+        valid_before,
     });
     signers::store(&repo, &signers).map_err(|error| error.to_string())?;
     push_signed(remote, MEMBERS_REF, expected.as_deref())?;
     println!("authorized {fingerprint}");
     Ok(())
+}
+
+/// Check that `value` is an OpenSSH `allowed_signers` timestamp: `YYYYMMDD`,
+/// `YYYYMMDDHHMM`, or `YYYYMMDDHHMMSS`, each optionally suffixed `Z` for UTC.
+/// Without `Z` the verifying server reads it in its own local time zone.
+fn validate_timestamp(value: &str) -> Result<(), String> {
+    let digits = value.strip_suffix('Z').unwrap_or(value);
+    let well_formed =
+        matches!(digits.len(), 8 | 12 | 14) && digits.bytes().all(|b| b.is_ascii_digit());
+    if well_formed {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid timestamp {value:?}: expected YYYYMMDD[Z] or YYYYMMDDHHMM[SS][Z]"
+        ))
+    }
 }
 
 /// Report whether `key` is in `remote`'s set and how this client is configured.
