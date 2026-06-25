@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode, Stdio};
 use clap::{Parser, Subcommand};
 use git_ents::checks::{self, CHECKS_REF, Check};
 use git_ents::signers::{self, MEMBERS_REF, Signer};
+use git_store::Row as _;
 
 #[derive(Parser)]
 #[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
@@ -149,21 +150,23 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
 }
 
 /// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
-/// and pushed to a remote, holding `(key, value)` entries the CLI lists and
+/// and pushed to a remote, holding [`git_store::Row`] entries the CLI lists and
 /// removes from. The two sets — authorized signers and configured checks —
-/// share that flow and differ only in how a row reads and what the messages
-/// call an entry; the type-specific [`load`](Set::load)/[`store`](Set::store)
-/// keep each on its own typed module.
+/// share that flow and differ only in their row type and what the messages call
+/// an entry; the thin [`load`](Set::load)/[`store`](Set::store) keep each on its
+/// own typed module.
 trait Set {
+    /// The set's row type, a `(key, value)` pair under [`git_store::Row`].
+    type Item: git_store::Row;
     /// The ref the set lives on.
     const REF: &'static str;
-    /// The singular noun used in messages ("signer", "check").
+    /// The singular noun used in messages ("member", "check").
     const NOUN: &'static str;
 
-    /// The set's entries as `(key, value)` pairs.
-    fn load(repo: &Path) -> Result<Vec<(String, String)>, String>;
-    /// Replace the set with `entries`.
-    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String>;
+    /// The set's rows.
+    fn load(repo: &Path) -> Result<Vec<Self::Item>, String>;
+    /// Replace the set with `items`.
+    fn store(repo: &Path, items: &[Self::Item]) -> Result<(), String>;
     /// The line printed when the set is empty on `remote`.
     fn empty_listing(remote: &str) -> String;
     /// The value column for a row, given its key and stored value.
@@ -174,26 +177,16 @@ trait Set {
 struct Signers;
 
 impl Set for Signers {
+    type Item = Signer;
     const REF: &'static str = MEMBERS_REF;
     const NOUN: &'static str = "member";
 
-    fn load(repo: &Path) -> Result<Vec<(String, String)>, String> {
-        Ok(signers::load(repo)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|signer| (signer.fingerprint, signer.key))
-            .collect())
+    fn load(repo: &Path) -> Result<Vec<Signer>, String> {
+        signers::load(repo).map_err(|error| error.to_string())
     }
 
-    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String> {
-        let signers: Vec<Signer> = entries
-            .iter()
-            .map(|(fingerprint, key)| Signer {
-                fingerprint: fingerprint.clone(),
-                key: key.clone(),
-            })
-            .collect();
-        signers::store(repo, &signers).map_err(|error| error.to_string())
+    fn store(repo: &Path, items: &[Signer]) -> Result<(), String> {
+        signers::store(repo, items).map_err(|error| error.to_string())
     }
 
     fn empty_listing(remote: &str) -> String {
@@ -209,26 +202,16 @@ impl Set for Signers {
 struct Checks;
 
 impl Set for Checks {
+    type Item = Check;
     const REF: &'static str = CHECKS_REF;
     const NOUN: &'static str = "check";
 
-    fn load(repo: &Path) -> Result<Vec<(String, String)>, String> {
-        Ok(checks::load(repo)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|check| (check.name, check.command))
-            .collect())
+    fn load(repo: &Path) -> Result<Vec<Check>, String> {
+        checks::load(repo).map_err(|error| error.to_string())
     }
 
-    fn store(repo: &Path, entries: &[(String, String)]) -> Result<(), String> {
-        let checks: Vec<Check> = entries
-            .iter()
-            .map(|(name, command)| Check {
-                name: name.clone(),
-                command: command.clone(),
-            })
-            .collect();
-        checks::store(repo, &checks).map_err(|error| error.to_string())
+    fn store(repo: &Path, items: &[Check]) -> Result<(), String> {
+        checks::store(repo, items).map_err(|error| error.to_string())
     }
 
     fn empty_listing(remote: &str) -> String {
@@ -244,13 +227,14 @@ impl Set for Checks {
 fn list<S: Set>(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync(remote, S::REF)?;
-    let entries = S::load(&repo)?;
-    if entries.is_empty() {
+    let items = S::load(&repo)?;
+    if items.is_empty() {
         println!("{}", S::empty_listing(remote));
         return Ok(());
     }
-    for (key, value) in &entries {
-        println!("{key}  {}", S::row_value(key, value));
+    for item in items {
+        let (key, value) = item.into_pair();
+        println!("{key}  {}", S::row_value(&key, &value));
     }
     Ok(())
 }
@@ -259,9 +243,16 @@ fn list<S: Set>(remote: &str) -> Result<(), String> {
 fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
     let expected = sync(remote, S::REF)?;
-    let before = S::load(&repo)?;
+    let before: Vec<(String, String)> = S::load(&repo)?
+        .into_iter()
+        .map(git_store::Row::into_pair)
+        .collect();
     let count = before.len();
-    let after: Vec<(String, String)> = before.into_iter().filter(|(k, _v)| k != key).collect();
+    let after: Vec<S::Item> = before
+        .into_iter()
+        .filter(|(k, _v)| k != key)
+        .map(|(k, v)| S::Item::from_pair(k, v))
+        .collect();
     if after.len() == count {
         return Err(format!("no {} named {key} on {remote}", S::NOUN));
     }
