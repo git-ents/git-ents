@@ -38,7 +38,8 @@ pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: Heade
     // UI rather than handed to the CGI backend.
     if is_web_get(&path_info, &query_string) {
         let host = header_value(&headers, "Host");
-        return crate::web::render(&state, &path_info, host.as_deref()).await;
+        let cookie = header_value(&headers, "Cookie");
+        return crate::web::render(&state, &path_info, host.as_deref(), cookie.as_deref()).await;
     }
 
     backend(
@@ -68,6 +69,12 @@ pub async fn post_request(
         return (StatusCode::BAD_REQUEST, "bad request").into_response();
     }
 
+    // The browser UI POSTs to sign in, sign out, and save edits; only the two
+    // git smart-HTTP RPCs go to the backend.
+    if !is_git_post(&path_info) {
+        return crate::web::handle_post(&state, &path_info, &headers, body).await;
+    }
+
     backend(
         &state,
         Method::POST,
@@ -77,6 +84,11 @@ pub async fn post_request(
         body,
     )
     .await
+}
+
+/// Whether a POST is a git smart-HTTP RPC rather than a browser form submission.
+fn is_git_post(path_info: &str) -> bool {
+    path_info.ends_with("/git-upload-pack") || path_info.ends_with("/git-receive-pack")
 }
 
 /// Hand a git wire-protocol request to `git http-backend` and reply with its
@@ -549,6 +561,7 @@ mod tests {
             cert_nonce_seed: cert_nonce_seed.map(str::to_owned),
             hooks_dir: hooks_dir.map(PathBuf::from),
             checks_queue: PathBuf::from("/data/checks-queue"),
+            sessions: crate::web::new_sessions(),
         }
     }
 

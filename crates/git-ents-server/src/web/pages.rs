@@ -818,7 +818,11 @@ async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue
 /// refs — `refs/meta/config` (General), `refs/meta/members` (Members), and the
 /// derived feature and check status. Editing is a members-gated write path that
 /// does not exist yet, so the values are presented as the current configuration.
-pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
+pub(super) async fn settings_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    auth: Option<&super::Auth>,
+) -> Markup {
     let members = load_members(repo).await;
     let checks = load_checks(repo).await;
     repo_shell(
@@ -832,11 +836,12 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                     "The repository's configuration on " code { "refs/meta/config" }
                     " and " code { "refs/meta/members" } "."
                 }
+                (settings_auth_banner(auth))
 
                 div.card {
                     div.card-header { "General" }
                     (setting_row("Repository name", meta.name()))
-                    (setting_row("Description", meta.description.as_deref().unwrap_or("—")))
+                    (description_setting(meta, auth))
                     (setting_row("Homepage", meta.homepage.as_deref().unwrap_or("—")))
                     (setting_row("Default branch", meta.branch.as_deref().unwrap_or("—")))
                     div.card-row {
@@ -918,6 +923,44 @@ async fn load_members(repo: &Path) -> Result<Vec<git_ents::members::Member>, Str
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
+}
+
+/// The settings authorization banner: who is signed in and whether they may
+/// edit this repository.
+fn settings_auth_banner(auth: Option<&super::Auth>) -> Markup {
+    html! {
+        @match auth {
+            None => p.shell-note {
+                a href="/login" { "Sign in" } " with a member web key to edit these settings."
+            }
+            Some(auth) if auth.username.is_some() => p.shell-note.can-edit {
+                "Signed in as " strong { (auth.label) } " — you can edit this repository."
+            }
+            Some(auth) => p.shell-note {
+                "Signed in as " strong { (auth.label) } ", but this key is not a member of this "
+                "repository, so settings are read-only."
+            }
+        }
+    }
+}
+
+/// The Description row: an inline edit form when the signed-in key is a member,
+/// otherwise the read-only value.
+fn description_setting(meta: &RepoMeta, auth: Option<&super::Auth>) -> Markup {
+    let value = meta.description.as_deref().unwrap_or_default();
+    if auth.and_then(|a| a.username.as_deref()).is_none() {
+        return setting_row("Description", meta.description.as_deref().unwrap_or("—"));
+    }
+    html! {
+        div.card-row {
+            span.setting-label { "Description" }
+            form.inline-edit method="post" action={ "/" (meta.rel) "/settings" } {
+                input type="text" name="description" value=(value)
+                    placeholder="A short description";
+                button.btn type="submit" { "Save" }
+            }
+        }
+    }
 }
 
 /// A read-only setting row: a label and its current value.

@@ -41,7 +41,18 @@ pub fn load(repo: &Path) -> Result<Config, git_store::Error> {
 /// Write `config` to [`CONFIG_REF`], replacing any existing value, as a new
 /// commit.
 pub fn store(repo: &Path, config: &Config) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(CONFIG_REF, config, "Update configuration")?;
+    store_to_ref(repo, CONFIG_REF, config)
+}
+
+/// Build the configuration commit on `refname` — chaining on that ref's own tip
+/// — without touching [`CONFIG_REF`].
+///
+/// The web write path stages an edit on a throwaway ref pointed at the current
+/// config tip, then lands it onto [`CONFIG_REF`] through a signed push, so the
+/// `pre-receive` gate judges the change rather than this writing the live ref
+/// directly.
+pub fn store_to_ref(repo: &Path, refname: &str, config: &Config) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store(refname, config, "Update configuration")?;
     Ok(())
 }
 

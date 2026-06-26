@@ -83,6 +83,9 @@ pub(crate) struct AppState {
     /// Directory the `post-receive` hook queues pushes into and the check
     /// worker drains; passed down to the hook via [`checks::QUEUE_ENV`].
     pub(crate) checks_queue: PathBuf,
+    /// In-memory web sessions: a browser's signed-in web key, held for the life
+    /// of the process and never persisted.
+    pub(crate) sessions: web::Sessions,
 }
 
 fn main() -> ExitCode {
@@ -134,6 +137,7 @@ async fn serve(args: Args) -> ExitCode {
         cert_nonce_seed: args.cert_nonce_seed,
         hooks_dir: args.hooks_dir,
         checks_queue: args.checks_queue,
+        sessions: web::new_sessions(),
     };
 
     // Drain queued pushes and run their checks for the life of the server.

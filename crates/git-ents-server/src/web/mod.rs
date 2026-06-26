@@ -13,15 +13,30 @@ mod git;
 mod icons;
 mod pages;
 mod render;
+mod write;
 
 use std::path::{Path, PathBuf};
 
-use axum::http::StatusCode;
+use axum::body::Bytes;
+use axum::http::header::{LOCATION, SET_COOKIE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 
 use crate::AppState;
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo, valid_segment};
+
+pub(crate) use self::write::{Sessions, new_sessions};
+
+/// Who is signed in for the current request, resolved per repository: a member's
+/// web key authorizes edits only on a repo whose member list contains it.
+pub(super) struct Auth {
+    /// The session key's display label.
+    label: String,
+    /// The member username this key maps to in the current repo, when it is a
+    /// member there — the gate for showing edit controls.
+    username: Option<String>,
+}
 
 use self::assets::{COPY_SCRIPT, FONTS, STYLE};
 use self::git::{discover_repos, git_output};
@@ -30,41 +45,164 @@ use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, 
 /// Render the page for `path`: the repository index at the root, a repository
 /// overview, or one of its browse views (`tree`, `blob`, `commit`). `host` is
 /// the request's `Host` header, used to build a copy-pasteable clone URL.
-pub(crate) async fn render(state: &AppState, path: &str, host: Option<&str>) -> Response {
+pub(crate) async fn render(
+    state: &AppState,
+    path: &str,
+    host: Option<&str>,
+    cookie: Option<&str>,
+) -> Response {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let session = write::snapshot(&state.sessions, cookie);
     if segments.is_empty() {
-        return index(state).into_response();
+        return index(state, session.as_ref()).into_response();
+    }
+    if segments == ["login"] {
+        return login_page(session.as_ref(), None).into_response();
     }
 
-    // The repository is the shortest valid prefix (up to `MAX_REPO_DEPTH`
-    // segments) that names a bare repo on disk; anything after it selects a
-    // browse view. Resolving the boundary this way keeps a repo named
-    // `tree`/`blob`/`commit` distinct from the route markers of the same name.
-    let depth_limit = segments.len().min(MAX_REPO_DEPTH);
-    for depth in 1..=depth_limit {
-        let Some(repo_segs) = segments.get(..depth) else {
-            break;
-        };
-        if !repo_segs.iter().all(|s| valid_segment(s)) {
-            break;
-        }
-        let relative: PathBuf = repo_segs.iter().collect();
-        let repo = state.data_dir.join(&relative);
-        if !is_bare_repo(&repo) {
-            continue;
-        }
-        let rel = repo_segs.join("/");
-        let rest = segments.get(depth..).unwrap_or_default();
-        return route(&repo, &rel, rest, host).await;
+    if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
+        return route(&repo, &rel, rest, host, session).await;
     }
 
     not_found().into_response()
 }
 
+/// Resolve the leading path segments to a repository: the shortest valid prefix
+/// (up to [`MAX_REPO_DEPTH`] segments) that names a bare repo on disk, with the
+/// rest of the path selecting a view. Resolving the boundary this way keeps a
+/// repo named `tree`/`blob`/`commit` distinct from the route markers of the same
+/// name.
+fn resolve_repo<'a>(
+    data_dir: &Path,
+    segments: &'a [&'a str],
+) -> Option<(PathBuf, String, &'a [&'a str])> {
+    let depth_limit = segments.len().min(MAX_REPO_DEPTH);
+    for depth in 1..=depth_limit {
+        let repo_segs = segments.get(..depth)?;
+        if !repo_segs.iter().all(|s| valid_segment(s)) {
+            break;
+        }
+        let relative: PathBuf = repo_segs.iter().collect();
+        let repo = data_dir.join(&relative);
+        if !is_bare_repo(&repo) {
+            continue;
+        }
+        let rel = repo_segs.join("/");
+        let rest = segments.get(depth..).unwrap_or_default();
+        return Some((repo, rel, rest));
+    }
+    None
+}
+
+/// Handle a browser POST: signing in, signing out, or saving a settings edit.
+/// Git wire POSTs never reach here — [`crate::http`] routes those to the backend.
+pub(crate) async fn handle_post(
+    state: &AppState,
+    path: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Response {
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if segments == ["login"] {
+        return match write::login(&state.sessions, &body) {
+            Ok(token) => redirect("/login", Some(session_cookie(&token))),
+            Err(error) => login_page(None, Some(&error)).into_response(),
+        };
+    }
+    if segments == ["logout"] {
+        write::logout(&state.sessions, cookie);
+        return redirect("/login", Some(cleared_cookie()));
+    }
+
+    let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) else {
+        return not_found().into_response();
+    };
+    if rest != ["settings"] {
+        return not_found().into_response();
+    }
+    save_settings(state, &repo, &rel, cookie, body).await
+}
+
+/// Apply a settings edit, then redirect back to the settings page on success or
+/// render the reason it was rejected.
+async fn save_settings(
+    state: &AppState,
+    repo: &Path,
+    rel: &str,
+    cookie: Option<&str>,
+    body: Bytes,
+) -> Response {
+    let (Some(seed), Some(hooks)) = (state.cert_nonce_seed.clone(), state.hooks_dir.clone()) else {
+        return edit_error(
+            rel,
+            "Editing is disabled: this server is not enforcing the signed-push gate.",
+        )
+        .into_response();
+    };
+    let description = write::field(&body, "description").unwrap_or_default();
+
+    let sessions = state.sessions.clone();
+    let cookie = cookie.map(str::to_owned);
+    let repo = repo.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        write::edit_description(
+            &sessions,
+            cookie.as_deref(),
+            &repo,
+            &description,
+            &seed,
+            &hooks,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => redirect(&format!("/{rel}/settings"), None),
+        Ok(Err(error)) => edit_error(rel, &error).into_response(),
+        Err(_join) => edit_error(rel, "the edit did not complete").into_response(),
+    }
+}
+
+/// A `303 See Other` redirect to `location`, optionally setting a cookie.
+fn redirect(location: &str, set_cookie: Option<String>) -> Response {
+    let mut builder = Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header(LOCATION, location);
+    if let Some(cookie) = set_cookie {
+        builder = builder.header(SET_COOKIE, cookie);
+    }
+    builder
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// The `Set-Cookie` value that opens a session.
+fn session_cookie(token: &str) -> String {
+    format!("{}={token}; Path=/; HttpOnly; SameSite=Lax", write::COOKIE)
+}
+
+/// The `Set-Cookie` value that clears a session.
+fn cleared_cookie() -> String {
+    format!(
+        "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        write::COOKIE
+    )
+}
+
 /// Dispatch the part of the path that follows the repository to a browse view.
 /// Each top-level tab is its own route, since the product is server-rendered
 /// with no client JavaScript.
-async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Response {
+async fn route(
+    repo: &Path,
+    rel: &str,
+    rest: &[&str],
+    host: Option<&str>,
+    session: Option<write::SessionSnapshot>,
+) -> Response {
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
         None => pages::repo_page(repo, &meta, host).await.into_response(),
@@ -75,9 +213,30 @@ async fn route(repo: &Path, rel: &str, rest: &[&str], host: Option<&str>) -> Res
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
         Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
-        Some((&"settings", &[])) => pages::settings_page(repo, &meta).await.into_response(),
+        Some((&"settings", &[])) => {
+            let auth = resolve_auth(repo, session).await;
+            pages::settings_page(repo, &meta, auth.as_ref())
+                .await
+                .into_response()
+        }
         _ => not_found().into_response(),
     }
+}
+
+/// Resolve the request's session into per-repo [`Auth`]: whether the session's
+/// web key is a member of `repo`, and under which username.
+async fn resolve_auth(repo: &Path, session: Option<write::SessionSnapshot>) -> Option<Auth> {
+    let session = session?;
+    let repo = repo.to_owned();
+    let key = session.public_key.clone();
+    let username = tokio::task::spawn_blocking(move || write::member_for_public_key(&repo, &key))
+        .await
+        .ok()
+        .flatten();
+    Some(Auth {
+        label: session.label,
+        username,
+    })
 }
 
 /// The top-level tabs of a repository page.
@@ -231,11 +390,12 @@ fn tab_bar(meta: &RepoMeta, active: Tab) -> Markup {
 }
 
 /// The repository listing shown at `/`.
-fn index(state: &AppState) -> Markup {
+fn index(state: &AppState, session: Option<&write::SessionSnapshot>) -> Markup {
     let repos = discover_repos(&state.data_dir);
     page(
         "Repositories",
         html! {
+            (account_strip(session))
             div.page-header {
                 h1.page-title { (icon_repo()) "Repositories" }
                 @if !repos.is_empty() {
@@ -280,6 +440,69 @@ fn not_found() -> (StatusCode, Markup) {
                 }
             },
         ),
+    )
+}
+
+/// A small right-aligned strip showing who is signed in, with a sign-in or
+/// sign-out control.
+fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
+    html! {
+        div.account-strip {
+            @match session {
+                Some(s) => {
+                    span.muted { "Signed in · " (s.label) }
+                    form method="post" action="/logout" {
+                        button.btn.btn-quiet type="submit" { "Sign out" }
+                    }
+                }
+                None => a.btn.btn-quiet href="/login" { "Sign in" }
+            }
+        }
+    }
+}
+
+/// The sign-in page: paste a web key to open a session. `error` shows a failed
+/// attempt's reason.
+fn login_page(session: Option<&write::SessionSnapshot>, error: Option<&str>) -> Markup {
+    page(
+        "Sign in",
+        html! {
+            (account_strip(session))
+            div.page-header { h1.page-title { "Sign in" } }
+            @if let Some(s) = session {
+                p { "Signed in as " strong { (s.label) } "." }
+                p.muted { "Your web key signs edits made in the browser." }
+            } @else {
+                p.shell-note {
+                    "Paste the " strong { "private" } " half of a web key whose public half you "
+                    "have added to your member ref. It is held in memory for this session only "
+                    "and is never written to disk."
+                }
+                @if let Some(error) = error {
+                    div.card-row.muted { "Could not sign in: " (error) }
+                }
+                form.edit-form method="post" action="/login" {
+                    label { "Key name (optional)" }
+                    input type="text" name="label" placeholder="laptop web key";
+                    label { "Private key" }
+                    textarea name="private_key" rows="8" spellcheck="false"
+                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" {}
+                    button.btn type="submit" { "Sign in" }
+                }
+            }
+        },
+    )
+}
+
+/// A page reporting why a settings edit was rejected, with a way back.
+fn edit_error(rel: &str, error: &str) -> Markup {
+    page(
+        "Edit rejected",
+        html! {
+            div.page-header { h1.page-title { "Edit rejected" } }
+            div.card-row.muted { (error) }
+            p { a.btn href={ "/" (rel) "/settings" } { "Back to settings" } }
+        },
     )
 }
 

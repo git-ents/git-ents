@@ -349,3 +349,19 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
   .issues-head, .filter-row { flex-wrap: wrap; }
   .btn-primary { margin-left: 0; }
 }
+
+/* Authenticated browser edits: the account strip, sign-in form, and inline edits. */
+.account-strip { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin-bottom: 1rem; font-size: .85rem; }
+.account-strip form { margin: 0; }
+.btn-quiet { margin-top: 0; padding: .3rem .75rem; font-size: .82rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); text-decoration: none; cursor: pointer; }
+.btn-quiet:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.shell-note.can-edit { color: var(--color-accent); }
+.edit-form { display: flex; flex-direction: column; gap: .4rem; max-width: 40rem; }
+.edit-form label { font-family: var(--font-sans); font-size: .82rem; font-weight: 600; color: var(--color-text-muted); }
+.edit-form input, .edit-form textarea, .inline-edit input { font-family: var(--font-mono); font-size: .85rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem; }
+.edit-form input:focus, .edit-form textarea:focus, .inline-edit input:focus { outline: none; border-color: var(--color-accent); }
+.edit-form textarea { resize: vertical; }
+.edit-form .btn { align-self: flex-start; }
+.inline-edit { display: flex; gap: .5rem; flex: 1; align-items: center; }
+.inline-edit input { flex: 1; min-width: 0; }
+.inline-edit .btn { margin-top: 0; padding: .35rem .85rem; }
