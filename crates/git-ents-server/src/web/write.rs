@@ -31,6 +31,9 @@ pub(crate) struct Session {
     public_key: String,
     /// A human label for the key — its given name, or its type.
     label: String,
+    /// A per-session token that state-changing form posts must echo back, so a
+    /// cross-site request (which cannot read it) cannot act as the user.
+    csrf: String,
 }
 
 /// A cheap, cloneable view of a session for rendering and authorization, without
@@ -39,6 +42,14 @@ pub(crate) struct Session {
 pub(super) struct SessionSnapshot {
     pub(super) label: String,
     pub(super) public_key: String,
+    pub(super) csrf: String,
+}
+
+/// The fields a settings edit may change on `refs/meta/config`.
+pub(super) struct ConfigEdit {
+    pub(super) description: String,
+    pub(super) homepage: String,
+    pub(super) topics: Vec<String>,
 }
 
 /// Create an empty session table.
@@ -54,6 +65,7 @@ pub(super) fn snapshot(sessions: &Sessions, cookie: Option<&str>) -> Option<Sess
     Some(SessionSnapshot {
         label: session.label.clone(),
         public_key: session.public_key.clone(),
+        csrf: session.csrf.clone(),
     })
 }
 
@@ -81,6 +93,7 @@ pub(super) fn login(sessions: &Sessions, body: &[u8]) -> Result<String, String> 
         .unwrap_or_else(|| key_type(&public_key));
 
     let token = random_token()?;
+    let csrf = random_token()?;
     let mut table = sessions
         .lock()
         .map_err(|_poisoned| "session store unavailable".to_owned())?;
@@ -90,9 +103,22 @@ pub(super) fn login(sessions: &Sessions, body: &[u8]) -> Result<String, String> 
             private_key,
             public_key,
             label,
+            csrf,
         },
     );
     Ok(token)
+}
+
+/// Whether `cookie`'s session exists and its CSRF token matches `token`.
+pub(super) fn csrf_ok(sessions: &Sessions, cookie: Option<&str>, token: &str) -> bool {
+    let Some(session_token) = cookie.and_then(self::token) else {
+        return false;
+    };
+    sessions
+        .lock()
+        .ok()
+        .and_then(|table| table.get(&session_token).map(|s| s.csrf == token))
+        .unwrap_or(false)
 }
 
 /// Drop the session a `Cookie` header points at, if any.
@@ -105,18 +131,18 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
     }
 }
 
-/// Land a new repository description by staging it on a throwaway ref and pushing
-/// it, signed with the session's web key, onto `refs/meta/config` — through the
+/// Land a configuration change by staging it on a throwaway ref and pushing it,
+/// signed with the session's web key, onto `refs/meta/config` — through the
 /// `pre-receive` gate. Returns `Ok` only when the gate accepts the push.
 ///
 /// `seed` and `hooks` are the server's signed-push nonce seed and hooks
 /// directory; both are required, so a web edit is never a way around a server
 /// that is not enforcing the gate.
-pub(super) fn edit_description(
+pub(super) fn edit_config(
     sessions: &Sessions,
     cookie: Option<&str>,
     repo: &Path,
-    new_description: &str,
+    edit: &ConfigEdit,
     seed: &str,
     hooks: &Path,
 ) -> Result<(), String> {
@@ -138,7 +164,9 @@ pub(super) fn edit_description(
 
     let mut config =
         git_ents::config::load(repo).map_err(|e| format!("could not read config: {e}"))?;
-    config.description = new_description.to_owned();
+    config.description = edit.description.clone();
+    config.homepage = edit.homepage.clone();
+    config.topics = edit.topics.clone();
 
     let staging = format!("refs/web-staging/{}", random_token()?);
     let result = stage_and_push(

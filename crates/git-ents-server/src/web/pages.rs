@@ -841,21 +841,8 @@ pub(super) async fn settings_page(
                 div.card {
                     div.card-header { "General" }
                     (setting_row("Repository name", meta.name()))
-                    (description_setting(meta, auth))
-                    (setting_row("Homepage", meta.homepage.as_deref().unwrap_or("—")))
                     (setting_row("Default branch", meta.branch.as_deref().unwrap_or("—")))
-                    div.card-row {
-                        span.setting-label { "Topics" }
-                        @if meta.topics.is_empty() {
-                            span.muted { "—" }
-                        } @else {
-                            div.topics {
-                                @for topic in &meta.topics {
-                                    span.topic { (topic) }
-                                }
-                            }
-                        }
-                    }
+                    (general_settings(meta, auth))
                 }
 
                 div.card {
@@ -944,20 +931,40 @@ fn settings_auth_banner(auth: Option<&super::Auth>) -> Markup {
     }
 }
 
-/// The Description row: an inline edit form when the signed-in key is a member,
-/// otherwise the read-only value.
-fn description_setting(meta: &RepoMeta, auth: Option<&super::Auth>) -> Markup {
-    let value = meta.description.as_deref().unwrap_or_default();
-    if auth.and_then(|a| a.username.as_deref()).is_none() {
-        return setting_row("Description", meta.description.as_deref().unwrap_or("—"));
-    }
+/// The editable General fields (description, homepage, topics): an edit form when
+/// the signed-in key is a member of this repo, otherwise read-only rows.
+fn general_settings(meta: &RepoMeta, auth: Option<&super::Auth>) -> Markup {
+    let Some(auth) = auth.filter(|a| a.username.is_some()) else {
+        return html! {
+            (setting_row("Description", meta.description.as_deref().unwrap_or("—")))
+            (setting_row("Homepage", meta.homepage.as_deref().unwrap_or("—")))
+            div.card-row {
+                span.setting-label { "Topics" }
+                @if meta.topics.is_empty() {
+                    span.muted { "—" }
+                } @else {
+                    div.topics { @for topic in &meta.topics { span.topic { (topic) } } }
+                }
+            }
+        };
+    };
+    let description = meta.description.as_deref().unwrap_or_default();
+    let homepage = meta.homepage.as_deref().unwrap_or_default();
+    let topics = meta.topics.join(", ");
     html! {
         div.card-row {
-            span.setting-label { "Description" }
-            form.inline-edit method="post" action={ "/" (meta.rel) "/settings" } {
-                input type="text" name="description" value=(value)
+            form.edit-form method="post" action={ "/" (meta.rel) "/settings" } {
+                input type="hidden" name="csrf" value=(auth.csrf);
+                label { "Description" }
+                input type="text" name="description" value=(description)
                     placeholder="A short description";
-                button.btn type="submit" { "Save" }
+                label { "Homepage" }
+                input type="text" name="homepage" value=(homepage)
+                    placeholder="https://example.com";
+                label { "Topics" }
+                input type="text" name="topics" value=(topics)
+                    placeholder="comma, separated, topics";
+                button.btn type="submit" { "Save changes" }
             }
         }
     }

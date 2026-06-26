@@ -36,6 +36,8 @@ pub(super) struct Auth {
     /// The member username this key maps to in the current repo, when it is a
     /// member there — the gate for showing edit controls.
     username: Option<String>,
+    /// The session's CSRF token, echoed in edit forms.
+    csrf: String,
 }
 
 use self::assets::{COPY_SCRIPT, FONTS, STYLE};
@@ -105,17 +107,27 @@ pub(crate) async fn handle_post(
     let cookie = headers
         .get(axum::http::header::COOKIE)
         .and_then(|value| value.to_str().ok());
+    let secure = is_secure_request(headers);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if segments == ["login"] {
         return match write::login(&state.sessions, &body) {
-            Ok(token) => redirect("/login", Some(session_cookie(&token))),
+            Ok(token) => redirect("/login", Some(session_cookie(&token, secure))),
             Err(error) => login_page(None, Some(&error)).into_response(),
         };
     }
     if segments == ["logout"] {
+        // A cross-site form cannot read the session's CSRF token, so an absent
+        // or wrong one means the request did not originate from our own page.
+        if !write::csrf_ok(
+            &state.sessions,
+            cookie,
+            &write::field(&body, "csrf").unwrap_or_default(),
+        ) {
+            return redirect("/login", None);
+        }
         write::logout(&state.sessions, cookie);
-        return redirect("/login", Some(cleared_cookie()));
+        return redirect("/login", Some(cleared_cookie(secure)));
     }
 
     let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) else {
@@ -125,6 +137,16 @@ pub(crate) async fn handle_post(
         return not_found().into_response();
     }
     save_settings(state, &repo, &rel, cookie, body).await
+}
+
+/// Whether the request reached us over HTTPS — directly, or through a TLS
+/// terminator that set `X-Forwarded-Proto`. Gates the cookie `Secure` flag so a
+/// plain-HTTP development server still works.
+fn is_secure_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("X-Forwarded-Proto")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
 }
 
 /// Apply a settings edit, then redirect back to the settings page on success or
@@ -143,20 +165,31 @@ async fn save_settings(
         )
         .into_response();
     };
-    let description = write::field(&body, "description").unwrap_or_default();
+    if !write::csrf_ok(
+        &state.sessions,
+        cookie,
+        &write::field(&body, "csrf").unwrap_or_default(),
+    ) {
+        return edit_error(rel, "the edit could not be verified; reload and try again")
+            .into_response();
+    }
+    let edit = write::ConfigEdit {
+        description: write::field(&body, "description").unwrap_or_default(),
+        homepage: write::field(&body, "homepage").unwrap_or_default(),
+        topics: write::field(&body, "topics")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|topic| !topic.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    };
 
     let sessions = state.sessions.clone();
     let cookie = cookie.map(str::to_owned);
     let repo = repo.to_owned();
     let result = tokio::task::spawn_blocking(move || {
-        write::edit_description(
-            &sessions,
-            cookie.as_deref(),
-            &repo,
-            &description,
-            &seed,
-            &hooks,
-        )
+        write::edit_config(&sessions, cookie.as_deref(), &repo, &edit, &seed, &hooks)
     })
     .await;
 
@@ -180,16 +213,21 @@ fn redirect(location: &str, set_cookie: Option<String>) -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// The `Set-Cookie` value that opens a session.
-fn session_cookie(token: &str) -> String {
-    format!("{}={token}; Path=/; HttpOnly; SameSite=Lax", write::COOKIE)
+/// The `Set-Cookie` value that opens a session, marked `Secure` over HTTPS.
+fn session_cookie(token: &str, secure: bool) -> String {
+    format!(
+        "{}={token}; Path=/; HttpOnly; SameSite=Lax{}",
+        write::COOKIE,
+        if secure { "; Secure" } else { "" }
+    )
 }
 
 /// The `Set-Cookie` value that clears a session.
-fn cleared_cookie() -> String {
+fn cleared_cookie(secure: bool) -> String {
     format!(
-        "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
-        write::COOKIE
+        "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}",
+        write::COOKIE,
+        if secure { "; Secure" } else { "" }
     )
 }
 
@@ -236,6 +274,7 @@ async fn resolve_auth(repo: &Path, session: Option<write::SessionSnapshot>) -> O
     Some(Auth {
         label: session.label,
         username,
+        csrf: session.csrf,
     })
 }
 
@@ -452,6 +491,7 @@ fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
                 Some(s) => {
                     span.muted { "Signed in · " (s.label) }
                     form method="post" action="/logout" {
+                        input type="hidden" name="csrf" value=(s.csrf);
                         button.btn.btn-quiet type="submit" { "Sign out" }
                     }
                 }
