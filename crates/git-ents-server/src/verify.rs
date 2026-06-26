@@ -14,8 +14,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use git_ents::members::{self, Member};
 use git_ents::revocations;
-use git_ents::signers::{self, Member};
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the
@@ -23,7 +23,7 @@ use git_ents::signers::{self, Member};
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
     let members =
-        signers::load_all(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
+        members::load_all(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
     if members.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
         // Revocation is keyed on member refs existing, so revoking every member's
@@ -33,7 +33,7 @@ pub fn pre_receive() -> Result<(), String> {
     }
     let revoked =
         revocations::fingerprints(&repo).map_err(|e| format!("could not read revocations: {e}"))?;
-    let authorized = signers::without_revoked(members, &revoked);
+    let authorized = members::without_revoked(members, &revoked);
 
     let cert_oid = env("GIT_PUSH_CERT")
         .filter(|oid| !oid.is_empty())
@@ -64,7 +64,7 @@ fn verify_certificate(authorized: &[Member], certificate: &str) -> Result<(), St
     let signature_path = workdir.path().join("cert.sig");
     write_file(
         &allowed_path,
-        signers::allowed_signers(authorized).as_bytes(),
+        members::allowed_signers(authorized).as_bytes(),
     )?;
     write_file(&signature_path, signature.as_bytes())?;
 

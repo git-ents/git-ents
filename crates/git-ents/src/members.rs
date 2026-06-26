@@ -1,5 +1,9 @@
 //! The repository's members, sourced from the `refs/meta/member/*` refs.
 //!
+//! A *member* is one person whose signed pushes the repository accepts. The
+//! OpenSSH `allowed_signers` file this module renders keeps that name because it
+//! is OpenSSH's own format term, but everything else here is framed as members.
+//!
 //! Push authentication trusts exactly one place: the `refs/meta/member/<username>`
 //! refs. Each is a [`Member`] document — one person, named by the ref's last
 //! segment — recording the keys whose signed pushes are accepted and the window

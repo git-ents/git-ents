@@ -54,9 +54,9 @@ pub enum Error {
 }
 
 /// A meta-ref document that is a single named map of string keys to string
-/// values — the shape the signer set, the check set, and a run's outcomes all
-/// share. The wrapping struct's one field fixes the on-disk subtree name
-/// (`signers/`, `checks/`, `results/`), so each document stays its own type;
+/// values — the shape the check set, the revocation list, and a run's outcomes
+/// all share. The wrapping struct's one field fixes the on-disk subtree name
+/// (`checks/`, `revoked/`, `results/`), so each document stays its own type;
 /// this trait is only the bridge that lets them share the load/store plumbing
 /// in [`Store::load_entries`] and [`Store::store_entries`].
 pub trait MapDoc: for<'a> Facet<'a> {
@@ -67,7 +67,7 @@ pub trait MapDoc: for<'a> Facet<'a> {
 }
 
 /// One `(key, value)` entry of a [`MapDoc`] presented as a named type. The set
-/// documents expose legible structs (`Signer`, `Check`, `RunOutcome`) rather
+/// documents expose legible structs (`Check`, `Revocation`, `RunOutcome`) rather
 /// than bare pairs; this trait is the single bridge between such a struct and
 /// the `(key, value)` shape stored on disk, so the wrap/unwrap is written once
 /// here instead of at every load and store.

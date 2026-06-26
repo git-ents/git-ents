@@ -819,7 +819,7 @@ async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue
 /// derived feature and check status. Editing is a members-gated write path that
 /// does not exist yet, so the values are presented as the current configuration.
 pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let signers = load_signers(repo).await;
+    let members = load_members(repo).await;
     let checks = load_checks(repo).await;
     repo_shell(
         meta,
@@ -863,21 +863,21 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
                 div.card {
                     div.card-header {
                         "Members"
-                        @if let Ok(signers) = &signers { span.count { (signers.len()) } }
+                        @if let Ok(members) = &members { span.count { (members.len()) } }
                     }
                     p.shell-note {
                         "People on " code { "refs/meta/member/*" } " whose signed pushes are accepted "
                         "(" code { "git ents members list" } ")."
                     }
-                    @match &signers {
+                    @match &members {
                         Err(err) => div.card-row.muted { "Could not read members: " (err) }
-                        Ok(signers) if signers.is_empty() => {
+                        Ok(members) if members.is_empty() => {
                             div.card-row.muted {
                                 "No members — pushes are open until the first key is added."
                             }
                         }
-                        Ok(signers) => {
-                            @for member in signers {
+                        Ok(members) => {
+                            @for member in members {
                                 (member.render())
                             }
                         }
@@ -910,11 +910,11 @@ pub(super) async fn settings_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
-/// Load the member set off the async runtime, since `signers::load_all` shells
+/// Load the member set off the async runtime, since `members::load_all` shells
 /// out to git and reads the object database synchronously.
-async fn load_signers(repo: &Path) -> Result<Vec<git_ents::signers::Member>, String> {
+async fn load_members(repo: &Path) -> Result<Vec<git_ents::members::Member>, String> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::signers::load_all(&repo))
+    tokio::task::spawn_blocking(move || git_ents::members::load_all(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())

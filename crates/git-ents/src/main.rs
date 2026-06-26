@@ -6,7 +6,7 @@
 //! set, and the client setup that produces the signed pushes the server
 //! requires. The member commands read and write a remote's set by fetching the
 //! `refs/meta/member/*` refs into the local repository, editing them through
-//! [`git_ents::signers`], and pushing them back.
+//! [`git_ents::members`], and pushing them back.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,8 +15,8 @@ use std::process::{Command, ExitCode, Stdio};
 use clap::{Parser, Subcommand};
 use git_ents::account::{self, Account};
 use git_ents::checks::{self, CHECKS_REF, Check};
+use git_ents::members::{self, MEMBER_NS, Member, Trust, member_ref};
 use git_ents::revocations::{self, REVOKED_REF, Revocation};
-use git_ents::signers::{self, MEMBER_NS, Member, Trust, member_ref};
 
 #[derive(Parser)]
 #[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
@@ -523,7 +523,7 @@ fn members_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, MEMBER_NS)?;
     sync(remote, REVOKED_REF)?;
-    let members = signers::load_all(&repo).map_err(|error| error.to_string())?;
+    let members = members::load_all(&repo).map_err(|error| error.to_string())?;
     if members.is_empty() {
         println!("no members on {remote} (open bootstrap window)");
         return Ok(());
@@ -625,7 +625,7 @@ fn members_add(
     let repo = repo()?;
     let refname = member_ref(username);
     let expected = sync(remote, &refname)?;
-    let mut member = signers::load(&repo, username)
+    let mut member = members::load(&repo, username)
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| Member::with_keys(username.to_owned(), BTreeMap::new()));
     if valid_after.is_some() {
@@ -640,7 +640,7 @@ fn members_add(
     if let Some(ca_path) = cert_authority {
         let ca = read_public_key(ca_path)?;
         member.trust = Trust::CertAuthority(ca);
-        signers::store(&repo, &member).map_err(|error| error.to_string())?;
+        members::store(&repo, &member).map_err(|error| error.to_string())?;
         push_signed(remote, &refname, expected.as_deref())?;
         println!("pinned a certificate authority for {username}");
         return Ok(());
@@ -665,7 +665,7 @@ fn members_add(
         return Ok(());
     }
     keys.insert(fingerprint.clone(), public_key);
-    signers::store(&repo, &member).map_err(|error| error.to_string())?;
+    members::store(&repo, &member).map_err(|error| error.to_string())?;
     push_signed(remote, &refname, expected.as_deref())?;
     println!("authorized {fingerprint} for {username}");
     Ok(())
@@ -743,7 +743,7 @@ fn check(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let public_key = public_key(key)?;
     let fingerprint = fingerprint(&public_key)?;
     sync_namespace(remote, MEMBER_NS)?;
-    let members = signers::load_all(&repo).map_err(|error| error.to_string())?;
+    let members = members::load_all(&repo).map_err(|error| error.to_string())?;
     if members.is_empty() {
         println!("{remote}: open bootstrap window (no members yet)");
     } else if let Some(member) = members.iter().find(|member| {

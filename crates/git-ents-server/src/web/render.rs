@@ -14,7 +14,7 @@ use maud::{Markup, html};
 use git_ents::checks::{Check, Run};
 use git_ents::config::Config;
 use git_ents::issues::Issue;
-use git_ents::signers::Member;
+use git_ents::members::Member;
 
 /// HTML rendering for a meta-ref value. The default walks the value's [`Facet`]
 /// shape structurally; a type overrides [`render`](Render::render) when its
