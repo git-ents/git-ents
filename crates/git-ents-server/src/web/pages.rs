@@ -814,14 +814,16 @@ async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue
         .map_err(|err| err.to_string())
 }
 
-/// The Settings tab: a read-only projection over the repository's typed meta
-/// refs — `refs/meta/config` (General), `refs/meta/members` (Members), and the
-/// derived feature and check status. Editing is a members-gated write path that
-/// does not exist yet, so the values are presented as the current configuration.
+/// The Settings tab: a projection over the repository's typed meta refs —
+/// `refs/meta/config` (General), `refs/meta/members` (Members), and the derived
+/// feature and check status. The General fields are editable in place by a
+/// signed-in member when `editing` is set (the server has a signing key and the
+/// gate); everything else is read-only.
 pub(super) async fn settings_page(
     repo: &Path,
     meta: &RepoMeta,
     auth: Option<&super::Auth>,
+    editing: bool,
 ) -> Markup {
     let members = load_members(repo).await;
     let checks = load_checks(repo).await;
@@ -836,13 +838,13 @@ pub(super) async fn settings_page(
                     "The repository's configuration on " code { "refs/meta/config" }
                     " and " code { "refs/meta/members" } "."
                 }
-                (settings_auth_banner(auth))
+                (settings_auth_banner(auth, editing))
 
                 div.card {
                     div.card-header { "General" }
                     (setting_row("Repository name", meta.name()))
                     (setting_row("Default branch", meta.branch.as_deref().unwrap_or("—")))
-                    (general_settings(meta, auth))
+                    (general_settings(meta, auth, editing))
                 }
 
                 div.card {
@@ -913,15 +915,21 @@ async fn load_members(repo: &Path) -> Result<Vec<git_ents::members::Member>, Str
 }
 
 /// The settings authorization banner: who is signed in and whether they may
-/// edit this repository.
-fn settings_auth_banner(auth: Option<&super::Auth>) -> Markup {
+/// edit this repository. When `editing` is unset the server cannot land edits at
+/// all, so a member is told editing is disabled rather than offered controls
+/// that would only fail.
+fn settings_auth_banner(auth: Option<&super::Auth>, editing: bool) -> Markup {
     html! {
         @match auth {
             None => p.shell-note {
                 a href="/login" { "Sign in" } " with a member web key to edit these settings."
             }
-            Some(auth) if auth.username.is_some() => p.shell-note.can-edit {
+            Some(auth) if auth.username.is_some() && editing => p.shell-note.can-edit {
                 "Signed in as " strong { (auth.label) } " — you can edit this repository."
+            }
+            Some(auth) if auth.username.is_some() => p.shell-note {
+                "Signed in as " strong { (auth.label) } ", but this server has browser editing "
+                "disabled, so settings are read-only."
             }
             Some(auth) => p.shell-note {
                 "Signed in as " strong { (auth.label) } ", but this key is not a member of this "
@@ -932,9 +940,9 @@ fn settings_auth_banner(auth: Option<&super::Auth>) -> Markup {
 }
 
 /// The editable General fields (description, homepage, topics): an edit form when
-/// the signed-in key is a member of this repo, otherwise read-only rows.
-fn general_settings(meta: &RepoMeta, auth: Option<&super::Auth>) -> Markup {
-    let Some(auth) = auth.filter(|a| a.username.is_some()) else {
+/// a signed-in member edits a server that can land edits, otherwise read-only rows.
+fn general_settings(meta: &RepoMeta, auth: Option<&super::Auth>, editing: bool) -> Markup {
+    let Some(auth) = auth.filter(|a| editing && a.username.is_some()) else {
         return html! {
             (setting_row("Description", meta.description.as_deref().unwrap_or("—")))
             (setting_row("Homepage", meta.homepage.as_deref().unwrap_or("—")))

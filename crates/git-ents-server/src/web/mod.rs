@@ -67,7 +67,7 @@ pub(crate) async fn render(
     }
 
     if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
-        return route(&repo, &rel, rest, host, session).await;
+        return route(&repo, &rel, rest, host, session, editing_enabled(state)).await;
     }
 
     not_found().into_response()
@@ -144,6 +144,14 @@ pub(crate) async fn handle_post(
         return not_found().into_response();
     }
     save_settings(state, &repo, &rel, cookie, body).await
+}
+
+/// Whether this server can actually land browser edits: it needs the signed-push
+/// gate (nonce seed + hooks) and its own signing key, all of which
+/// [`write::edit_config`] requires. When any is unset, edit controls are not
+/// offered so a member is never told they can edit when a submit would only fail.
+fn editing_enabled(state: &AppState) -> bool {
+    state.cert_nonce_seed.is_some() && state.hooks_dir.is_some() && state.web_signing_key.is_some()
 }
 
 /// Whether the request reached us over HTTPS — directly, or through a TLS
@@ -259,6 +267,7 @@ async fn route(
     rest: &[&str],
     host: Option<&str>,
     session: Option<write::SessionSnapshot>,
+    editing: bool,
 ) -> Response {
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
@@ -272,7 +281,7 @@ async fn route(
         Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
         Some((&"settings", &[])) => {
             let auth = resolve_auth(repo, session).await;
-            pages::settings_page(repo, &meta, auth.as_ref())
+            pages::settings_page(repo, &meta, auth.as_ref(), editing)
                 .await
                 .into_response()
         }
