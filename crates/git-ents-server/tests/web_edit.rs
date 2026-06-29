@@ -6,9 +6,11 @@
     reason = "integration test binary"
 )]
 
-//! End-to-end coverage for authenticated browser edits: signing in with a web
-//! key, then saving a settings change that must travel through the real
-//! `pre-receive` gate as a signed push before it lands on `refs/meta/config`.
+//! End-to-end coverage for authenticated browser edits: proving control of a
+//! member key by signing a one-time challenge (the key never leaves the client),
+//! then saving a settings change that travels through the real `pre-receive`
+//! gate — signed with the server's own key, authored by the member — before it
+//! lands on `refs/meta/config`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -16,19 +18,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-ents-server");
+const LOGIN_NAMESPACE: &str = "git-ents-login";
 
 #[test]
 fn a_member_edits_settings_through_the_browser() {
     let env = Server::start();
     let bare = env.create_repo("repo.git");
-    let key = keygen(env.scratch(), "web");
-    env.add_member(&bare, "alice", &pubkey(&key));
+    env.add_server_member(&bare);
+    let alice = keygen(env.scratch(), "alice");
+    env.add_member(&bare, "alice", &pubkey(&alice));
 
-    // Sign in with the web key; the server derives its public half and opens a
-    // session whose cookie we carry from here on.
-    let signin = env.post("/login", "", &form(&[("private_key", &read(&key))]));
-    assert_eq!(signin.status, 303, "sign-in should redirect");
-    let cookie = signin.session_cookie().unwrap();
+    let cookie = env.sign_in(&alice);
 
     // The settings page now offers an edit form; read its CSRF token.
     let page = env.get("/repo.git/settings", &cookie);
@@ -36,9 +36,8 @@ fn a_member_edits_settings_through_the_browser() {
         page.body.contains("name=\"csrf\""),
         "edit form should render"
     );
-    let csrf = page.csrf().unwrap();
+    let csrf = page.field("csrf").unwrap();
 
-    // Save a change to every General field.
     let edit = env.post(
         "/repo.git/settings",
         &cookie,
@@ -68,14 +67,17 @@ fn a_member_edits_settings_through_the_browser() {
     );
     assert!(after.body.contains("forge"), "topics did not land");
 
-    // And the gate really moved the ref: a fresh signed commit now sits on it.
-    assert!(
-        git(
-            &bare,
-            &["rev-parse", "--verify", "--quiet", "refs/meta/config"]
-        )
-        .is_some(),
-        "refs/meta/config should exist after the edit"
+    // "$USERNAME via Web": the commit is authored by the member and committed by
+    // the server identity.
+    assert_eq!(
+        git(&bare, &["log", "-1", "--format=%an", "refs/meta/config"]).as_deref(),
+        Some("alice"),
+        "the edit should be authored by the member"
+    );
+    assert_eq!(
+        git(&bare, &["log", "-1", "--format=%cn", "refs/meta/config"]).as_deref(),
+        Some("git-ents"),
+        "the committer should be the server identity"
     );
 }
 
@@ -83,14 +85,11 @@ fn a_member_edits_settings_through_the_browser() {
 fn an_edit_without_a_valid_csrf_token_is_refused() {
     let env = Server::start();
     let bare = env.create_repo("repo.git");
-    let key = keygen(env.scratch(), "web");
-    env.add_member(&bare, "alice", &pubkey(&key));
+    env.add_server_member(&bare);
+    let alice = keygen(env.scratch(), "alice");
+    env.add_member(&bare, "alice", &pubkey(&alice));
 
-    let cookie = env
-        .post("/login", "", &form(&[("private_key", &read(&key))]))
-        .session_cookie()
-        .unwrap();
-
+    let cookie = env.sign_in(&alice);
     let edit = env.post(
         "/repo.git/settings",
         &cookie,
@@ -98,10 +97,9 @@ fn an_edit_without_a_valid_csrf_token_is_refused() {
     );
     assert_eq!(edit.status, 200, "a bad-CSRF edit should not redirect");
     assert!(
-        env.get("/repo.git/settings", &cookie)
+        !env.get("/repo.git/settings", &cookie)
             .body
-            .contains("name=\"csrf\"")
-            && !page_description_is(&env, &cookie, "sneaky"),
+            .contains("sneaky"),
         "the description must be unchanged"
     );
 }
@@ -110,15 +108,14 @@ fn an_edit_without_a_valid_csrf_token_is_refused() {
 fn a_non_member_is_not_offered_an_edit_form() {
     let env = Server::start();
     let bare = env.create_repo("repo.git");
+    env.add_server_member(&bare);
     let member = keygen(env.scratch(), "member");
     env.add_member(&bare, "alice", &pubkey(&member));
 
-    // Sign in with a key that is *not* a member of this repo.
+    // A real key that is simply not a member of this repo signs in fine — a
+    // session proves key control, not authority.
     let intruder = keygen(env.scratch(), "intruder");
-    let cookie = env
-        .post("/login", "", &form(&[("private_key", &read(&intruder))]))
-        .session_cookie()
-        .unwrap();
+    let cookie = env.sign_in(&intruder);
 
     let page = env.get("/repo.git/settings", &cookie);
     assert!(
@@ -131,23 +128,45 @@ fn a_non_member_is_not_offered_an_edit_form() {
     );
 }
 
-/// Whether the rendered settings page shows `value` as the description.
-fn page_description_is(env: &Server, cookie: &str, value: &str) -> bool {
-    env.get("/repo.git/settings", cookie).body.contains(value)
+#[test]
+fn a_signature_that_does_not_match_the_public_key_is_refused() {
+    let env = Server::start();
+    let alice = keygen(env.scratch(), "alice");
+    let mallory = keygen(env.scratch(), "mallory");
+
+    // Sign the challenge with mallory's key but claim alice's public key.
+    let nonce = env.get("/login", "").field("nonce").unwrap();
+    let signature = sign_nonce(&mallory, &nonce);
+    let attempt = env.post(
+        "/login",
+        "",
+        &form(&[
+            ("nonce", &nonce),
+            ("public_key", &pubkey(&alice)),
+            ("signature", &signature),
+        ]),
+    );
+    assert_eq!(
+        attempt.status, 200,
+        "a mismatched signature must not open a session"
+    );
+    assert!(
+        attempt.session_cookie().is_none(),
+        "no session cookie should be set"
+    );
 }
 
-/// A running server with its data and hooks directories.
+/// A running server enforcing the signed-push gate and holding a web signing key.
 struct Server {
     child: Child,
     port: u16,
     data: tempfile::TempDir,
     scratch: tempfile::TempDir,
+    server_key: PathBuf,
     _hooks: tempfile::TempDir,
 }
 
 impl Server {
-    /// Start a server enforcing the signed-push gate: a nonce seed plus a hooks
-    /// directory whose `pre-receive` is the compiled verifier.
     fn start() -> Self {
         let data = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
@@ -159,17 +178,18 @@ impl Server {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        let server_key = keygen(scratch.path(), "web-server");
 
         let port = free_port();
         let child = Command::new(BIN)
-            .arg("--port")
-            .arg(port.to_string())
+            .args(["--port", &port.to_string()])
             .arg("--data-dir")
             .arg(data.path())
-            .arg("--cert-nonce-seed")
-            .arg("test-seed")
+            .args(["--cert-nonce-seed", "test-seed"])
             .arg("--hooks-dir")
             .arg(hooks.path())
+            .arg("--web-signing-key")
+            .arg(&server_key)
             .spawn()
             .unwrap();
         wait_for_port(port);
@@ -178,6 +198,7 @@ impl Server {
             port,
             data,
             scratch,
+            server_key,
             _hooks: hooks,
         }
     }
@@ -186,8 +207,7 @@ impl Server {
         self.scratch.path()
     }
 
-    /// Create a bare repo by pushing an initial commit to it (auto-init), and
-    /// return its on-disk path.
+    /// Create a bare repo by pushing an initial commit to it (auto-init).
     fn create_repo(&self, name: &str) -> PathBuf {
         let work = self.scratch.path().join(format!("work-{name}"));
         std::fs::create_dir_all(&work).unwrap();
@@ -204,9 +224,34 @@ impl Server {
         self.data.path().join(name)
     }
 
+    /// Add the server's own key as a member, so it may sign web edits.
+    fn add_server_member(&self, bare: &Path) {
+        self.add_member(bare, "web-server", &pubkey(&self.server_key));
+    }
+
+    /// Sign in with `key` via the challenge flow, returning the session cookie.
+    fn sign_in(&self, key: &Path) -> String {
+        let nonce = self.get("/login", "").field("nonce").unwrap();
+        let signature = sign_nonce(key, &nonce);
+        let response = self.post(
+            "/login",
+            "",
+            &form(&[
+                ("nonce", &nonce),
+                ("public_key", &pubkey(key)),
+                ("signature", &signature),
+            ]),
+        );
+        assert_eq!(
+            response.status, 303,
+            "sign-in should redirect: {}",
+            response.body
+        );
+        response.session_cookie().unwrap()
+    }
+
     /// Write a member ref `refs/meta/member/<username>` into `bare` directly, in
-    /// the on-disk layout the loader reads: a `principal` blob, empty
-    /// `valid_after`/`valid_before` subtrees, and a `trust/Keys/key` blob.
+    /// the on-disk layout the loader reads.
     fn add_member(&self, bare: &Path, username: &str, public_key: &str) {
         let principal = hash_object(bare, username.as_bytes());
         let key_blob = hash_object(bare, public_key.as_bytes());
@@ -235,7 +280,12 @@ impl Server {
     }
 
     fn get(&self, path: &str, cookie: &str) -> Http {
-        self.request("GET", path, &[("Cookie", cookie)], "")
+        let headers: Vec<(&str, &str)> = if cookie.is_empty() {
+            vec![]
+        } else {
+            vec![("Cookie", cookie)]
+        };
+        self.request("GET", path, &headers, "")
     }
 
     fn post(&self, path: &str, cookie: &str, body: &str) -> Http {
@@ -246,7 +296,6 @@ impl Server {
         self.request("POST", path, &headers, body)
     }
 
-    /// Send one HTTP/1.0 request and parse the response.
     fn request(&self, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Http {
         let mut request = format!("{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n");
         for (name, value) in headers {
@@ -297,8 +346,6 @@ impl Http {
         }
     }
 
-    /// The `ents_session=<token>` pair from a `Set-Cookie` header, ready to send
-    /// back as a `Cookie` value.
     fn session_cookie(&self) -> Option<String> {
         self.headers
             .iter()
@@ -308,10 +355,10 @@ impl Http {
             .map(str::to_owned)
     }
 
-    /// The CSRF token rendered in the page's hidden field.
-    fn csrf(&self) -> Option<String> {
-        let marker = "name=\"csrf\" value=\"";
-        let start = self.body.find(marker)? + marker.len();
+    /// The value of a hidden form field rendered as `name="<field>" value="…"`.
+    fn field(&self, field: &str) -> Option<String> {
+        let marker = format!("name=\"{field}\" value=\"");
+        let start = self.body.find(&marker)? + marker.len();
         let rest = self.body.get(start..)?;
         let end = rest.find('"')?;
         rest.get(..end).map(str::to_owned)
@@ -350,12 +397,36 @@ fn keygen(base: &Path, name: &str) -> PathBuf {
     key
 }
 
-fn pubkey(private: &Path) -> String {
-    read(&private.with_extension("pub")).trim().to_owned()
+/// Sign `nonce` under the login namespace with `key`, returning the SSHSIG.
+fn sign_nonce(key: &Path, nonce: &str) -> String {
+    let mut child = Command::new("ssh-keygen")
+        .args(["-Y", "sign", "-n", LOGIN_NAMESPACE, "-f"])
+        .arg(key)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(nonce.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "ssh-keygen -Y sign failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap()
+fn pubkey(private: &Path) -> String {
+    std::fs::read_to_string(private.with_extension("pub"))
+        .unwrap()
+        .trim()
+        .to_owned()
 }
 
 /// Encode form fields as `application/x-www-form-urlencoded`.
@@ -367,7 +438,7 @@ fn form(fields: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-/// Percent-encode one form value.
+/// Percent-encode one form value, leaving only the unreserved set unescaped.
 fn encode(value: &str) -> String {
     value
         .bytes()
@@ -413,7 +484,6 @@ fn git(bare: &Path, args: &[&str]) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .filter(|out| !out.is_empty() || args.first() == Some(&"update-ref"))
 }
 
 fn hash_object(bare: &Path, bytes: &[u8]) -> String {

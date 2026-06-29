@@ -47,6 +47,12 @@ struct Args {
     #[arg(long, env = "GIT_ENTS_HOOKS_DIR")]
     hooks_dir: Option<PathBuf>,
 
+    /// The server's own SSH private key, used to sign browser-made edits. Its
+    /// public half must be a member of any repo edited through the web. Editing
+    /// is disabled unless this is set.
+    #[arg(long, env = "GIT_ENTS_WEB_SIGNING_KEY")]
+    web_signing_key: Option<PathBuf>,
+
     /// Directory where the `post-receive` hook queues pushes for the check
     /// worker to run asynchronously.
     #[arg(
@@ -83,9 +89,14 @@ pub(crate) struct AppState {
     /// Directory the `post-receive` hook queues pushes into and the check
     /// worker drains; passed down to the hook via [`checks::QUEUE_ENV`].
     pub(crate) checks_queue: PathBuf,
-    /// In-memory web sessions: a browser's signed-in web key, held for the life
-    /// of the process and never persisted.
+    /// In-memory web sessions: a browser's signed-in public key, held for the
+    /// life of the process and never persisted.
     pub(crate) sessions: web::Sessions,
+    /// Outstanding one-time sign-in challenges awaiting a signature.
+    pub(crate) challenges: web::Challenges,
+    /// The server's own signing key for browser-made edits; `None` disables
+    /// editing.
+    pub(crate) web_signing_key: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -138,6 +149,8 @@ async fn serve(args: Args) -> ExitCode {
         hooks_dir: args.hooks_dir,
         checks_queue: args.checks_queue,
         sessions: web::new_sessions(),
+        challenges: web::new_challenges(),
+        web_signing_key: args.web_signing_key,
     };
 
     // Drain queued pushes and run their checks for the life of the server.

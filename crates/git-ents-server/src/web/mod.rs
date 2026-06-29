@@ -26,7 +26,7 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use crate::AppState;
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo, valid_segment};
 
-pub(crate) use self::write::{Sessions, new_sessions};
+pub(crate) use self::write::{Challenges, Sessions, new_challenges, new_sessions};
 
 /// Who is signed in for the current request, resolved per repository: a member's
 /// web key authorizes edits only on a repo whose member list contains it.
@@ -59,7 +59,11 @@ pub(crate) async fn render(
         return index(state, session.as_ref()).into_response();
     }
     if segments == ["login"] {
-        return login_page(session.as_ref(), None).into_response();
+        let challenge = match session {
+            Some(_) => None,
+            None => write::issue_challenge(&state.challenges).ok(),
+        };
+        return login_page(session.as_ref(), challenge.as_deref(), None).into_response();
     }
 
     if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
@@ -111,9 +115,12 @@ pub(crate) async fn handle_post(
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if segments == ["login"] {
-        return match write::login(&state.sessions, &body) {
+        return match write::login(&state.sessions, &state.challenges, &body) {
             Ok(token) => redirect("/login", Some(session_cookie(&token, secure))),
-            Err(error) => login_page(None, Some(&error)).into_response(),
+            Err(error) => {
+                let challenge = write::issue_challenge(&state.challenges).ok();
+                login_page(None, challenge.as_deref(), Some(&error)).into_response()
+            }
         };
     }
     if segments == ["logout"] {
@@ -158,10 +165,14 @@ async fn save_settings(
     cookie: Option<&str>,
     body: Bytes,
 ) -> Response {
-    let (Some(seed), Some(hooks)) = (state.cert_nonce_seed.clone(), state.hooks_dir.clone()) else {
+    let (Some(seed), Some(hooks), Some(signing_key)) = (
+        state.cert_nonce_seed.clone(),
+        state.hooks_dir.clone(),
+        state.web_signing_key.clone(),
+    ) else {
         return edit_error(
             rel,
-            "Editing is disabled: this server is not enforcing the signed-push gate.",
+            "Editing is disabled: this server has no web signing key or signed-push gate.",
         )
         .into_response();
     };
@@ -189,7 +200,15 @@ async fn save_settings(
     let cookie = cookie.map(str::to_owned);
     let repo = repo.to_owned();
     let result = tokio::task::spawn_blocking(move || {
-        write::edit_config(&sessions, cookie.as_deref(), &repo, &edit, &seed, &hooks)
+        write::edit_config(
+            &sessions,
+            cookie.as_deref(),
+            &repo,
+            &edit,
+            &seed,
+            &hooks,
+            &signing_key,
+        )
     })
     .await;
 
@@ -501,9 +520,14 @@ fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
     }
 }
 
-/// The sign-in page: paste a web key to open a session. `error` shows a failed
-/// attempt's reason.
-fn login_page(session: Option<&write::SessionSnapshot>, error: Option<&str>) -> Markup {
+/// The sign-in page: prove control of a member key by signing a one-time
+/// challenge locally, without ever surrendering the key. `error` shows a failed
+/// attempt's reason; `challenge` is the nonce to sign.
+fn login_page(
+    session: Option<&write::SessionSnapshot>,
+    challenge: Option<&str>,
+    error: Option<&str>,
+) -> Markup {
     page(
         "Sign in",
         html! {
@@ -511,23 +535,33 @@ fn login_page(session: Option<&write::SessionSnapshot>, error: Option<&str>) -> 
             div.page-header { h1.page-title { "Sign in" } }
             @if let Some(s) = session {
                 p { "Signed in as " strong { (s.label) } "." }
-                p.muted { "Your web key signs edits made in the browser." }
+                p.muted { "Edits you make in the browser are attributed to your member key." }
             } @else {
                 p.shell-note {
-                    "Paste the " strong { "private" } " half of a web key whose public half you "
-                    "have added to your member ref. It is held in memory for this session only "
-                    "and is never written to disk."
+                    "Prove control of a web key whose public half is a member of the repository. "
+                    "Sign the one-time challenge below on your own machine — the key never leaves it."
                 }
                 @if let Some(error) = error {
                     div.card-row.muted { "Could not sign in: " (error) }
                 }
-                form.edit-form method="post" action="/login" {
-                    label { "Key name (optional)" }
-                    input type="text" name="label" placeholder="laptop web key";
-                    label { "Private key" }
-                    textarea name="private_key" rows="8" spellcheck="false"
-                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" {}
-                    button.btn type="submit" { "Sign in" }
+                @if let Some(nonce) = challenge {
+                    p.shell-note { "Run this, then paste the output and your public key:" }
+                    pre.signin-cmd {
+                        "printf %s '" (nonce) "' | ssh-keygen -Y sign -n "
+                        (write::LOGIN_NAMESPACE) " -f ~/.ssh/your_web_key"
+                    }
+                    form.edit-form method="post" action="/login" {
+                        input type="hidden" name="nonce" value=(nonce);
+                        label { "Public key" }
+                        input type="text" name="public_key" spellcheck="false"
+                            placeholder="ssh-ed25519 AAAA… you@host";
+                        label { "Signature" }
+                        textarea name="signature" rows="8" spellcheck="false"
+                            placeholder="-----BEGIN SSH SIGNATURE-----" {}
+                        button.btn type="submit" { "Sign in" }
+                    }
+                } @else {
+                    div.card-row.muted { "Could not start a sign-in challenge; reload to retry." }
                 }
             }
         },

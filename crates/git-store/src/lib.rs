@@ -117,7 +117,24 @@ impl Store {
     ) -> Result<(), Error> {
         let tree = facet_git_tree::serialize_into(value, &self.odb)?;
         let parents = self.ref_commit(refname)?.into_iter().collect();
-        let commit = self.write_commit(tree, parents, message)?;
+        let commit = self.write_commit(tree, parents, message, None)?;
+        self.set_ref(refname, commit)
+    }
+
+    /// Like [`store`](Self::store), but attributing authorship to `author`
+    /// (a `(name, email)` pair) while the committer stays the git-ents system
+    /// identity — the way a web edit records the human who made the change while
+    /// the server is the committer.
+    pub fn store_authored<T: for<'a> Facet<'a>>(
+        &self,
+        refname: &str,
+        value: &T,
+        message: &str,
+        author: (&str, &str),
+    ) -> Result<(), Error> {
+        let tree = facet_git_tree::serialize_into(value, &self.odb)?;
+        let parents = self.ref_commit(refname)?.into_iter().collect();
+        let commit = self.write_commit(tree, parents, message, Some(author))?;
         self.set_ref(refname, commit)
     }
 
@@ -136,7 +153,7 @@ impl Store {
             Some(tip) => self.read_commit(&tip)?.parents,
             None => Vec::new(),
         };
-        let commit = self.write_commit(tree, parents, message)?;
+        let commit = self.write_commit(tree, parents, message, None)?;
         self.set_ref(refname, commit)
     }
 
@@ -257,22 +274,34 @@ impl Store {
     }
 
     /// Wrap `tree` in a commit over `parents` and write it to the durable store.
+    /// The committer is always the git-ents system identity; `author` overrides
+    /// the authorship when set, otherwise it too is the system identity.
     fn write_commit(
         &self,
         tree: ObjectId,
         parents: Vec<ObjectId>,
         message: &str,
+        author: Option<(&str, &str)>,
     ) -> Result<ObjectId, Error> {
-        let signature = gix::actor::Signature {
+        let time = gix::date::Time::now_utc();
+        let committer = gix::actor::Signature {
             name: IDENTITY_NAME.into(),
             email: IDENTITY_EMAIL.into(),
-            time: gix::date::Time::now_utc(),
+            time,
+        };
+        let author = match author {
+            Some((name, email)) => gix::actor::Signature {
+                name: name.into(),
+                email: email.into(),
+                time,
+            },
+            None => committer.clone(),
         };
         let commit = Commit {
             tree,
             parents: parents.into(),
-            author: signature.clone(),
-            committer: signature,
+            author,
+            committer,
             encoding: None,
             message: message.into(),
             extra_headers: Vec::new(),

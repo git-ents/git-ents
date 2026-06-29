@@ -1,43 +1,55 @@
 //! Authenticated browser writes.
 //!
-//! A web session holds one member's *web key* — a key whose public half they
-//! have already added to their member ref through a normal signed push. An edit
-//! made in the browser is performed as a real `git push --signed` into the repo,
-//! so it travels through the very same `pre-receive` gate a command-line push
-//! does. Nothing here is a second trust path: the gate alone decides whether a
-//! change lands; this module only stages the change and produces a signed push
-//! for it to judge.
+//! Signing in never surrenders a private key. The server issues a one-time
+//! challenge; the member signs it locally with their web key and pastes back the
+//! signature and their public key. The server verifies that signature against
+//! the pasted key, which proves the browser controls it — the same proof a CLI
+//! push gives, without the key ever leaving the member's machine.
 //!
-//! The web key lives in memory for the life of the process and is never written
-//! to disk. A server restart drops every session.
+//! An edit is then landed as a real `git push --signed` onto `refs/meta/config`,
+//! signed with the *server's own* member key, so it passes the very same
+//! `pre-receive` gate a CLI push does. The commit's author is the signed-in
+//! human (resolved from their key's membership); the committer is the server.
+//! Nothing secret to the member is ever held or persisted: a session keeps only
+//! their public key.
 
 use std::collections::HashMap;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The cookie that carries a session token.
 pub(super) const COOKIE: &str = "ents_session";
 
+/// The SSHSIG namespace a sign-in signature is made under — distinct from git's
+/// own `git` namespace, so a login signature can never double as a push and vice
+/// versa.
+pub(super) const LOGIN_NAMESPACE: &str = "git-ents-login";
+
+/// How long an issued sign-in challenge stays valid.
+const CHALLENGE_TTL: Duration = Duration::from_secs(600);
+
 /// In-memory session table, shared by every handler.
 pub(crate) type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 
-/// One browser session: the web key it signs edits with and a display label.
+/// Outstanding sign-in challenges and when each was issued; consumed once.
+pub(crate) type Challenges = Arc<Mutex<HashMap<String, Instant>>>;
+
+/// One browser session. It holds only the member's *public* key — enough to
+/// authorize per repository — plus a display label and a CSRF token.
 pub(crate) struct Session {
-    /// The PEM private key the session signs pushes with. In memory only.
-    private_key: String,
-    /// The derived public key line (`type base64`), matched against members.
+    /// The member's public key line (`type base64`), matched against members.
     public_key: String,
-    /// A human label for the key — its given name, or its type.
+    /// A human label for the key — its comment, or its type.
     label: String,
     /// A per-session token that state-changing form posts must echo back, so a
     /// cross-site request (which cannot read it) cannot act as the user.
     csrf: String,
 }
 
-/// A cheap, cloneable view of a session for rendering and authorization, without
-/// the private key.
+/// A cheap, cloneable view of a session for rendering and authorization.
 #[derive(Clone)]
 pub(super) struct SessionSnapshot {
     pub(super) label: String,
@@ -57,6 +69,34 @@ pub(crate) fn new_sessions() -> Sessions {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Create an empty challenge table.
+pub(crate) fn new_challenges() -> Challenges {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Issue a fresh one-time sign-in challenge, returning the nonce to sign.
+pub(super) fn issue_challenge(challenges: &Challenges) -> Result<String, String> {
+    let nonce = random_token()?;
+    let mut table = challenges
+        .lock()
+        .map_err(|_poisoned| "challenge store unavailable".to_owned())?;
+    let now = Instant::now();
+    table.retain(|_nonce, issued| now.duration_since(*issued) < CHALLENGE_TTL);
+    table.insert(nonce.clone(), now);
+    Ok(nonce)
+}
+
+/// Consume `nonce`, returning whether it was a live, unexpired challenge.
+fn take_challenge(challenges: &Challenges, nonce: &str) -> bool {
+    let Ok(mut table) = challenges.lock() else {
+        return false;
+    };
+    match table.remove(nonce) {
+        Some(issued) => Instant::now().duration_since(issued) < CHALLENGE_TTL,
+        None => false,
+    }
+}
+
 /// The session a `Cookie` header points at, as a snapshot, if any.
 pub(super) fn snapshot(sessions: &Sessions, cookie: Option<&str>) -> Option<SessionSnapshot> {
     let token = token(cookie?)?;
@@ -69,29 +109,30 @@ pub(super) fn snapshot(sessions: &Sessions, cookie: Option<&str>) -> Option<Sess
     })
 }
 
-/// Open a session for the web key in `body` (a `private_key` form field), set its
-/// cookie, and return the token. The key is accepted as long as it parses; an
-/// edit is authorized per-repository against the live member list, so holding a
-/// session grants nothing on its own.
-pub(super) fn login(sessions: &Sessions, body: &[u8]) -> Result<String, String> {
+/// Complete a sign-in: verify the pasted `signature` over the issued `nonce`
+/// against the pasted `public_key`, and on success open a session and return its
+/// token. Holding a session grants nothing on its own — an edit is authorized
+/// per repository against the live member list.
+pub(super) fn login(
+    sessions: &Sessions,
+    challenges: &Challenges,
+    body: &[u8],
+) -> Result<String, String> {
     let fields = form(body);
-    let private_key = fields
-        .get("private_key")
-        .map(String::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-    if private_key.is_empty() {
-        return Err("paste a private key to sign in".to_owned());
+    let public_key = trimmed(&fields, "public_key");
+    let signature = trimmed(&fields, "signature");
+    let nonce = trimmed(&fields, "nonce");
+    if public_key.is_empty() || signature.is_empty() {
+        return Err("paste your public key and the signature".to_owned());
     }
-    let public_key = derive_public_key(&private_key)?;
-    let label = fields
-        .get("label")
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| key_type(&public_key));
+    if !take_challenge(challenges, &nonce) {
+        return Err("your sign-in challenge expired; reload and try again".to_owned());
+    }
+    if !verify_login_signature(&public_key, &nonce, &signature)? {
+        return Err("the signature did not match that public key".to_owned());
+    }
 
+    let label = key_comment(&public_key).unwrap_or_else(|| key_type(&public_key));
     let token = random_token()?;
     let csrf = random_token()?;
     let mut table = sessions
@@ -100,8 +141,7 @@ pub(super) fn login(sessions: &Sessions, body: &[u8]) -> Result<String, String> 
     table.insert(
         token.clone(),
         Session {
-            private_key,
-            public_key,
+            public_key: normalize_key(&public_key),
             label,
             csrf,
         },
@@ -131,13 +171,14 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
     }
 }
 
-/// Land a configuration change by staging it on a throwaway ref and pushing it,
-/// signed with the session's web key, onto `refs/meta/config` — through the
-/// `pre-receive` gate. Returns `Ok` only when the gate accepts the push.
+/// Land a configuration change: stage it on a throwaway ref authored by the
+/// signed-in member, then push it onto `refs/meta/config` signed with the
+/// server's key, through the `pre-receive` gate. Returns `Ok` only when the gate
+/// accepts the push.
 ///
-/// `seed` and `hooks` are the server's signed-push nonce seed and hooks
-/// directory; both are required, so a web edit is never a way around a server
-/// that is not enforcing the gate.
+/// `seed`, `hooks`, and `signing_key` are the server's signed-push nonce seed,
+/// hooks directory, and own member key; all are required, so a web edit is never
+/// a way around a server that is not enforcing the gate.
 pub(super) fn edit_config(
     sessions: &Sessions,
     cookie: Option<&str>,
@@ -145,18 +186,20 @@ pub(super) fn edit_config(
     edit: &ConfigEdit,
     seed: &str,
     hooks: &Path,
+    signing_key: &Path,
 ) -> Result<(), String> {
     let token = cookie
         .and_then(token)
         .ok_or_else(|| "sign in to edit settings".to_owned())?;
-    let (private_key, public_key) = {
+    let public_key = {
         let table = sessions
             .lock()
             .map_err(|_poisoned| "session store unavailable".to_owned())?;
-        let session = table
+        table
             .get(&token)
-            .ok_or_else(|| "sign in to edit settings".to_owned())?;
-        (session.private_key.clone(), session.public_key.clone())
+            .ok_or_else(|| "sign in to edit settings".to_owned())?
+            .public_key
+            .clone()
     };
 
     let username = member_for_public_key(repo, &public_key)
@@ -169,28 +212,21 @@ pub(super) fn edit_config(
     config.topics = edit.topics.clone();
 
     let staging = format!("refs/web-staging/{}", random_token()?);
-    let result = stage_and_push(
-        repo,
-        &staging,
-        &config,
-        &private_key,
-        &username,
-        seed,
-        hooks,
-    );
+    let result = stage_and_push(repo, &staging, &config, &username, signing_key, seed, hooks);
     // Clean up the staging ref whether or not the push was accepted.
     let _cleanup = git(repo, &["update-ref", "-d", &staging]);
     result
 }
 
-/// Point `staging` at the current config tip, build the new config commit on it,
-/// then push it signed onto `refs/meta/config`.
+/// Point `staging` at the current config tip, build the new config commit on it
+/// authored by `username`, then push it signed with the server's key onto
+/// `refs/meta/config`.
 fn stage_and_push(
     repo: &Path,
     staging: &str,
     config: &git_ents::config::Config,
-    private_key: &str,
     username: &str,
+    signing_key: &Path,
     seed: &str,
     hooks: &Path,
 ) -> Result<(), String> {
@@ -198,13 +234,13 @@ fn stage_and_push(
         git(repo, &["update-ref", staging, &tip])
             .map_err(|e| format!("could not stage the edit: {e}"))?;
     }
-    git_ents::config::store_to_ref(repo, staging, config)
+    let email = format!("{username}@web");
+    git_ents::config::store_to_ref_authored(repo, staging, config, (username, &email))
         .map_err(|e| format!("could not build the edit: {e}"))?;
 
-    let keydir = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
-    let keyfile = keydir.path().join("web-key");
-    write_private_key(&keyfile, private_key)?;
-
+    let signer = signing_key
+        .to_str()
+        .ok_or_else(|| "signing key path is not UTF-8".to_owned())?;
     let hooks = hooks
         .to_str()
         .ok_or_else(|| "hooks path is not UTF-8".to_owned())?;
@@ -219,11 +255,13 @@ fn stage_and_push(
         .arg(repo)
         .args(["-c", "gpg.format=ssh"])
         .arg("-c")
-        .arg(format!("user.signingkey={}", keyfile.display()))
-        .arg("-c")
-        .arg(format!("user.name={username}"))
-        .arg("-c")
-        .arg(format!("user.email={username}@web"))
+        .arg(format!("user.signingkey={signer}"))
+        .args([
+            "-c",
+            "user.name=git-ents-web",
+            "-c",
+            "user.email=web@git-ents",
+        ])
         .arg("push")
         .arg("--signed")
         .arg(format!("--receive-pack={receive_pack}"))
@@ -237,6 +275,44 @@ fn stage_and_push(
     } else {
         Err(push_error(&output.stderr))
     }
+}
+
+/// Verify an SSHSIG `signature` over `nonce` was made by `public_key` under the
+/// login namespace, using `ssh-keygen -Y verify` against a one-key allowed
+/// signers file.
+fn verify_login_signature(public_key: &str, nonce: &str, signature: &str) -> Result<bool, String> {
+    let dir = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
+    let allowed = dir.path().join("allowed_signers");
+    let sig = dir.path().join("nonce.sig");
+    write_file(
+        &allowed,
+        format!(
+            "* namespaces=\"{LOGIN_NAMESPACE}\" {}\n",
+            normalize_key(public_key)
+        )
+        .as_bytes(),
+    )?;
+    write_file(&sig, signature.as_bytes())?;
+
+    let mut child = Command::new("ssh-keygen")
+        .args(["-Y", "verify", "-n", LOGIN_NAMESPACE, "-I", "web", "-f"])
+        .arg(&allowed)
+        .arg("-s")
+        .arg(&sig)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not run ssh-keygen: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(nonce.as_bytes())
+            .map_err(|e| format!("could not hand the challenge to ssh-keygen: {e}"))?;
+    }
+    Ok(child
+        .wait()
+        .map_err(|e| format!("ssh-keygen did not complete: {e}"))?
+        .success())
 }
 
 /// The username of the member whose web key matches `public_key`, if any. The
@@ -271,40 +347,17 @@ fn key_type(public_key: &str) -> String {
         .to_owned()
 }
 
-/// Derive the public key line from a PEM private key, validating it parses.
-fn derive_public_key(private_key: &str) -> Result<String, String> {
-    let dir = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
-    let keyfile = dir.path().join("web-key");
-    write_private_key(&keyfile, private_key)?;
-    let output = Command::new("ssh-keygen")
-        .arg("-y")
-        .arg("-f")
-        .arg(&keyfile)
-        .output()
-        .map_err(|e| format!("could not run ssh-keygen: {e}"))?;
-    if !output.status.success() {
-        return Err("that does not look like a usable private key".to_owned());
-    }
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if line.is_empty() {
-        return Err("could not derive a public key".to_owned());
-    }
-    Ok(line)
+/// The key's trailing comment, if it carries one.
+fn key_comment(public_key: &str) -> Option<String> {
+    public_key
+        .split_whitespace()
+        .nth(2)
+        .map(str::to_owned)
+        .filter(|comment| !comment.is_empty())
 }
 
-/// Write a private key to `path` with `0600` permissions and a trailing newline,
-/// alongside no public key — ssh derives the public half when signing.
-fn write_private_key(path: &Path, private_key: &str) -> Result<(), String> {
-    let mut contents = private_key.trim_end().to_owned();
-    contents.push('\n');
-    std::fs::write(path, &contents).map_err(|e| format!("could not write key: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("could not secure key file: {e}"))?;
-    }
-    Ok(())
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 /// The pre-receive rejection reason from git's stderr, or a generic message.
@@ -358,7 +411,7 @@ fn token(cookie: &str) -> Option<String> {
     })
 }
 
-/// A fresh, unguessable session token: 32 random bytes from the OS, hex-encoded.
+/// A fresh, unguessable token: 32 random bytes from the OS, hex-encoded.
 fn random_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     std::fs::File::open("/dev/urandom")
@@ -370,6 +423,15 @@ fn random_token() -> Result<String, String> {
 /// One field's decoded value from an `application/x-www-form-urlencoded` body.
 pub(super) fn field(body: &[u8], name: &str) -> Option<String> {
     form(body).remove(name)
+}
+
+/// A form field's trimmed value, or the empty string.
+fn trimmed(fields: &HashMap<String, String>, name: &str) -> String {
+    fields
+        .get(name)
+        .map(|v| v.trim())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Parse an `application/x-www-form-urlencoded` body into its fields.
@@ -428,14 +490,23 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_keys_comment_as_its_label() {
+        assert_eq!(
+            key_comment("ssh-ed25519 AAAA laptop").as_deref(),
+            Some("laptop")
+        );
+        assert_eq!(key_comment("ssh-ed25519 AAAA"), None);
+    }
+
+    #[test]
     fn decodes_form_fields() {
         assert_eq!(
-            field(b"label=my+web+key&private_key=line1%0Aline2", "label").as_deref(),
-            Some("my web key"),
+            field(b"public_key=ssh-ed25519+AAAA&signature=a%0Ab", "public_key").as_deref(),
+            Some("ssh-ed25519 AAAA"),
         );
         assert_eq!(
-            field(b"label=my+web+key&private_key=line1%0Aline2", "private_key").as_deref(),
-            Some("line1\nline2"),
+            field(b"public_key=ssh-ed25519+AAAA&signature=a%0Ab", "signature").as_deref(),
+            Some("a\nb"),
         );
     }
 
@@ -449,10 +520,13 @@ mod tests {
     }
 
     #[test]
-    fn random_tokens_are_long_and_distinct() {
-        let a = random_token().unwrap();
-        let b = random_token().unwrap();
-        assert_eq!(a.len(), 64);
-        assert_ne!(a, b);
+    fn a_consumed_challenge_does_not_verify_twice() {
+        let challenges = new_challenges();
+        let nonce = issue_challenge(&challenges).unwrap();
+        assert!(take_challenge(&challenges, &nonce), "first use should pass");
+        assert!(
+            !take_challenge(&challenges, &nonce),
+            "a challenge is one-time"
+        );
     }
 }

@@ -562,6 +562,8 @@ mod tests {
             hooks_dir: hooks_dir.map(PathBuf::from),
             checks_queue: PathBuf::from("/data/checks-queue"),
             sessions: crate::web::new_sessions(),
+            challenges: crate::web::new_challenges(),
+            web_signing_key: None,
         }
     }
 

@@ -56,6 +56,25 @@ pub fn store_to_ref(repo: &Path, refname: &str, config: &Config) -> Result<(), g
     Ok(())
 }
 
+/// Like [`store_to_ref`], but recording `author` (a `(name, email)` pair) as the
+/// commit's author while the committer stays the git-ents system identity. The
+/// web write path uses this so an edit landed by the server still names the human
+/// who made it.
+pub fn store_to_ref_authored(
+    repo: &Path,
+    refname: &str,
+    config: &Config,
+    author: (&str, &str),
+) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store_authored(
+        refname,
+        config,
+        "Update configuration",
+        author,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
