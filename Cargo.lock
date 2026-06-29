@@ -1041,6 +1041,7 @@ dependencies = [
  "clap",
  "clap_mangen",
  "facet",
+ "getrandom",
  "git-ents",
  "gix-actor",
  "gix-date",

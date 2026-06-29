@@ -14,7 +14,7 @@
 //! their public key.
 
 use std::collections::HashMap;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -414,9 +414,7 @@ fn token(cookie: &str) -> Option<String> {
 /// A fresh, unguessable token: 32 random bytes from the OS, hex-encoded.
 fn random_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|e| format!("could not read randomness: {e}"))?;
+    getrandom::fill(&mut bytes).map_err(|e| format!("could not read randomness: {e}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
