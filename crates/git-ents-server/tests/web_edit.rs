@@ -477,6 +477,7 @@ fn git(bare: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(bare)
         .args(args)
+        .envs(identity())
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -484,6 +485,15 @@ fn git(bare: &Path, args: &[&str]) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn identity() -> [(&'static str, &'static str); 4] {
+    [
+        ("GIT_AUTHOR_NAME", "test"),
+        ("GIT_AUTHOR_EMAIL", "test@example.com"),
+        ("GIT_COMMITTER_NAME", "test"),
+        ("GIT_COMMITTER_EMAIL", "test@example.com"),
+    ]
 }
 
 fn hash_object(bare: &Path, bytes: &[u8]) -> String {
