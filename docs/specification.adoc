@@ -365,6 +365,19 @@ Cross-references (comments, reviews) MUST key off the stable content-hash
 identifier, not the friendly number.
 --
 
+=== Comments
+
+[role="requirement", id="comments.ref"]
+.Comment Documents
+--
+Each comment on an issue MUST be stored at
+`refs/meta/comments/<issue_id>/<comment_id>` as a `Comment` document with
+fields `body`, `author`, and `issue_id`, where `issue_id` is the issue's
+stable content-hash identifier and `comment_id` is the comment's own content
+hash. One ref per comment keeps comments independently loadable and separately
+historied, and content-hash ids mean concurrent additions never collide.
+--
+
 === Web UI
 
 [role="requirement", id="web.server-rendered"]

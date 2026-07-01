@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod checks;
+pub mod comments;
 pub mod config;
 pub mod issues;
 pub mod members;
