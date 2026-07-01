@@ -86,6 +86,19 @@ pub trait Row {
     fn into_pair(self) -> (String, String);
 }
 
+/// A document that legitimately stores its own collection key.
+///
+/// Most decomposed-ref collections must *not* implement this: an issue's
+/// stable key is its ref's genesis hash, never a stored field, and duplicating
+/// it inside the document would let the stored copy disagree with the ref. A
+/// member is the exception — its principal is both the ref segment and a
+/// field genuinely used elsewhere (rendering `allowed_signers`) — so `HasId`
+/// lets a caller store one without passing the principal twice.
+pub trait HasId {
+    /// The value's collection key — the segment its ref is stored under.
+    fn id(&self) -> &str;
+}
+
 /// A repository's typed `refs/meta/*` store.
 ///
 /// Refs are read and updated through the high-level [`gix`] API, while all
@@ -200,6 +213,58 @@ impl Store {
         };
         let commit = self.write_commit(tree, parents, message, None)?;
         self.try_set_ref(refname, expected, commit)
+    }
+
+    /// Load the item `id` under the collection ref namespace `prefix`
+    /// (`{prefix}/{id}`), or `None` when its ref is absent. The thin wrapper
+    /// every decomposed-ref collection (members, checks, issues, comments, …)
+    /// shares instead of hand-formatting its own ref name.
+    pub fn load_item<T: for<'a> Facet<'a>>(
+        &self,
+        prefix: &str,
+        id: &str,
+    ) -> Result<Option<T>, Error> {
+        self.load(&format!("{prefix}/{id}"))
+    }
+
+    /// Store `value` as item `id` under the collection ref namespace `prefix`
+    /// (`{prefix}/{id}`), inheriting [`store`](Self::store)'s CAS-and-merge
+    /// behavior.
+    pub fn store_item<T: for<'a> Facet<'a>>(
+        &self,
+        prefix: &str,
+        id: &str,
+        value: &T,
+        message: &str,
+    ) -> Result<(), Error> {
+        self.store(&format!("{prefix}/{id}"), value, message)
+    }
+
+    /// Like [`store_item`](Self::store_item), but for a [`HasId`] value that
+    /// carries its own collection key, so the caller does not pass it twice.
+    pub fn store_keyed<T: for<'a> Facet<'a> + HasId>(
+        &self,
+        prefix: &str,
+        value: &T,
+        message: &str,
+    ) -> Result<(), Error> {
+        self.store_item(prefix, value.id(), value, message)
+    }
+
+    /// Every item under the collection ref namespace `prefix`, paired with the
+    /// id (the ref's last path segment) it was stored under, newest first.
+    pub fn list_items<T: for<'a> Facet<'a>>(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, T)>, Error> {
+        let mut items = Vec::new();
+        for refname in self.list(&format!("{prefix}/"))? {
+            let id = refname.rsplit('/').next().unwrap_or(&refname).to_owned();
+            if let Some(value) = self.load::<T>(&refname)? {
+                items.push((id, value));
+            }
+        }
+        Ok(items)
     }
 
     /// Load the [`MapDoc`] on `refname` as its `(key, value)` entries, or an
@@ -488,6 +553,94 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(loaded, entries(&[("b", "2")]));
+    }
+
+    /// A minimal keyed item, used to exercise `load_item`/`store_item`/
+    /// `list_items`/`store_keyed`.
+    #[derive(Facet, Clone, Debug, PartialEq)]
+    struct Item {
+        id: String,
+        value: String,
+    }
+
+    impl HasId for Item {
+        fn id(&self) -> &str {
+            &self.id
+        }
+    }
+
+    #[test]
+    fn store_item_then_load_item_round_trips() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let item = Item {
+            id: "a".into(),
+            value: "1".into(),
+        };
+        store
+            .store_item("refs/meta/items", "a", &item, "write")
+            .unwrap();
+        assert_eq!(
+            store.load_item::<Item>("refs/meta/items", "a").unwrap(),
+            Some(item)
+        );
+        assert_eq!(
+            store
+                .load_item::<Item>("refs/meta/items", "missing")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn store_keyed_uses_the_value_own_id() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let item = Item {
+            id: "a".into(),
+            value: "1".into(),
+        };
+        store
+            .store_keyed("refs/meta/items", &item, "write")
+            .unwrap();
+        assert_eq!(
+            store.load_item::<Item>("refs/meta/items", "a").unwrap(),
+            Some(item)
+        );
+    }
+
+    #[test]
+    fn list_items_returns_every_item_keyed_by_id() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        store
+            .store_keyed(
+                "refs/meta/items",
+                &Item {
+                    id: "a".into(),
+                    value: "1".into(),
+                },
+                "write",
+            )
+            .unwrap();
+        store
+            .store_keyed(
+                "refs/meta/items",
+                &Item {
+                    id: "b".into(),
+                    value: "2".into(),
+                },
+                "write",
+            )
+            .unwrap();
+        let mut ids: Vec<String> = store
+            .list_items::<Item>("refs/meta/items")
+            .unwrap()
+            .into_iter()
+            .map(|(id, _item)| id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_owned(), "b".to_owned()]);
     }
 
     /// A small multi-field, multi-collection document used to exercise the

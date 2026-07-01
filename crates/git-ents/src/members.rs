@@ -71,6 +71,12 @@ pub enum Trust {
     CertAuthority(String),
 }
 
+impl git_store::HasId for Member {
+    fn id(&self) -> &str {
+        &self.principal
+    }
+}
+
 impl Member {
     /// A member trusting `keys` with no validity window.
     #[must_use]
@@ -116,32 +122,48 @@ impl Member {
     }
 }
 
-/// Load the member named `username` in `repo`, or `None` when the ref is absent.
-pub fn load(repo: &Path, username: &str) -> Result<Option<Member>, git_store::Error> {
-    git_store::Store::open(repo)?.load::<Member>(&member_ref(username))
+/// Load the member named `username` from an already-open `store`.
+pub fn load_with(
+    store: &git_store::Store,
+    username: &str,
+) -> Result<Option<Member>, git_store::Error> {
+    store.load_item(MEMBER_NS, username)
 }
 
-/// Load every member recorded under [`MEMBER_NS`] in `repo`, newest ref first.
+/// Load the member named `username` in `repo`, or `None` when the ref is absent.
+pub fn load(repo: &Path, username: &str) -> Result<Option<Member>, git_store::Error> {
+    load_with(&git_store::Store::open(repo)?, username)
+}
+
+/// Load every member recorded under [`MEMBER_NS`] from an already-open
+/// `store`, newest ref first.
 ///
 /// An empty result is a fresh server whose trust list has not been pushed yet. A
 /// present but unreadable member ref is an error so callers can fail closed
 /// rather than mistake corruption for "no members".
-pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
-    let store = git_store::Store::open(repo)?;
-    let mut members = Vec::new();
-    for refname in store.list(&format!("{MEMBER_NS}/"))? {
-        if let Some(member) = store.load::<Member>(&refname)? {
-            members.push(member);
-        }
-    }
-    Ok(members)
+pub fn load_all_with(store: &git_store::Store) -> Result<Vec<Member>, git_store::Error> {
+    Ok(store
+        .list_items::<Member>(MEMBER_NS)?
+        .into_iter()
+        .map(|(_id, member)| member)
+        .collect())
 }
 
-/// Write `member` to its `refs/meta/member/<principal>` ref, replacing any prior
-/// value, as a new commit.
+/// Load every member recorded under [`MEMBER_NS`] in `repo`. See
+/// [`load_all_with`].
+pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
+    load_all_with(&git_store::Store::open(repo)?)
+}
+
+/// Write `member` to its `refs/meta/member/<principal>` ref, replacing any
+/// prior value, as a new commit, through an already-open `store`.
+pub fn store_with(store: &git_store::Store, member: &Member) -> Result<(), git_store::Error> {
+    store.store_keyed(MEMBER_NS, member, "Update member")
+}
+
+/// Write `member` to its `refs/meta/member/<principal>` ref. See [`store_with`].
 pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(&member_ref(&member.principal), member, "Update member")?;
-    Ok(())
+    store_with(&git_store::Store::open(repo)?, member)
 }
 
 /// Drop every `revoked` fingerprint from `members`, returning the trust set the
