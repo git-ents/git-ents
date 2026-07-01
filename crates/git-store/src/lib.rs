@@ -25,7 +25,10 @@ use std::path::Path;
 use facet::Facet;
 use gix::ObjectId;
 use gix::objs::{Commit, FindExt as _, Write as _};
+use gix::refs::Target;
 use gix::refs::transaction::PreviousValue;
+
+mod merge;
 
 /// The author and committer identity stamped on every write, fixed so a write
 /// is self-contained and independent of any ambient git config.
@@ -51,6 +54,11 @@ pub enum Error {
     /// A git object could not be read or written.
     #[error("git object operation failed: {0}")]
     Object(String),
+    /// A concurrent writer moved the ref since this write's snapshot was
+    /// read, and either there was no common ancestor to merge from or the
+    /// structural merge found the same leaf changed on both sides.
+    #[error("conflicting concurrent write to the ref")]
+    Conflict,
 }
 
 /// A meta-ref document that is a single named map of string keys to string
@@ -109,16 +117,18 @@ impl Store {
 
     /// Write `value` to `refname` as a new commit on top of the ref's current
     /// tip, so the update fast-forwards and accrues history.
+    ///
+    /// Uses compare-and-swap: if a concurrent writer moved the ref first,
+    /// this attempts a schema-aware structural merge of the two documents
+    /// against their common base and retries, up to [`MAX_MERGE_RETRIES`]
+    /// times, before giving up with [`Error::Conflict`].
     pub fn store<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
-        let tree = facet_git_tree::serialize_into(value, &self.odb)?;
-        let parents = self.ref_commit(refname)?.into_iter().collect();
-        let commit = self.write_commit(tree, parents, message, None)?;
-        self.set_ref(refname, commit)
+        self.store_impl(refname, value, message, None)
     }
 
     /// Like [`store`](Self::store), but attributing authorship to `author`
@@ -132,16 +142,50 @@ impl Store {
         message: &str,
         author: (&str, &str),
     ) -> Result<(), Error> {
-        let tree = facet_git_tree::serialize_into(value, &self.odb)?;
-        let parents = self.ref_commit(refname)?.into_iter().collect();
-        let commit = self.write_commit(tree, parents, message, Some(author))?;
-        self.set_ref(refname, commit)
+        self.store_impl(refname, value, message, Some(author))
+    }
+
+    fn store_impl<T: for<'a> Facet<'a>>(
+        &self,
+        refname: &str,
+        value: &T,
+        message: &str,
+        author: Option<(&str, &str)>,
+    ) -> Result<(), Error> {
+        let mut expected = self.ref_commit(refname)?;
+        let mut tree = facet_git_tree::serialize_into(value, &self.odb)?;
+        for _ in 0..=MAX_MERGE_RETRIES {
+            let parents = expected.into_iter().collect();
+            let commit = self.write_commit(tree, parents, message, author)?;
+            match self.try_set_ref(refname, expected, commit) {
+                Ok(()) => return Ok(()),
+                Err(Error::Conflict) => {
+                    // No common ancestor (two independent geneses racing to
+                    // create the same ref) can't be merged; fail closed.
+                    let Some(base) = expected else {
+                        return Err(Error::Conflict);
+                    };
+                    let theirs = self.ref_commit(refname)?.ok_or(Error::Conflict)?;
+                    let base_tree = self.read_commit(&base)?.tree;
+                    let theirs_tree = self.read_commit(&theirs)?.tree;
+                    tree = merge::three_way_merge::<T>(base_tree, tree, theirs_tree, &self.odb)?;
+                    expected = Some(theirs);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::Conflict)
     }
 
     /// Write `value` to `refname` in place, replacing the ref's tip commit
     /// (re-parented on the tip's own parents) rather than appending. Lets a
     /// single document advance through intermediate states without a commit per
     /// transition. When the ref is absent this starts a fresh history.
+    ///
+    /// Uses compare-and-swap on the tip this call read; a race is a state
+    /// machine advancing twice from the same state, so it fails closed with
+    /// [`Error::Conflict`] rather than merging — merging stale state could
+    /// resurrect a dead outcome.
     pub fn amend<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
@@ -149,12 +193,13 @@ impl Store {
         message: &str,
     ) -> Result<(), Error> {
         let tree = facet_git_tree::serialize_into(value, &self.odb)?;
-        let parents = match self.ref_commit(refname)? {
-            Some(tip) => self.read_commit(&tip)?.parents,
+        let expected = self.ref_commit(refname)?;
+        let parents = match &expected {
+            Some(tip) => self.read_commit(tip)?.parents,
             None => Vec::new(),
         };
         let commit = self.write_commit(tree, parents, message, None)?;
-        self.set_ref(refname, commit)
+        self.try_set_ref(refname, expected, commit)
     }
 
     /// Load the [`MapDoc`] on `refname` as its `(key, value)` entries, or an
@@ -311,14 +356,39 @@ impl Store {
             .map_err(|error| Error::Object(error.to_string()))
     }
 
-    /// Point `refname` at `commit`, creating or force-updating it.
-    fn set_ref(&self, refname: &str, commit: ObjectId) -> Result<(), Error> {
-        self.repo
-            .reference(refname, commit, PreviousValue::Any, "git-ents: update")
-            .map_err(|error| Error::Ref(error.to_string()))?;
-        Ok(())
+    /// Point `refname` at `commit`, requiring its current tip to match
+    /// `expected` (`None` meaning the ref must not yet exist). Fails with
+    /// [`Error::Conflict`] specifically when the ref moved since `expected`
+    /// was read, distinguishing a genuine race from any other ref-transaction
+    /// failure.
+    fn try_set_ref(
+        &self,
+        refname: &str,
+        expected: Option<ObjectId>,
+        commit: ObjectId,
+    ) -> Result<(), Error> {
+        let constraint = match expected {
+            Some(oid) => PreviousValue::MustExistAndMatch(Target::Object(oid)),
+            None => PreviousValue::MustNotExist,
+        };
+        match self
+            .repo
+            .reference(refname, commit, constraint, "git-ents: update")
+        {
+            Ok(_reference) => Ok(()),
+            Err(error) => match self.ref_commit(refname) {
+                Ok(current) if current == expected => Err(Error::Ref(error.to_string())),
+                Ok(_current) => Err(Error::Conflict),
+                Err(error) => Err(error),
+            },
+        }
     }
 }
+
+/// How many times [`Store::store_impl`] retries a merge-and-CAS round before
+/// giving up with [`Error::Conflict`]. Bounds retry under sustained
+/// contention; ordinary racing writers resolve within one or two rounds.
+const MAX_MERGE_RETRIES: usize = 5;
 
 /// The facts read off a commit: its tree, its parents, and its committer date.
 struct CommitFacts {
@@ -418,5 +488,222 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(loaded, entries(&[("b", "2")]));
+    }
+
+    /// A small multi-field, multi-collection document used to exercise the
+    /// structural merge: two scalar fields plus a scalar-keyed map.
+    #[derive(Facet, Clone, Debug, PartialEq)]
+    struct Doc {
+        name: String,
+        note: String,
+        tags: BTreeMap<String, String>,
+    }
+
+    #[test]
+    fn merge_disjoint_struct_fields_combine() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let base = Doc {
+            name: "a".into(),
+            note: "x".into(),
+            tags: BTreeMap::new(),
+        };
+        let ours = Doc {
+            name: "b".into(),
+            ..base.clone()
+        };
+        let theirs = Doc {
+            note: "y".into(),
+            ..base.clone()
+        };
+        let base_tree = facet_git_tree::serialize_into(&base, &store.odb).unwrap();
+        let ours_tree = facet_git_tree::serialize_into(&ours, &store.odb).unwrap();
+        let theirs_tree = facet_git_tree::serialize_into(&theirs, &store.odb).unwrap();
+
+        let merged_tree =
+            merge::three_way_merge::<Doc>(base_tree, ours_tree, theirs_tree, &store.odb).unwrap();
+        let merged: Doc = facet_git_tree::deserialize(&merged_tree, &store.odb).unwrap();
+
+        assert_eq!(
+            merged,
+            Doc {
+                name: "b".into(),
+                note: "y".into(),
+                tags: BTreeMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn merge_disjoint_map_entries_combine() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let base = Doc {
+            name: "a".into(),
+            note: "x".into(),
+            tags: BTreeMap::new(),
+        };
+        let ours = Doc {
+            tags: entries(&[("x", "1")]),
+            ..base.clone()
+        };
+        let theirs = Doc {
+            tags: entries(&[("y", "2")]),
+            ..base.clone()
+        };
+        let base_tree = facet_git_tree::serialize_into(&base, &store.odb).unwrap();
+        let ours_tree = facet_git_tree::serialize_into(&ours, &store.odb).unwrap();
+        let theirs_tree = facet_git_tree::serialize_into(&theirs, &store.odb).unwrap();
+
+        let merged_tree =
+            merge::three_way_merge::<Doc>(base_tree, ours_tree, theirs_tree, &store.odb).unwrap();
+        let merged: Doc = facet_git_tree::deserialize(&merged_tree, &store.odb).unwrap();
+
+        assert_eq!(merged.tags, entries(&[("x", "1"), ("y", "2")]));
+    }
+
+    #[test]
+    fn merge_same_scalar_changed_both_ways_conflicts() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let base = Doc {
+            name: "a".into(),
+            note: "x".into(),
+            tags: BTreeMap::new(),
+        };
+        let ours = Doc {
+            name: "b".into(),
+            ..base.clone()
+        };
+        let theirs = Doc {
+            name: "c".into(),
+            ..base.clone()
+        };
+        let base_tree = facet_git_tree::serialize_into(&base, &store.odb).unwrap();
+        let ours_tree = facet_git_tree::serialize_into(&ours, &store.odb).unwrap();
+        let theirs_tree = facet_git_tree::serialize_into(&theirs, &store.odb).unwrap();
+
+        let result = merge::three_way_merge::<Doc>(base_tree, ours_tree, theirs_tree, &store.odb);
+        assert!(matches!(result, Err(Error::Conflict)));
+    }
+
+    #[test]
+    fn merge_map_key_removed_on_one_side_and_untouched_on_the_other_is_dropped() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let base = Doc {
+            name: "a".into(),
+            note: "x".into(),
+            tags: entries(&[("x", "1")]),
+        };
+        let ours = Doc {
+            tags: BTreeMap::new(), // we removed "x"
+            ..base.clone()
+        };
+        let theirs = base.clone(); // untouched
+        let base_tree = facet_git_tree::serialize_into(&base, &store.odb).unwrap();
+        let ours_tree = facet_git_tree::serialize_into(&ours, &store.odb).unwrap();
+        let theirs_tree = facet_git_tree::serialize_into(&theirs, &store.odb).unwrap();
+
+        let merged_tree =
+            merge::three_way_merge::<Doc>(base_tree, ours_tree, theirs_tree, &store.odb).unwrap();
+        let merged: Doc = facet_git_tree::deserialize(&merged_tree, &store.odb).unwrap();
+
+        assert!(merged.tags.is_empty());
+    }
+
+    #[test]
+    fn merge_map_key_removed_on_one_side_and_modified_on_the_other_conflicts() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let base = Doc {
+            name: "a".into(),
+            note: "x".into(),
+            tags: entries(&[("x", "1")]),
+        };
+        let ours = Doc {
+            tags: BTreeMap::new(), // we removed "x"
+            ..base.clone()
+        };
+        let theirs = Doc {
+            tags: entries(&[("x", "2")]), // they changed "x"
+            ..base.clone()
+        };
+        let base_tree = facet_git_tree::serialize_into(&base, &store.odb).unwrap();
+        let ours_tree = facet_git_tree::serialize_into(&ours, &store.odb).unwrap();
+        let theirs_tree = facet_git_tree::serialize_into(&theirs, &store.odb).unwrap();
+
+        let result = merge::three_way_merge::<Doc>(base_tree, ours_tree, theirs_tree, &store.odb);
+        assert!(matches!(result, Err(Error::Conflict)));
+    }
+
+    #[test]
+    fn try_set_ref_conflicts_on_a_stale_expected() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let refname = "refs/meta/doc";
+        store.store(refname, &"first".to_string(), "write").unwrap();
+        let stale = store.ref_commit(refname).unwrap();
+
+        // A second write lands, moving the ref past `stale`.
+        store
+            .store(refname, &"second".to_string(), "write")
+            .unwrap();
+
+        // A write built from the now-stale snapshot loses the CAS race.
+        let tree = facet_git_tree::serialize_into(&"third".to_string(), &store.odb).unwrap();
+        let commit = store
+            .write_commit(tree, stale.into_iter().collect(), "write", None)
+            .unwrap();
+        let result = store.try_set_ref(refname, stale, commit);
+        assert!(matches!(result, Err(Error::Conflict)));
+    }
+
+    #[test]
+    fn store_conflicts_on_a_fresh_ref_race_with_no_common_base() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let refname = "refs/meta/new-doc";
+
+        // Someone else creates the ref first.
+        store
+            .store(refname, &"theirs".to_string(), "theirs")
+            .unwrap();
+
+        // Our write, built assuming the ref was still absent, has no common
+        // ancestor with theirs and so cannot be merged.
+        let tree = facet_git_tree::serialize_into(&"ours".to_string(), &store.odb).unwrap();
+        let commit = store.write_commit(tree, Vec::new(), "ours", None).unwrap();
+        let result = store.try_set_ref(refname, None, commit);
+        assert!(matches!(result, Err(Error::Conflict)));
+    }
+
+    #[test]
+    fn amend_fails_closed_on_a_race_instead_of_merging() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let refname = "refs/meta/run";
+        store
+            .amend(refname, &"queued".to_string(), "queue")
+            .unwrap();
+        let stale = store.ref_commit(refname).unwrap();
+
+        // A concurrent advance we never saw.
+        store
+            .amend(refname, &"running".to_string(), "advance to running")
+            .unwrap();
+
+        // Our own advance, built from the stale snapshot: same primitives
+        // `amend` itself uses, so this exercises its exact CAS behavior.
+        let parents = match stale {
+            Some(tip) => store.read_commit(&tip).unwrap().parents,
+            None => Vec::new(),
+        };
+        let tree = facet_git_tree::serialize_into(&"pass".to_string(), &store.odb).unwrap();
+        let commit = store
+            .write_commit(tree, parents, "advance to pass", None)
+            .unwrap();
+        let result = store.try_set_ref(refname, stale, commit);
+        assert!(matches!(result, Err(Error::Conflict)));
     }
 }

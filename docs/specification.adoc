@@ -2,9 +2,11 @@
 Joey Carpinelli <joseph.carpinelli@icloud.com>
 
 [abstract]
-The `git-ents` project aspires to be a Git server configuration with https://fly.io[Fly.io], and a package manager client application which interacts with the Git server to retrieve binaries and other software bundles.
-By extending the role of the Git server, and using recent novel technologies e.g. https://github.com/GitoxideLabs/gitoxide[Gitoxide], we aim to provide new capabilities to software developers.
-
+`git-ents` is a Git forge: a self-hosted, membership-gated Git server with a
+browser UI, a CLI, asynchronous CI checks, and an issue tracker, all stored as
+typed documents on git meta-refs.
+Every piece of state — members, configuration, checks, runs, issues — lives in
+the repository itself, versioned and auditable, with no external database.
 
 [CAUTION]
 This specification is not yet stable and will grow as the project develops.
@@ -17,19 +19,42 @@ This specification is not yet stable and will grow as the project develops.
 .Persistent Bare Repository
 --
 Repository state MUST be persisted in a bare Git repository on durable storage.
+A bare repository is created automatically on the first push to any previously
+unused name and is never deleted by the server.
 --
 
-=== Access
-
-[role="requirement", id="access.open"]
-.Open Access
+[role="requirement", id="storage.meta-ref"]
+.Meta-Ref Documents
 --
-The server MUST serve clone, fetch, and push to any client without authentication.
-Any client MAY create a repository by pushing to a previously unused name.
+All structured server-side state (members, configuration, checks, run results,
+issues, account profiles) MUST be stored as typed documents on dedicated
+`refs/meta/*` refs, one ref per document or per entity, using the
+`facet-git-tree` serialization: each document becomes a git tree, wrapped in a
+commit parented on the ref's prior tip, so every write is a fast-forward and
+every ref's commit chain is the document's full history.
 
-[IMPORTANT]
-This requirement is deliberately unstable.
-The current experimental phase prioritizes a frictionless Git remote; authentication will be reintroduced as the project matures.
+A document's `Facet` shape IS its on-disk format.
+An incompatible change (a renamed field, a changed field type) silently breaks
+reading data already on a ref.
+Each document type MUST carry a load test against a hand-built fixture in the
+exact on-disk layout to catch a regression at test time rather than in
+production.
+--
+
+[role="requirement", id="storage.concurrency"]
+.Concurrent Writes
+--
+Concurrent writes to the same `refs/meta/*` ref MUST use compare-and-swap.
+When a write finds the ref has moved since it was read, the writer MUST
+attempt a structural three-way merge of the document (base / ours / theirs):
+non-overlapping changes — different fields, or different entries of a
+collection — MUST merge cleanly.
+A genuine conflict (the same scalar value changed two different ways) MUST
+fail cleanly so the caller can reload and reapply.
+Data MUST NEVER be silently overwritten, and a real conflict MUST NEVER be
+silently resolved by picking a winner.
+An in-place state advance (a run's progression) is a deliberate replace and
+MUST fail cleanly on a race rather than merge.
 --
 
 === Protocol
@@ -37,13 +62,521 @@ The current experimental phase prioritizes a frictionless Git remote; authentica
 [role="requirement", id="protocol.git"]
 .Git Remote Compatibility
 --
-The server MUST function as a full Git remote, supporting clone, fetch, and push via the standard Git pack protocol without any special client configuration.
+The server MUST function as a full Git remote, supporting clone, fetch, and
+push via the standard Git smart-HTTP pack protocol (`git-upload-pack` and
+`git-receive-pack`) without any special client configuration.
+The implementation MUST delegate the git wire protocol to `git http-backend`
+running as a CGI subprocess, translating between HTTP requests and the CGI's
+stdin/stdout.
+--
+
+[role="requirement", id="protocol.routing"]
+.Request Routing
+--
+A single HTTP listener MUST serve both the git wire protocol and the browser
+web UI on the same port.
+Requests are routed by inspecting the path and query:
+
+* Smart-HTTP service requests (`/info/refs?service=...`,
+  `/git-upload-pack`, `/git-receive-pack`) and dumb-HTTP object paths
+  (`/objects/...`) MUST be forwarded to `git http-backend`.
+* Browser tree/blob/commit browse paths (`/tree/`, `/blob/`, `/commit/`)
+  MUST be served by the web UI, even when a file path within them resembles a
+  dumb-HTTP git path (e.g. a file named `HEAD` or a directory named `objects`).
+* All other GET requests MUST be served by the web UI.
+* POST requests to the git smart-HTTP RPC paths
+  (`/git-upload-pack`, `/git-receive-pack`) MUST be forwarded to
+  `git http-backend`.
+  All other POST requests MUST be handled by the web UI.
 --
 
 === Namespace
 
 [role="requirement", id="namespace.url"]
-.URL
+.Service URL
 --
 The service URL MUST be `git-ents.sh/git-ents`.
+--
+
+[role="requirement", id="namespace.path"]
+.Repository Path Validation
+--
+A repository path MUST consist of one to three segments, each drawn from a
+conservative character set: ASCII alphanumerics plus `.`, `_`, and `-`.
+No segment may be empty, begin with `.`, or contain a path separator.
+A path that would escape the data directory, nest inside an existing
+repository, or collide with a namespace directory that is not a bare repository
+MUST be rejected before `git http-backend` is invoked.
+--
+
+[role="requirement", id="namespace.auto-create"]
+.Automatic Repository Creation
+--
+Pushing to a previously unused name MUST create a new bare repository,
+initialized with `http.receivepack = true` so smart-HTTP pushes are accepted.
+Two concurrent first pushes to the same name MUST NOT both initialize the same
+repository: creation MUST be serialized behind a per-server lock.
+After a successful push, if `HEAD` points at a branch that does not exist, the
+server MUST update `HEAD` to point at the pushed branch, preferring `main`,
+then `master`, then the first available branch, so a fresh clone always checks
+out content.
+--
+
+=== Members
+
+[role="requirement", id="members.ref"]
+.Member Refs
+--
+The push trust root MUST be the set of refs matching `refs/meta/member/*`.
+Each ref, `refs/meta/member/<username>`, holds one `Member` document for the
+person named by the ref's last segment.
+The set is decomposed — one ref per person — so adding, refreshing, or revoking
+a member is an independent, separately-historied operation.
+--
+
+[role="requirement", id="members.trust"]
+.Member Trust Modes
+--
+A member's trust MUST rest on exactly one of two mutually exclusive bases:
+
+Keys::
+  A set of leaf signing keys, mapping each fingerprint to its OpenSSH public
+  key.
+  The solo and small-team default.
+
+Certificate Authority::
+  A pinned certificate authority's OpenSSH public key.
+  Any certificate the CA issues for the member's principal, within the
+  certificate's own validity window, is trusted.
+  The enterprise option: rotation, expiry, and new devices require no edit to
+  the member ref.
+--
+
+[role="requirement", id="members.window"]
+.Trust Window
+--
+A member MAY carry an optional `valid-after` / `valid-before` window, expressed
+as OpenSSH timestamps (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`).
+An un-refreshed member whose window has lapsed MUST stop authorizing new pushes
+— stale trust fails closed.
+A previously-valid push MUST remain verifiable forever by pinning the
+verification time to the push date via `ssh-keygen -Y verify -Overify-time`.
+--
+
+[role="requirement", id="members.allowed-signers"]
+.Allowed Signers Rendering
+--
+The server MUST render the live member set as an OpenSSH `allowed_signers` file
+for `ssh-keygen -Y verify`.
+The principal column MUST be a wildcard (`*`) so any email matches.
+Each member's validity window MUST be rendered as comma-joined options
+(`valid-after`, `valid-before`).
+Each leaf key MUST appear on its own line; a pinned CA MUST appear as a
+`cert-authority` line.
+All lines MUST carry `namespaces="git"`.
+--
+
+=== Revocations
+
+[role="requirement", id="revocations.ref"]
+.Revocation List
+--
+A single ref, `refs/meta/revoked`, MUST hold the revocation list: a map from
+fingerprint to a free-text reason.
+This is the "faster than expiry" override: the server MUST subtract every
+revoked fingerprint from the trust set before verifying a push, so a
+compromised key is refused the moment it is listed.
+--
+
+[role="requirement", id="revocations.ca"]
+.CA Revocation
+--
+Revoking a certificate authority MUST be done by removing the CA member's ref.
+A CA is named by its ref, not by a fingerprint, so the revocation list operates
+only on leaf-key fingerprints.
+--
+
+=== Push Authentication
+
+[role="requirement", id="auth.bootstrap"]
+.Bootstrap Window
+--
+When no `refs/meta/member/*` refs exist the repository MUST accept any push
+without a signature, so the first member can be pushed in.
+Once at least one member ref exists the bootstrap window MUST close and all
+subsequent pushes MUST be signed.
+Revoking every member's keys — leaving the member refs present but all keys
+removed — MUST fail closed, not reopen the bootstrap window.
+--
+
+[role="requirement", id="auth.signed-push"]
+.Signed Push Verification
+--
+Every push to a repository whose member list is non-empty MUST carry a signed
+push certificate (`git push --signed`).
+The server MUST verify the certificate in a `pre-receive` hook before any ref
+is updated:
+
+. The push certificate nonce status (from `GIT_PUSH_CERT_NONCE_STATUS`) MUST
+  be `OK`.
+. The certificate MUST contain an SSH signature (an
+  `-----BEGIN SSH SIGNATURE-----` block).
+. The signature MUST verify against at least one authorized member key via
+  `ssh-keygen -Y verify -n git`.
+. The trust set fed to `ssh-keygen` MUST be the live member set minus any
+  revoked fingerprints.
+
+A push that fails any check MUST be rejected before any ref is updated.
+--
+
+[role="requirement", id="auth.nonce"]
+.Nonce Configuration
+--
+The server MUST configure `receive.certNonceSeed` on every `git http-backend`
+invocation when authentication is active.
+The server MUST configure `receive.certNonceSlop = 60` to tolerate the
+round-trip latency inherent in smart-HTTP, where the nonce is issued and
+verified by two separate `receive-pack` processes.
+--
+
+[role="requirement", id="auth.client-setup"]
+.Client-Side Setup
+--
+A CLI command (`git ents members setup`) MUST configure the client's local or
+global git config to sign pushes with an SSH key, using the key named by
+`user.signingkey` or a default `~/.ssh/id_ed25519`.
+--
+
+=== Account
+
+[role="requirement", id="account.ref"]
+.Account Profile
+--
+A repository becomes an account repository by carrying a `refs/meta/account`
+ref.
+The `Account` document at that ref MUST hold: `username`, `display_name`,
+`bio`, and `created_at` (seconds since the Unix epoch).
+The username is authoritative in the document; the repository path is
+convention, not trust.
+--
+
+=== Repository Configuration
+
+[role="requirement", id="config.ref"]
+.Configuration Ref
+--
+A repository's loose metadata MUST be stored at `refs/meta/config` as a
+`Config` document with fields: `description`, `homepage`, and `topics`.
+Keeping metadata on a meta ref means a push of ordinary content cannot rewrite
+it, and the metadata carries its own independent history.
+An absent ref MUST yield the default (all empty / zero).
+--
+
+=== Checks
+
+[role="requirement", id="checks.definition"]
+.Check Set Definition
+--
+The configured checks for a repository MUST be stored at `refs/meta/checks` as
+a map from check name to shell command.
+A check's definition living on a meta ref means a branch under check cannot
+rewrite the check set that gates it.
+--
+
+[role="requirement", id="checks.post-receive"]
+.Asynchronous Queuing
+--
+After a successful push is accepted by `pre-receive`, a `post-receive` hook
+MUST enqueue a check job for each updated branch whose new tip is non-zero and
+is not a `refs/meta/*` ref.
+The hook MUST record an initial run status of `queued` for each check
+immediately, so the UI reflects the job before the worker picks it up.
+The hook MUST NOT run checks itself; it MUST return as soon as jobs are
+enqueued, so the push is never blocked on check execution.
+Job files MUST be written to a tmp path and renamed into place so the worker
+never observes a partial file.
+--
+
+[role="requirement", id="checks.worker"]
+.Check Worker
+--
+A persistent server-side worker MUST drain the job queue.
+Jobs MUST be grouped by repository; each repository's jobs MUST be processed
+serially to prevent concurrent runs from colliding in its sandbox.
+Separate repositories MUST be processed concurrently, so a slow repository's
+backlog does not block others.
+--
+
+[role="requirement", id="checks.sandbox"]
+.Sprite Sandbox
+--
+Each check MUST run inside a Fly.io Sprite: a persistent, hardware-isolated
+sandbox, one per repository, so build caches survive between pushes.
+Before running checks the worker MUST sync the pushed tree into the Sprite's
+work directory via `git archive` piped to `tar -x`.
+The worker MUST configure the `sprite` CLI from `SPRITES_TOKEN` before each
+run via `sprite auth setup`, so the credential stays current without restart.
+--
+
+[role="requirement", id="checks.outcomes"]
+.Run Recording
+--
+Run outcomes MUST be stored at `refs/meta/runs/<commit>`, one ref per checked
+commit.
+Each ref's commit chain is the run history; each commit's date is the run time,
+so no timestamp is duplicated in the document tree.
+Outcome values progress: `queued` → `running` → `pass` / `fail` / `error`.
+A run that cannot complete due to an infrastructure error (unreachable Sprite,
+failed sync) MUST be finalized as `error` rather than left stuck at `running`.
+A single check that exceeds a 30-minute timeout MUST be recorded `error` rather
+than blocking the worker thread indefinitely.
+--
+
+=== Issues
+
+[role="requirement", id="issues.ref"]
+.Issue Documents
+--
+Each issue MUST be stored at `refs/meta/issues/<id>` as an `Issue` document
+with fields: `title`, `body`, `state` (`open` or `closed`), `labels` (plain
+strings, no separate registry), and `author`.
+One ref per issue keeps issues independently loadable and separately historied;
+the ref's commit chain is the issue's edit history.
+--
+
+=== Web UI
+
+[role="requirement", id="web.server-rendered"]
+.Server-Rendered HTML
+--
+All browser-facing pages MUST be rendered server-side with no required
+JavaScript on the client.
+Page navigation MUST be ordinary links; folder expansion and file viewing MUST
+be plain GET requests to the server.
+--
+
+[role="requirement", id="web.tabs"]
+.Repository Tabs
+--
+Each repository's web UI MUST provide at minimum the following tabs:
+
+Files::
+  The repository's file tree, browsable to arbitrary depth, with syntax-
+  highlighted blob views and rendered AsciiDoc and Markdown files.
+
+Commits::
+  The commit history with diff views.
+
+Releases::
+  Git tags treated as release milestones, browsable by version.
+
+Checks::
+  The configured check set and every recorded run with per-check outcomes.
+
+Issues::
+  The issue list with open/closed filter and per-issue detail view.
+
+Settings::
+  The repository's `Config` fields (`description`, `homepage`, `topics`),
+  editable in the browser by signed-in members.
+--
+
+[role="requirement", id="web.syntax-highlight"]
+.Syntax Highlighting
+--
+Blob views MUST syntax-highlight source files using a compile-time language
+registry.
+AsciiDoc and Markdown files MUST be rendered to HTML.
+Files larger than 2 MiB MUST be truncated rather than loaded in full, to bound
+memory cost per request.
+--
+
+=== Web Authentication
+
+[role="requirement", id="web.auth.challenge"]
+.Challenge–Response Sign-In
+--
+Browser sign-in MUST NOT require a private key to be transmitted.
+The server MUST issue a one-time nonce (challenge); the member MUST sign the
+nonce locally with their web key using SSHSIG under the `git-ents-login`
+namespace (distinct from the git push namespace) and paste back the public key
+and signature.
+The server MUST verify the pasted signature against the pasted key, and the key
+against the live member list for the repository being edited, before opening a
+session.
+A challenge MUST expire after 600 seconds and MUST be consumed on first use so
+it cannot be replayed.
+--
+
+[role="requirement", id="web.auth.session"]
+.Sessions and CSRF
+--
+A successful sign-in MUST issue a session cookie (`ents_session`) containing an
+unguessable random token.
+Each session MUST carry a separate CSRF token that state-changing POST requests
+MUST echo back, so a cross-site request (which cannot read the cookie) cannot
+act as the signed-in user.
+Sessions MUST be held only in server memory; no session state is persisted to
+disk.
+A session MUST store only the member's public key and display label — no
+private key is ever held or transmitted.
+--
+
+[role="requirement", id="web.auth.edit"]
+.Authenticated Settings Edit
+--
+A settings edit MUST be landed as a real `git push --signed` onto
+`refs/meta/config`, signed with the server's own member key, through the same
+`pre-receive` gate a CLI push traverses.
+The commit's author MUST be the signed-in human (resolved from their session's
+public key to their member username); the committer MUST be the server identity.
+The edit MUST be staged on a throwaway ref and pushed onto `refs/meta/config`
+via the signed push; the staging ref MUST be deleted whether or not the push
+succeeds.
+If the server is not configured with a signing key or nonce seed, the Settings
+tab MUST hide the edit controls rather than present a form that cannot succeed.
+--
+
+=== Nonfunctional
+
+[role="requirement", id="nonfunctional.push-latency"]
+.Push Latency
+--
+A push MUST NOT block on check execution.
+The `post-receive` hook MUST return as soon as job files are written to the
+queue, so the client's `git push` connection is released before any check runs.
+--
+
+[role="requirement", id="nonfunctional.memory-cap"]
+.Per-Request Memory Cap
+--
+No single web request MAY read more than 2 MiB of git object data into memory
+for rendering.
+Blobs, diffs, and other rendered output that exceed this limit MUST be
+truncated and the UI MUST display a notice rather than an error.
+--
+
+[role="requirement", id="nonfunctional.concurrency"]
+.Concurrency Model
+--
+The HTTP server MUST handle concurrent requests without blocking the async
+runtime on synchronous work.
+Check jobs MUST be run on blocking threads (off the async executor) so a
+long-running check cannot starve unrelated HTTP handlers.
+The request body MUST be written to `git http-backend`'s stdin concurrently
+with draining its stdout; a sequential write-then-read would deadlock when
+`receive-pack` streams progress to the client before it has consumed the full
+pack.
+--
+
+[role="requirement", id="nonfunctional.no-panic"]
+.No Panics
+--
+The implementation MUST NOT use `unwrap`, `expect`, unchecked indexing/slicing,
+or other constructs that can panic in production code paths.
+Any suppression of a panic-prevention lint MUST be accompanied by a documented
+reason (`#[expect(..., reason = "...")]`); silent `#[allow(...)]` attributes are
+forbidden.
+--
+
+[role="requirement", id="nonfunctional.no-unsafe"]
+.No Unsafe Code
+--
+The implementation MUST NOT contain any `unsafe` code blocks.
+--
+
+[role="requirement", id="nonfunctional.object-store"]
+.Durable Object Store Reads
+--
+Meta-ref documents MUST be read and written against the repository's common
+object directory rather than any quarantine overlay.
+Inside a `pre-receive` or `post-receive` hook, git points the per-object-path
+environment variables at a receive-pack quarantine that holds only the incoming
+pack; the durable store, where meta-refs live, is the common directory.
+All meta-ref access MUST open the object database at the common directory
+explicitly so it is not accidentally limited to the quarantine.
+--
+
+=== Compatibility
+
+[role="requirement", id="compat.git"]
+.Git Tooling
+--
+The server MUST invoke `git` (including `git http-backend`, `git receive-pack`,
+`git archive`, `git cat-file`, `git for-each-ref`, `git symbolic-ref`, and
+`git init --bare`) as external subprocesses.
+Git MUST be present on `PATH` at runtime.
+Git config overrides MUST be passed via `GIT_CONFIG_COUNT` /
+`GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` environment variables rather than
+`git -c`, so they reach the `receive-pack` and `pre-receive` processes that
+`git http-backend` spawns, not merely the CGI wrapper process.
+--
+
+[role="requirement", id="compat.ssh-keygen"]
+.OpenSSH `ssh-keygen`
+--
+Push certificate verification and browser sign-in verification MUST use
+`ssh-keygen -Y verify` against an `allowed_signers` file written at runtime.
+`ssh-keygen` (OpenSSH) MUST be present on `PATH` at runtime.
+The `allowed_signers` format used MUST be the OpenSSH format: one line per key,
+with a principal column, optional comma-joined options (`cert-authority`,
+`valid-after`, `valid-before`, `namespaces`), and the key material.
+--
+
+[role="requirement", id="compat.openssh-signed-push"]
+.Signed Push Protocol
+--
+Push signatures MUST use OpenSSH (`gpg.format = ssh`) push certificates.
+The server MUST read the pushed certificate's object ID from `GIT_PUSH_CERT`
+and its nonce status from `GIT_PUSH_CERT_NONCE_STATUS` — the environment
+variables git populates for the `pre-receive` hook — and MUST NOT assume any
+other delivery mechanism.
+--
+
+[role="requirement", id="compat.sprite"]
+.Sprite CLI
+--
+Asynchronous checks MUST be executed via the `sprite` CLI
+(`sprite auth setup`, `sprite create`, `sprite exec`).
+The `sprite` binary MUST be present on `PATH` at runtime when checks are
+configured.
+The `sprite` CLI MUST be initialized per-push via `sprite auth setup --token`
+from the `SPRITES_TOKEN` environment variable, since the CLI persists
+credentials to a config file and does not read the token per invocation.
+--
+
+[role="requirement", id="compat.cgi"]
+.CGI Protocol
+--
+`git http-backend` is a CGI program.
+The server MUST populate the standard CGI environment variables (`PATH_INFO`,
+`QUERY_STRING`, `REQUEST_METHOD`, `CONTENT_TYPE`, `CONTENT_LENGTH`,
+`GIT_PROJECT_ROOT`, `GIT_HTTP_EXPORT_ALL`) before spawning it.
+The server MUST parse the CGI response format (header block, `\r\n\r\n`
+separator, body) and translate it into an HTTP response.
+--
+
+[role="requirement", id="compat.edition"]
+.Rust Edition
+--
+All crates MUST target Rust edition 2024.
+The workspace MUST NOT be published to crates.io (`publish = false`).
+--
+
+=== Deployment
+
+[role="requirement", id="deploy.fly"]
+.Fly.io Deployment
+--
+The server MUST be deployable to Fly.io.
+Fly configuration MUST live at `.config/fly.toml` and all `fly`/`flyctl`
+invocations MUST pass `-c .config/fly.toml`.
+--
+
+[role="requirement", id="deploy.health"]
+.Health Check
+--
+The server MUST expose a liveness probe at `GET /` that returns `200 ok`
+without touching the git repository, so the platform can route traffic before
+any repository exists.
 --
