@@ -127,6 +127,16 @@ impl git_store::HasId for Member {
     }
 }
 
+impl iddqd::IdOrdItem for Member {
+    type Key<'a> = &'a str;
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.principal
+    }
+
+    iddqd::id_upcast!();
+}
+
 impl Member {
     /// A member trusting `keys` with no validity window, admin-registered.
     #[must_use]
@@ -227,21 +237,21 @@ pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
 /// Prepares the batch path for lookups keyed by principal directly (there is
 /// exactly one member per principal, unlike a signing key, which a member may
 /// legitimately hold several of — that is why this indexes principals rather
-/// than a `Trust::Keys` bi-map). Not yet wired to any caller: the web layer's
-/// public-key lookup needs a different index (key → member), an O(m×k) linear
-/// scan that stays fine at current scale (see its own doc comment).
+/// than a `Trust::Keys` bi-map). An [`iddqd::IdOrdMap`] rather than a
+/// `BTreeMap<String, Member>` so the principal lives once, on `Member`
+/// itself, instead of also duplicated as a separately-maintained map key. Not
+/// yet wired to any caller: the web layer's public-key lookup needs a
+/// different index (key → member), an O(m×k) linear scan that stays fine at
+/// current scale (see its own doc comment).
 pub fn load_all_indexed_with(
     store: &git_store::Store,
-) -> Result<BTreeMap<String, Member>, git_store::Error> {
-    Ok(load_all_with(store)?
-        .into_iter()
-        .map(|member| (member.principal.clone(), member))
-        .collect())
+) -> Result<iddqd::IdOrdMap<Member>, git_store::Error> {
+    Ok(load_all_with(store)?.into_iter().collect())
 }
 
 /// Load every member recorded under [`MEMBER_NS`] in `repo`, keyed by
 /// principal. See [`load_all_indexed_with`].
-pub fn load_all_indexed(repo: &Path) -> Result<BTreeMap<String, Member>, git_store::Error> {
+pub fn load_all_indexed(repo: &Path) -> Result<iddqd::IdOrdMap<Member>, git_store::Error> {
     load_all_indexed_with(&git_store::Store::open(repo)?)
 }
 

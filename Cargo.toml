@@ -45,6 +45,7 @@ gix-object = "0.61"
 gix-odb = "0.81"
 gix-actor = "0.41"
 gix-date = "0.15"
+iddqd = "0.4"
 maud = { version = "0.27", features = ["axum"] }
 rstest = "0.26"
 tempfile = "3"
