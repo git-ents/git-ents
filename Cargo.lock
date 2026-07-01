@@ -1042,6 +1042,7 @@ dependencies = [
  "clap",
  "clap_mangen",
  "facet",
+ "form_urlencoded",
  "getrandom",
  "git-ents",
  "git-store",

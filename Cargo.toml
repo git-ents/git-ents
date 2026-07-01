@@ -38,6 +38,7 @@ clap_mangen = "0.2.31"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 getrandom = "0.4"
 facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
+form_urlencoded = "1"
 git-store = { path = "crates/git-store" }
 gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }

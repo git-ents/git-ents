@@ -15,6 +15,7 @@ axum = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
 facet = { workspace = true }
+form_urlencoded = { workspace = true }
 getrandom = { workspace = true }
 git-store = { workspace = true }
 gix-actor = { workspace = true }

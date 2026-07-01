@@ -473,44 +473,7 @@ fn trimmed(fields: &HashMap<String, String>, name: &str) -> String {
 
 /// Parse an `application/x-www-form-urlencoded` body into its fields.
 fn form(body: &[u8]) -> HashMap<String, String> {
-    let text = String::from_utf8_lossy(body);
-    text.split('&')
-        .filter_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            Some((percent_decode(key), percent_decode(value)))
-        })
-        .collect()
-}
-
-/// Decode one form field: `+` to space and `%XX` to its byte.
-fn percent_decode(input: &str) -> String {
-    let spaced = input.replace('+', " ");
-    let mut parts = spaced.split('%');
-    let mut out: Vec<u8> = parts.next().unwrap_or_default().as_bytes().to_vec();
-    for part in parts {
-        let bytes = part.as_bytes();
-        match (
-            bytes.first().copied().and_then(hex_value),
-            bytes.get(1).copied().and_then(hex_value),
-        ) {
-            (Some(hi), Some(lo)) => {
-                out.push((hi << 4) | lo);
-                out.extend_from_slice(part.get(2..).unwrap_or_default().as_bytes());
-            }
-            _ => {
-                out.push(b'%');
-                out.extend_from_slice(bytes);
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// A single hex digit's value, `0..=15`.
-fn hex_value(byte: u8) -> Option<u8> {
-    (byte as char)
-        .to_digit(16)
-        .and_then(|d| u8::try_from(d).ok())
+    form_urlencoded::parse(body).into_owned().collect()
 }
 
 #[cfg(test)]
