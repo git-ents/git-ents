@@ -42,33 +42,24 @@ pub fn new_id(content: &Comment) -> Result<String, git_store::Error> {
     git_store::content_hash(content)
 }
 
-/// Load the comment `comment_id` on `issue_id` from an already-open `store`.
-pub fn load_with(
-    store: &git_store::Store,
-    issue_id: &str,
-    comment_id: &str,
-) -> Result<Option<Comment>, git_store::Error> {
-    store.load_item(&issue_comments_ns(issue_id), comment_id)
-}
-
-/// Load the comment `comment_id` on `issue_id` in `repo`. See [`load_with`].
+/// Load the comment `comment_id` on `issue_id` in `repo`.
 pub fn load(
     repo: &Path,
     issue_id: &str,
     comment_id: &str,
 ) -> Result<Option<Comment>, git_store::Error> {
-    load_with(&git_store::Store::open(repo)?, issue_id, comment_id)
+    git_store::Store::open(repo)?.load_item(&issue_comments_ns(issue_id), comment_id)
 }
 
-/// Write `comment` at `refs/meta/comments/<issue_id>/<comment_id>` through an
-/// already-open `store`, where `comment_id` is [`new_id`] of `comment`.
-pub fn store_with(
-    store: &git_store::Store,
+/// Write `comment` at `refs/meta/comments/<issue_id>/<comment_id>` in `repo`,
+/// where `comment_id` is [`new_id`] of `comment`.
+pub fn store(
+    repo: &Path,
     issue_id: &str,
     comment_id: &str,
     comment: &Comment,
 ) -> Result<(), git_store::Error> {
-    store.store_item(
+    git_store::Store::open(repo)?.store_item(
         &issue_comments_ns(issue_id),
         comment_id,
         comment,
@@ -76,33 +67,10 @@ pub fn store_with(
     )
 }
 
-/// Write `comment`. See [`store_with`].
-pub fn store(
-    repo: &Path,
-    issue_id: &str,
-    comment_id: &str,
-    comment: &Comment,
-) -> Result<(), git_store::Error> {
-    store_with(
-        &git_store::Store::open(repo)?,
-        issue_id,
-        comment_id,
-        comment,
-    )
-}
-
-/// List every comment on `issue_id` from an already-open `store`, as
-/// `(comment_id, comment)` pairs, newest first.
-pub fn list_with(
-    store: &git_store::Store,
-    issue_id: &str,
-) -> Result<Vec<(String, Comment)>, git_store::Error> {
-    store.list_items(&issue_comments_ns(issue_id))
-}
-
-/// List every comment on `issue_id` in `repo`. See [`list_with`].
+/// List every comment on `issue_id` in `repo`, as `(comment_id, comment)`
+/// pairs, newest first.
 pub fn list(repo: &Path, issue_id: &str) -> Result<Vec<(String, Comment)>, git_store::Error> {
-    list_with(&git_store::Store::open(repo)?, issue_id)
+    git_store::Store::open(repo)?.list_items(&issue_comments_ns(issue_id))
 }
 
 #[cfg(test)]

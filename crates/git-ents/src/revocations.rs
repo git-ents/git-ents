@@ -56,10 +56,10 @@ pub struct Revocation {
     pub reason: String,
 }
 
-/// Load the revocations recorded at [`REVOKED_REF`] from an already-open
-/// `store`. An absent ref yields an empty list — nothing is revoked.
-pub fn load_with(store: &git_store::Store) -> Result<Vec<Revocation>, git_store::Error> {
-    Ok(store
+/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
+/// yields an empty list — nothing is revoked.
+pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
+    Ok(git_store::Store::open(repo)?
         .load::<Revocations>(REVOKED_REF)?
         .map(|doc| {
             doc.revoked
@@ -73,18 +73,9 @@ pub fn load_with(store: &git_store::Store) -> Result<Vec<Revocation>, git_store:
         .unwrap_or_default())
 }
 
-/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. See
-/// [`load_with`].
-pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
-    load_with(&git_store::Store::open(repo)?)
-}
-
-/// Write `revocations` to [`REVOKED_REF`] through an already-open `store`,
-/// replacing any existing list as a new commit.
-pub fn store_with(
-    store: &git_store::Store,
-    revocations: &[Revocation],
-) -> Result<(), git_store::Error> {
+/// Write `revocations` to [`REVOKED_REF`] in `repo`, replacing any existing
+/// list as a new commit.
+pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
     let doc = Revocations {
         revoked: revocations
             .iter()
@@ -99,21 +90,16 @@ pub fn store_with(
             })
             .collect(),
     };
-    store.store(REVOKED_REF, &doc, "Update revocations")
-}
-
-/// Write `revocations` to [`REVOKED_REF`]. See [`store_with`].
-pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
-    store_with(&git_store::Store::open(repo)?, revocations)
+    git_store::Store::open(repo)?.store(REVOKED_REF, &doc, "Update revocations")
 }
 
 /// The set of revoked fingerprints recorded at [`REVOKED_REF`] from an
 /// already-open `store`, for the verifier to subtract from the trust set.
 pub fn fingerprints_with(store: &git_store::Store) -> Result<BTreeSet<String>, git_store::Error> {
-    Ok(load_with(store)?
-        .into_iter()
-        .map(|revocation| revocation.fingerprint)
-        .collect())
+    Ok(store
+        .load::<Revocations>(REVOKED_REF)?
+        .map(|doc| doc.revoked.into_keys().collect())
+        .unwrap_or_default())
 }
 
 /// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`. See

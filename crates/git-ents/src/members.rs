@@ -231,8 +231,8 @@ pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
     load_all_with(&git_store::Store::open(repo)?)
 }
 
-/// Load every member recorded under [`MEMBER_NS`] from an already-open
-/// `store`, keyed by principal.
+/// Load every member recorded under [`MEMBER_NS`] in `repo`, keyed by
+/// principal.
 ///
 /// Prepares the batch path for lookups keyed by principal directly (there is
 /// exactly one member per principal, unlike a signing key, which a member may
@@ -243,27 +243,14 @@ pub fn load_all(repo: &Path) -> Result<Vec<Member>, git_store::Error> {
 /// yet wired to any caller: the web layer's public-key lookup needs a
 /// different index (key → member), an O(m×k) linear scan that stays fine at
 /// current scale (see its own doc comment).
-pub fn load_all_indexed_with(
-    store: &git_store::Store,
-) -> Result<iddqd::IdOrdMap<Member>, git_store::Error> {
-    Ok(load_all_with(store)?.into_iter().collect())
-}
-
-/// Load every member recorded under [`MEMBER_NS`] in `repo`, keyed by
-/// principal. See [`load_all_indexed_with`].
 pub fn load_all_indexed(repo: &Path) -> Result<iddqd::IdOrdMap<Member>, git_store::Error> {
-    load_all_indexed_with(&git_store::Store::open(repo)?)
+    Ok(load_all(repo)?.into_iter().collect())
 }
 
-/// Write `member` to its `refs/meta/member/<principal>` ref, replacing any
-/// prior value, as a new commit, through an already-open `store`.
-pub fn store_with(store: &git_store::Store, member: &Member) -> Result<(), git_store::Error> {
-    store.store_keyed(MEMBER_NS, member, "Update member")
-}
-
-/// Write `member` to its `refs/meta/member/<principal>` ref. See [`store_with`].
+/// Write `member` to its `refs/meta/member/<principal>` ref in `repo`,
+/// replacing any prior value, as a new commit.
 pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
-    store_with(&git_store::Store::open(repo)?, member)
+    git_store::Store::open(repo)?.store_keyed(MEMBER_NS, member, "Update member")
 }
 
 /// Drop every `revoked` fingerprint from `members`, returning the trust set the

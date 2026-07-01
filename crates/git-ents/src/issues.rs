@@ -82,42 +82,21 @@ pub fn new_id(origin: Option<&str>, content: &Issue) -> Result<String, git_store
     }
 }
 
-/// Load the issue named `id` from an already-open `store`.
-pub fn load_with(store: &git_store::Store, id: &str) -> Result<Option<Issue>, git_store::Error> {
-    store.load_item(ISSUES_NS, id)
-}
-
 /// Load the issue recorded at `refs/meta/issues/<id>` in `repo`, or `None` when
 /// no such issue exists.
 pub fn load(repo: &Path, id: &str) -> Result<Option<Issue>, git_store::Error> {
-    load_with(&git_store::Store::open(repo)?, id)
+    git_store::Store::open(repo)?.load_item(ISSUES_NS, id)
 }
 
-/// Write `issue` to `refs/meta/issues/<id>` through an already-open `store`,
-/// replacing any existing value as a new commit so the ref's commit chain is
-/// the issue's edit history.
-pub fn store_with(
-    store: &git_store::Store,
-    id: &str,
-    issue: &Issue,
-) -> Result<(), git_store::Error> {
-    store.store_item(ISSUES_NS, id, issue, "Update issue")
-}
-
-/// Write `issue` to `refs/meta/issues/<id>`. See [`store_with`].
+/// Write `issue` to `refs/meta/issues/<id>` in `repo`, replacing any existing
+/// value as a new commit so the ref's commit chain is the issue's edit history.
 pub fn store(repo: &Path, id: &str, issue: &Issue) -> Result<(), git_store::Error> {
-    store_with(&git_store::Store::open(repo)?, id, issue)
-}
-
-/// List every issue from an already-open `store` as `(id, issue)` pairs,
-/// newest issue ref first.
-pub fn list_with(store: &git_store::Store) -> Result<Vec<(String, Issue)>, git_store::Error> {
-    store.list_items(ISSUES_NS)
+    git_store::Store::open(repo)?.store_item(ISSUES_NS, id, issue, "Update issue")
 }
 
 /// List every issue in `repo` as `(id, issue)` pairs, newest issue ref first.
 pub fn list(repo: &Path) -> Result<Vec<(String, Issue)>, git_store::Error> {
-    list_with(&git_store::Store::open(repo)?)
+    git_store::Store::open(repo)?.list_items(ISSUES_NS)
 }
 
 /// The number of open issues in `repo`.
@@ -128,7 +107,7 @@ pub fn open_count(repo: &Path) -> Result<usize, git_store::Error> {
         .count())
 }
 
-/// Why [`promote_with`] could not promote an issue.
+/// Why [`promote`] could not promote an issue.
 #[derive(Debug, thiserror::Error)]
 pub enum PromoteError {
     /// The underlying store failed to read or write a ref.
@@ -139,7 +118,7 @@ pub enum PromoteError {
     NotFound(String),
 }
 
-/// How many times [`promote_with`] retries the counter CAS before giving up.
+/// How many times [`promote`] retries the counter CAS before giving up.
 /// Bounds retry under sustained contention; ordinary races resolve in one or
 /// two rounds.
 const MAX_PROMOTE_RETRIES: usize = 5;
@@ -156,7 +135,8 @@ const MAX_PROMOTE_RETRIES: usize = 5;
 /// callers believe they claimed it. A CAS conflict here is retried by
 /// re-reading the counter, so the number handed back is always the one
 /// actually reserved for this call.
-pub fn promote_with(store: &git_store::Store, id: &str) -> Result<String, PromoteError> {
+pub fn promote(repo: &Path, id: &str) -> Result<String, PromoteError> {
+    let store = git_store::Store::open(repo)?;
     let mut number = None;
     for _ in 0..=MAX_PROMOTE_RETRIES {
         let current = store
@@ -176,15 +156,12 @@ pub fn promote_with(store: &git_store::Store, id: &str) -> Result<String, Promot
     }
     let number = number.ok_or(git_store::Error::Conflict)?.to_string();
 
-    let mut issue = load_with(store, id)?.ok_or_else(|| PromoteError::NotFound(id.to_owned()))?;
+    let mut issue = store
+        .load_item::<Issue>(ISSUES_NS, id)?
+        .ok_or_else(|| PromoteError::NotFound(id.to_owned()))?;
     issue.id = Some(number.clone());
-    store_with(store, id, &issue)?;
+    store.store_item(ISSUES_NS, id, &issue, "Update issue")?;
     Ok(number)
-}
-
-/// Promote the issue at `id` in `repo`. See [`promote_with`].
-pub fn promote(repo: &Path, id: &str) -> Result<String, PromoteError> {
-    promote_with(&git_store::Store::open(repo)?, id)
 }
 
 #[cfg(test)]

@@ -49,33 +49,20 @@ fn target_reviews_ns(target_id: &str) -> String {
     format!("{REVIEWS_NS}/{target_id}")
 }
 
-/// Load `principal`'s review of `target_id` from an already-open `store`.
-pub fn load_with(
-    store: &git_store::Store,
-    target_id: &str,
-    principal: &str,
-) -> Result<Option<Review>, git_store::Error> {
-    store.load_item(&target_reviews_ns(target_id), principal)
-}
-
-/// Load `principal`'s review of `target_id` in `repo`. See [`load_with`].
+/// Load `principal`'s review of `target_id` in `repo`.
 pub fn load(
     repo: &Path,
     target_id: &str,
     principal: &str,
 ) -> Result<Option<Review>, git_store::Error> {
-    load_with(&git_store::Store::open(repo)?, target_id, principal)
+    git_store::Store::open(repo)?.load_item(&target_reviews_ns(target_id), principal)
 }
 
-/// Write `review` at `refs/meta/reviews/<target_id>/<review.principal>`
-/// through an already-open `store`, replacing that reviewer's prior verdict
-/// on `target_id` as a new commit.
-pub fn store_with(
-    store: &git_store::Store,
-    target_id: &str,
-    review: &Review,
-) -> Result<(), git_store::Error> {
-    store.store_item(
+/// Write `review` at `refs/meta/reviews/<target_id>/<review.principal>` in
+/// `repo`, replacing that reviewer's prior verdict on `target_id` as a new
+/// commit.
+pub fn store(repo: &Path, target_id: &str, review: &Review) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store_item(
         &target_reviews_ns(target_id),
         &review.principal,
         review,
@@ -83,23 +70,10 @@ pub fn store_with(
     )
 }
 
-/// Write `review`. See [`store_with`].
-pub fn store(repo: &Path, target_id: &str, review: &Review) -> Result<(), git_store::Error> {
-    store_with(&git_store::Store::open(repo)?, target_id, review)
-}
-
-/// List every review of `target_id` from an already-open `store`, as
-/// `(principal, review)` pairs, newest first.
-pub fn list_with(
-    store: &git_store::Store,
-    target_id: &str,
-) -> Result<Vec<(String, Review)>, git_store::Error> {
-    store.list_items(&target_reviews_ns(target_id))
-}
-
-/// List every review of `target_id` in `repo`. See [`list_with`].
+/// List every review of `target_id` in `repo`, as `(principal, review)` pairs,
+/// newest first.
 pub fn list(repo: &Path, target_id: &str) -> Result<Vec<(String, Review)>, git_store::Error> {
-    list_with(&git_store::Store::open(repo)?, target_id)
+    git_store::Store::open(repo)?.list_items(&target_reviews_ns(target_id))
 }
 
 /// Whether `target_id` is ready to merge: aggregated at read time from its

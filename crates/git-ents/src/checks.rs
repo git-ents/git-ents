@@ -57,8 +57,8 @@ pub struct Check {
 /// An absent ref yields an empty set, as on a server whose check set has not
 /// been pushed yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no checks configured".
-pub fn load_with(store: &git_store::Store) -> Result<Vec<Check>, git_store::Error> {
-    Ok(store
+pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
+    Ok(git_store::Store::open(repo)?
         .load::<Checks>(CHECKS_REF)?
         .map(|doc| {
             doc.checks
@@ -72,15 +72,9 @@ pub fn load_with(store: &git_store::Store) -> Result<Vec<Check>, git_store::Erro
         .unwrap_or_default())
 }
 
-/// Load the configured checks recorded at [`CHECKS_REF`] in `repo`. See
-/// [`load_with`].
-pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
-    load_with(&git_store::Store::open(repo)?)
-}
-
-/// Write `checks` to [`CHECKS_REF`] through an already-open `store`, replacing
-/// any existing set as a new commit.
-pub fn store_with(store: &git_store::Store, checks: &[Check]) -> Result<(), git_store::Error> {
+/// Write `checks` to [`CHECKS_REF`] in `repo`, replacing any existing set as a
+/// new commit.
+pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
     let doc = Checks {
         checks: checks
             .iter()
@@ -95,12 +89,7 @@ pub fn store_with(store: &git_store::Store, checks: &[Check]) -> Result<(), git_
             })
             .collect(),
     };
-    store.store(CHECKS_REF, &doc, "Update checks")
-}
-
-/// Write `checks` to [`CHECKS_REF`]. See [`store_with`].
-pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
-    store_with(&git_store::Store::open(repo)?, checks)
+    git_store::Store::open(repo)?.store(CHECKS_REF, &doc, "Update checks")
 }
 
 /// The namespace under which a commit's check runs are recorded: one ref,
@@ -165,60 +154,42 @@ pub struct CommitRuns {
     pub runs: Vec<Run>,
 }
 
-/// Record a run of `outcomes` for `commit` through an already-open `store`, as
-/// a new commit on `refs/meta/runs/<commit>`, parented on the prior run so the
-/// ref's commit chain is the run history. The commit's date is the run time.
-pub fn record_with(
-    store: &git_store::Store,
-    commit: &str,
-    outcomes: &[RunOutcome],
-) -> Result<(), git_store::Error> {
-    store.store(
+/// Record a run of `outcomes` for `commit` in `repo`, as a new commit on
+/// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
+/// chain is the run history. The commit's date is the run time.
+pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), git_store::Error> {
+    git_store::Store::open(repo)?.store(
         &format!("{RUNS_NS}/{commit}"),
         &run_doc(outcomes),
         "Record check run",
     )
 }
 
-/// Record a run of `outcomes` for `commit` in `repo`. See [`record_with`].
-pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), git_store::Error> {
-    record_with(&git_store::Store::open(repo)?, commit, outcomes)
-}
-
-/// Advance the latest run recorded for `commit` to `outcomes`, in place,
-/// through an already-open `store`. Unlike [`record_with`], which appends a
-/// new run, this replaces the run ref's tip commit (re-parented on the prior
-/// run) so a single run's status can progress — `queued` → `running` →
-/// results — without appending a commit per transition.
+/// Advance the latest run recorded for `commit` to `outcomes`, in place, in
+/// `repo`. Unlike [`record`], which appends a new run, this replaces the run
+/// ref's tip commit (re-parented on the prior run) so a single run's status can
+/// progress — `queued` → `running` → results — without appending a commit per
+/// transition.
 ///
 /// When no run has been recorded yet the update starts one, so a worker that
 /// advances a run is self-healing even if the `queued` record never landed.
-pub fn update_run_with(
-    store: &git_store::Store,
-    commit: &str,
-    outcomes: &[RunOutcome],
-) -> Result<(), git_store::Error> {
-    store.amend(
-        &format!("{RUNS_NS}/{commit}"),
-        &run_doc(outcomes),
-        "Record check run",
-    )
-}
-
-/// Advance the latest run recorded for `commit` to `outcomes`. See
-/// [`update_run_with`].
 pub fn update_run(
     repo: &Path,
     commit: &str,
     outcomes: &[RunOutcome],
 ) -> Result<(), git_store::Error> {
-    update_run_with(&git_store::Store::open(repo)?, commit, outcomes)
+    git_store::Store::open(repo)?.amend(
+        &format!("{RUNS_NS}/{commit}"),
+        &run_doc(outcomes),
+        "Record check run",
+    )
 }
 
-/// List the recorded runs per commit from an already-open `store`, newest
-/// commit first. Each commit's runs are the ref's commit chain, newest first,
-/// with the run time taken from each commit's date.
-pub fn runs_with(store: &git_store::Store) -> Result<Vec<CommitRuns>, git_store::Error> {
+/// List the recorded runs per commit in `repo`, newest commit first. Each
+/// commit's runs are the ref's commit chain, newest first, with the run time
+/// taken from each commit's date.
+pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
+    let store = git_store::Store::open(repo)?;
     let prefix = format!("{RUNS_NS}/");
     let mut commits = Vec::new();
     for refname in store.list(&prefix)? {
@@ -243,11 +214,6 @@ pub fn runs_with(store: &git_store::Store) -> Result<Vec<CommitRuns>, git_store:
         });
     }
     Ok(commits)
-}
-
-/// List the recorded runs per commit in `repo`. See [`runs_with`].
-pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
-    runs_with(&git_store::Store::open(repo)?)
 }
 
 /// Build a [`RunResults`] from a run's `outcomes`.
