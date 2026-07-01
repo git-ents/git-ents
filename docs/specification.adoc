@@ -378,6 +378,25 @@ hash. One ref per comment keeps comments independently loadable and separately
 historied, and content-hash ids mean concurrent additions never collide.
 --
 
+=== Reviews
+
+[role="requirement", id="reviews.ref"]
+.Review Documents
+--
+Per-reviewer verdicts MUST be stored at
+`refs/meta/reviews/<target_id>/<reviewer_principal>`, one ref per reviewer
+per target, as a `Review` document with fields `principal`, `verdict`
+(`approve`, `request_changes`, or `comment`), and `body`. `target_id` is the
+target's stable content-hash identifier.
+--
+
+[role="requirement", id="reviews.readiness"]
+.Merge Readiness
+--
+Merge readiness MUST be computed at read time by aggregating check runs and
+review verdicts. It MUST NOT be stored separately.
+--
+
 === Web UI
 
 [role="requirement", id="web.server-rendered"]
