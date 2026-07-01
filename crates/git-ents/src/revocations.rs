@@ -107,13 +107,19 @@ pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::E
     store_with(&git_store::Store::open(repo)?, revocations)
 }
 
-/// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`, for the
-/// verifier to subtract from the trust set.
-pub fn fingerprints(repo: &Path) -> Result<BTreeSet<String>, git_store::Error> {
-    Ok(load(repo)?
+/// The set of revoked fingerprints recorded at [`REVOKED_REF`] from an
+/// already-open `store`, for the verifier to subtract from the trust set.
+pub fn fingerprints_with(store: &git_store::Store) -> Result<BTreeSet<String>, git_store::Error> {
+    Ok(load_with(store)?
         .into_iter()
         .map(|revocation| revocation.fingerprint)
         .collect())
+}
+
+/// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`. See
+/// [`fingerprints_with`].
+pub fn fingerprints(repo: &Path) -> Result<BTreeSet<String>, git_store::Error> {
+    fingerprints_with(&git_store::Store::open(repo)?)
 }
 
 #[cfg(test)]

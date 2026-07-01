@@ -27,52 +27,76 @@ pub struct Config {
     pub topics: Vec<String>,
 }
 
-/// Load the configuration recorded at [`CONFIG_REF`] in `repo`.
+/// Load the configuration recorded at [`CONFIG_REF`] from an already-open
+/// `store`.
 ///
 /// An absent ref yields [`Config::default`], as on a repository whose metadata
 /// has not been set yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no configuration set".
+pub fn load_with(store: &git_store::Store) -> Result<Config, git_store::Error> {
+    Ok(store.load::<Config>(CONFIG_REF)?.unwrap_or_default())
+}
+
+/// Load the configuration recorded at [`CONFIG_REF`] in `repo`. See
+/// [`load_with`].
 pub fn load(repo: &Path) -> Result<Config, git_store::Error> {
-    Ok(git_store::Store::open(repo)?
-        .load::<Config>(CONFIG_REF)?
-        .unwrap_or_default())
+    load_with(&git_store::Store::open(repo)?)
 }
 
-/// Write `config` to [`CONFIG_REF`], replacing any existing value, as a new
-/// commit.
+/// Write `config` to [`CONFIG_REF`] through an already-open `store`,
+/// replacing any existing value as a new commit.
+pub fn store_with(store: &git_store::Store, config: &Config) -> Result<(), git_store::Error> {
+    store_to_ref_with(store, CONFIG_REF, config)
+}
+
+/// Write `config` to [`CONFIG_REF`]. See [`store_with`].
 pub fn store(repo: &Path, config: &Config) -> Result<(), git_store::Error> {
-    store_to_ref(repo, CONFIG_REF, config)
+    store_with(&git_store::Store::open(repo)?, config)
 }
 
-/// Build the configuration commit on `refname` — chaining on that ref's own tip
-/// — without touching [`CONFIG_REF`].
+/// Build the configuration commit on `refname` — chaining on that ref's own
+/// tip — without touching [`CONFIG_REF`], through an already-open `store`.
 ///
 /// The web write path stages an edit on a throwaway ref pointed at the current
 /// config tip, then lands it onto [`CONFIG_REF`] through a signed push, so the
 /// `pre-receive` gate judges the change rather than this writing the live ref
 /// directly.
-pub fn store_to_ref(repo: &Path, refname: &str, config: &Config) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(refname, config, "Update configuration")?;
-    Ok(())
+pub fn store_to_ref_with(
+    store: &git_store::Store,
+    refname: &str,
+    config: &Config,
+) -> Result<(), git_store::Error> {
+    store.store(refname, config, "Update configuration")
 }
 
-/// Like [`store_to_ref`], but recording `author` (a `(name, email)` pair) as the
-/// commit's author while the committer stays the git-ents system identity. The
-/// web write path uses this so an edit landed by the server still names the human
-/// who made it.
+/// Build the configuration commit on `refname` in `repo`. See
+/// [`store_to_ref_with`].
+pub fn store_to_ref(repo: &Path, refname: &str, config: &Config) -> Result<(), git_store::Error> {
+    store_to_ref_with(&git_store::Store::open(repo)?, refname, config)
+}
+
+/// Like [`store_to_ref_with`], but recording `author` (a `(name, email)` pair)
+/// as the commit's author while the committer stays the git-ents system
+/// identity. The web write path uses this so an edit landed by the server
+/// still names the human who made it.
+pub fn store_to_ref_authored_with(
+    store: &git_store::Store,
+    refname: &str,
+    config: &Config,
+    author: (&str, &str),
+) -> Result<(), git_store::Error> {
+    store.store_authored(refname, config, "Update configuration", author)
+}
+
+/// Like [`store_to_ref`], recording `author` as the commit's author. See
+/// [`store_to_ref_authored_with`].
 pub fn store_to_ref_authored(
     repo: &Path,
     refname: &str,
     config: &Config,
     author: (&str, &str),
 ) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_authored(
-        refname,
-        config,
-        "Update configuration",
-        author,
-    )?;
-    Ok(())
+    store_to_ref_authored_with(&git_store::Store::open(repo)?, refname, config, author)
 }
 
 #[cfg(test)]

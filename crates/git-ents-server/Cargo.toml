@@ -16,6 +16,7 @@ clap = { workspace = true }
 clap_mangen = { workspace = true }
 facet = { workspace = true }
 getrandom = { workspace = true }
+git-store = { workspace = true }
 gix-actor = { workspace = true }
 gix-date = { workspace = true }
 gix-hash = { workspace = true }

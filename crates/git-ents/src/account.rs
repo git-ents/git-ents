@@ -29,20 +29,36 @@ pub struct Account {
     pub created_at: u64,
 }
 
-/// Load the account profile at [`ACCOUNT_REF`] in `repo`, or `None` when the ref
-/// is absent — i.e. when `repo` is not an account repo.
+/// Load the account profile at [`ACCOUNT_REF`] from an already-open `store`,
+/// or `None` when the ref is absent — i.e. when the repository is not an
+/// account repo.
+pub fn load_with(store: &git_store::Store) -> Result<Option<Account>, git_store::Error> {
+    store.load::<Account>(ACCOUNT_REF)
+}
+
+/// Load the account profile at [`ACCOUNT_REF`] in `repo`. See [`load_with`].
 pub fn load(repo: &Path) -> Result<Option<Account>, git_store::Error> {
-    git_store::Store::open(repo)?.load::<Account>(ACCOUNT_REF)
+    load_with(&git_store::Store::open(repo)?)
 }
 
-/// Write `account` to [`ACCOUNT_REF`], replacing any existing value, as a new
-/// commit.
+/// Write `account` to [`ACCOUNT_REF`] through an already-open `store`,
+/// replacing any existing value as a new commit.
+pub fn store_with(store: &git_store::Store, account: &Account) -> Result<(), git_store::Error> {
+    store.store(ACCOUNT_REF, account, "Update account")
+}
+
+/// Write `account` to [`ACCOUNT_REF`]. See [`store_with`].
 pub fn store(repo: &Path, account: &Account) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(ACCOUNT_REF, account, "Update account")?;
-    Ok(())
+    store_with(&git_store::Store::open(repo)?, account)
 }
 
-/// Whether `repo` is an account repo — whether it carries [`ACCOUNT_REF`].
+/// Whether an already-open `store` is an account repo — whether it carries
+/// [`ACCOUNT_REF`].
+pub fn is_account_repo_with(store: &git_store::Store) -> Result<bool, git_store::Error> {
+    Ok(load_with(store)?.is_some())
+}
+
+/// Whether `repo` is an account repo. See [`is_account_repo_with`].
 pub fn is_account_repo(repo: &Path) -> Result<bool, git_store::Error> {
     Ok(load(repo)?.is_some())
 }

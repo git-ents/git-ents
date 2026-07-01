@@ -202,11 +202,12 @@ pub(super) fn edit_config(
             .clone()
     };
 
-    let username = member_for_public_key(repo, &public_key)
+    let store = git_store::Store::open(repo).map_err(|e| format!("cannot open store: {e}"))?;
+    let username = member_for_public_key_with(&store, &public_key)
         .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
 
     let mut config =
-        git_ents::config::load(repo).map_err(|e| format!("could not read config: {e}"))?;
+        git_ents::config::load_with(&store).map_err(|e| format!("could not read config: {e}"))?;
     config.description = edit.description.clone();
     config.homepage = edit.homepage.clone();
     config.topics = edit.topics.clone();
@@ -315,11 +316,15 @@ fn verify_login_signature(public_key: &str, nonce: &str, signature: &str) -> Res
         .success())
 }
 
-/// The username of the member whose web key matches `public_key`, if any. The
-/// match is on the key type and body, ignoring any trailing comment.
-pub(super) fn member_for_public_key(repo: &Path, public_key: &str) -> Option<String> {
+/// The username of the member whose web key matches `public_key`, if any, from
+/// an already-open `store`. The match is on the key type and body, ignoring
+/// any trailing comment.
+pub(super) fn member_for_public_key_with(
+    store: &git_store::Store,
+    public_key: &str,
+) -> Option<String> {
     let wanted = normalize_key(public_key);
-    let members = git_ents::members::load_all(repo).ok()?;
+    let members = git_ents::members::load_all_with(store).ok()?;
     members.into_iter().find_map(|member| {
         member
             .keys()
@@ -327,6 +332,12 @@ pub(super) fn member_for_public_key(repo: &Path, public_key: &str) -> Option<Str
             .any(|(_fingerprint, key)| normalize_key(key) == wanted)
             .then(|| member.principal.clone())
     })
+}
+
+/// The username of the member whose web key matches `public_key`, if any. See
+/// [`member_for_public_key_with`].
+pub(super) fn member_for_public_key(repo: &Path, public_key: &str) -> Option<String> {
+    member_for_public_key_with(&git_store::Store::open(repo).ok()?, public_key)
 }
 
 /// A public key reduced to its type and body, dropping the comment so two lines

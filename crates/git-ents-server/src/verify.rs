@@ -22,8 +22,9 @@ use git_ents::revocations;
 /// environment git populates for the hook.
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
-    let members =
-        members::load_all(&repo).map_err(|e| format!("could not read authorized signers: {e}"))?;
+    let store = git_store::Store::open(&repo).map_err(|e| format!("cannot open store: {e}"))?;
+    let members = members::load_all_with(&store)
+        .map_err(|e| format!("could not read authorized signers: {e}"))?;
     if members.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
         // Revocation is keyed on member refs existing, so revoking every member's
@@ -31,8 +32,8 @@ pub fn pre_receive() -> Result<(), String> {
         // bootstrap window.
         return Ok(());
     }
-    let revoked =
-        revocations::fingerprints(&repo).map_err(|e| format!("could not read revocations: {e}"))?;
+    let revoked = revocations::fingerprints_with(&store)
+        .map_err(|e| format!("could not read revocations: {e}"))?;
     let authorized = members::without_revoked(members, &revoked);
 
     let cert_oid = env("GIT_PUSH_CERT")
