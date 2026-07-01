@@ -171,6 +171,26 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
     }
 }
 
+/// Refuse `username` unless they are [`Provenance::AdminRegistered`]: a
+/// self-attested web member gets limited trust and may not edit settings
+/// (outside the allowed set of issues/comments) until an admin promotes them.
+/// `pre_receive` cannot enforce this — it is purely key-based, and a
+/// self-attested member typically has no push key to gate — so the web write
+/// path is the enforcement point.
+fn require_admin_registered(store: &git_store::Store, username: &str) -> Result<(), String> {
+    use git_ents::members::Provenance;
+    let member = git_ents::members::load_with(store, username)
+        .map_err(|e| format!("could not read member: {e}"))?
+        .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
+    match member.provenance {
+        Provenance::AdminRegistered => Ok(()),
+        Provenance::SelfAttestedWeb => Err(
+            "self-attested members may only edit issues and comments until an admin promotes them"
+                .to_owned(),
+        ),
+    }
+}
+
 /// Land a configuration change: stage it on a throwaway ref authored by the
 /// signed-in member, then push it onto `refs/meta/config` signed with the
 /// server's key, through the `pre-receive` gate. Returns `Ok` only when the gate
@@ -205,6 +225,7 @@ pub(super) fn edit_config(
     let store = git_store::Store::open(repo).map_err(|e| format!("cannot open store: {e}"))?;
     let username = member_for_public_key_with(&store, &public_key)
         .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
+    require_admin_registered(&store, &username)?;
 
     let mut config =
         git_ents::config::load_with(&store).map_err(|e| format!("could not read config: {e}"))?;
@@ -319,6 +340,13 @@ fn verify_login_signature(public_key: &str, nonce: &str, signature: &str) -> Res
 /// The username of the member whose web key matches `public_key`, if any, from
 /// an already-open `store`. The match is on the key type and body, ignoring
 /// any trailing comment.
+///
+/// O(m×k): loads every member and scans each one's keys. Acceptable at
+/// current scale; a batch path exists on the other axis
+/// (`members::load_all_indexed`, principal → member) but this lookup goes the
+/// other way (key → member), which would need its own index — deferred until
+/// measured, since a member legitimately holds more than one key, ruling out
+/// a simple bi-map.
 pub(super) fn member_for_public_key_with(
     store: &git_store::Store,
     public_key: &str,

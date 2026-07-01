@@ -105,6 +105,45 @@ fn an_edit_without_a_valid_csrf_token_is_refused() {
 }
 
 #[test]
+fn a_self_attested_member_is_refused_a_settings_edit() {
+    let env = Server::start();
+    let bare = env.create_repo("repo.git");
+    env.add_server_member(&bare);
+    let alice = keygen(env.scratch(), "alice");
+    env.add_self_attested_member(&bare, "alice", &pubkey(&alice));
+
+    let cookie = env.sign_in(&alice);
+    let page = env.get("/repo.git/settings", &cookie);
+    assert!(
+        page.body.contains("name=\"csrf\""),
+        "the edit form should still render for a self-attested member"
+    );
+    let csrf = page.field("csrf").unwrap();
+
+    let edit = env.post(
+        "/repo.git/settings",
+        &cookie,
+        &form(&[
+            ("csrf", &csrf),
+            ("description", "should not land"),
+            ("homepage", ""),
+            ("topics", ""),
+        ]),
+    );
+    assert_eq!(
+        edit.status, 200,
+        "a self-attested member's edit should not redirect: {}",
+        edit.body
+    );
+    assert!(
+        !env.get("/repo.git/settings", &cookie)
+            .body
+            .contains("should not land"),
+        "the description must be unchanged"
+    );
+}
+
+#[test]
 fn a_non_member_is_not_offered_an_edit_form() {
     let env = Server::start();
     let bare = env.create_repo("repo.git");
@@ -265,6 +304,38 @@ impl Server {
                  040000 tree {empty}\tvalid_after\n\
                  040000 tree {empty}\tvalid_before\n\
                  040000 tree {trust}\ttrust\n"
+            ),
+        );
+        let commit = git(bare, &["commit-tree", &root, "-m", "member"]).unwrap();
+        git(
+            bare,
+            &[
+                "update-ref",
+                &format!("refs/meta/member/{username}"),
+                &commit,
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Like [`Server::add_member`], but with `provenance/SelfAttestedWeb` —
+    /// the shape a member self-onboarded through the browser carries, still
+    /// resting on a leaf key so the challenge-response sign-in flow works.
+    fn add_self_attested_member(&self, bare: &Path, username: &str, public_key: &str) {
+        let principal = hash_object(bare, username.as_bytes());
+        let key_blob = hash_object(bare, public_key.as_bytes());
+        let keys = mktree(bare, &format!("100644 blob {key_blob}\tkey\n"));
+        let trust = mktree(bare, &format!("040000 tree {keys}\tKeys\n"));
+        let empty = mktree(bare, "");
+        let provenance = mktree(bare, &format!("040000 tree {empty}\tSelfAttestedWeb\n"));
+        let root = mktree(
+            bare,
+            &format!(
+                "100644 blob {principal}\tprincipal\n\
+                 040000 tree {empty}\tvalid_after\n\
+                 040000 tree {empty}\tvalid_before\n\
+                 040000 tree {trust}\ttrust\n\
+                 040000 tree {provenance}\tprovenance\n"
             ),
         );
         let commit = git(bare, &["commit-tree", &root, "-m", "member"]).unwrap();
