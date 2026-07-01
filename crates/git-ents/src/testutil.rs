@@ -243,6 +243,70 @@ pub(crate) fn write_issue_doc(
     assert!(status.success());
 }
 
+/// Lay a `Checks` document out at [`crate::checks::CHECKS_REF`] as the real
+/// on-disk format after the 2c migration: a `checks/<name>/command` blob per
+/// configured check (the map value is a `CheckBody` subtree, not a bare
+/// blob). Asserts the loader still reads the format independent of the
+/// writer.
+pub(crate) fn write_checks_doc(repo: &Path, checks: &[(&str, &str)]) {
+    let mut entries = String::new();
+    for (name, command) in checks {
+        let command_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], command);
+        let check_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!("100644 blob {command_blob}\tcommand\n"),
+        );
+        entries.push_str(&format!("040000 tree {check_tree}\t{name}\n"));
+    }
+    let checks_tree = git_with_stdin(repo, &["mktree"], &entries);
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {checks_tree}\tchecks\n"),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", crate::checks::CHECKS_REF, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Lay a `RunResults` document out at `refname` as the real on-disk format
+/// after the 2c migration: a `results/<name>/outcome` blob per outcome (the
+/// map value is an `Outcome` subtree), with `duration_secs`/`log_url` omitted
+/// entirely — asserting the loader fills a record's missing optional fields
+/// as unset, independent of the writer.
+pub(crate) fn write_runs_doc(repo: &Path, refname: &str, outcomes: &[(&str, &str)]) {
+    let mut entries = String::new();
+    for (name, outcome) in outcomes {
+        let outcome_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], outcome);
+        let outcome_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!("100644 blob {outcome_blob}\toutcome\n"),
+        );
+        entries.push_str(&format!("040000 tree {outcome_tree}\t{name}\n"));
+    }
+    let results_tree = git_with_stdin(repo, &["mktree"], &entries);
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {results_tree}\tresults\n"),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 /// Run git in `repo` with `input` on stdin, returning its trimmed stdout.
 fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
     let mut child = Command::new("git")

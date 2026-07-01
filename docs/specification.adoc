@@ -330,6 +330,11 @@ A run that cannot complete due to an infrastructure error (unreachable Sprite,
 failed sync) MUST be finalized as `error` rather than left stuck at `running`.
 A single check that exceeds a 30-minute timeout MUST be recorded `error` rather
 than blocking the worker thread indefinitely.
+A check definition and a run outcome MAY each carry additional metadata beyond
+a single command/outcome string (for example a run's duration and log URL).
+Optional fields absent from an older record MUST load as unset.
+A check/outcome name is the map key and MUST NOT be stored redundantly inside
+the record.
 --
 
 === Issues

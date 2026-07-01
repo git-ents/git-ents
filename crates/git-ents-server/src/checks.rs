@@ -102,6 +102,8 @@ fn statuses(checks: &[Check], status: &str) -> Vec<RunOutcome> {
         .map(|check| RunOutcome {
             name: check.name.clone(),
             outcome: status.to_owned(),
+            duration_secs: None,
+            log_url: None,
         })
         .collect()
 }
