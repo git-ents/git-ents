@@ -45,31 +45,6 @@ pub(crate) fn unique_repo(label: &str) -> PathBuf {
     dir
 }
 
-/// Lay a document out at `refname` as the real on-disk format: one
-/// `<subtree>/<key>` blob per pair, committed and pointed to by the ref. Used to
-/// assert that loaders still read the format independent of the writer.
-pub(crate) fn write_meta_doc(repo: &Path, refname: &str, subtree: &str, pairs: &[(&str, &str)]) {
-    let mut entries = String::new();
-    for (key, value) in pairs {
-        let blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
-        entries.push_str(&format!("100644 blob {blob}\t{key}\n"));
-    }
-    let sub = git_with_stdin(repo, &["mktree"], &entries);
-    let root = git_with_stdin(
-        repo,
-        &["mktree"],
-        &format!("040000 tree {sub}\t{subtree}\n"),
-    );
-    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["update-ref", refname, &commit])
-        .status()
-        .unwrap();
-    assert!(status.success());
-}
-
 /// Lay a `Member` document out at `refs/meta/member/<username>` as the real
 /// on-disk format: a `principal` blob, `valid_after`/`valid_before` `Option`
 /// subtrees (empty tree for `None`, a single `some` blob for a bound), and a
@@ -302,6 +277,38 @@ pub(crate) fn write_runs_doc(repo: &Path, refname: &str, outcomes: &[(&str, &str
         .arg("-C")
         .arg(repo)
         .args(["update-ref", refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Lay a `Revocations` document out at
+/// [`crate::revocations::REVOKED_REF`] as the real on-disk format after the
+/// revocations migration: a `revoked/<fingerprint>/reason` blob per entry
+/// (the map value is a `RevocationBody` subtree, not a bare blob). Asserts
+/// the loader still reads the format independent of the writer.
+pub(crate) fn write_revocations_doc(repo: &Path, revoked: &[(&str, &str)]) {
+    let mut entries = String::new();
+    for (fingerprint, reason) in revoked {
+        let reason_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], reason);
+        let body_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!("100644 blob {reason_blob}\treason\n"),
+        );
+        entries.push_str(&format!("040000 tree {body_tree}\t{fingerprint}\n"));
+    }
+    let revoked_tree = git_with_stdin(repo, &["mktree"], &entries);
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {revoked_tree}\trevoked\n"),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", crate::revocations::REVOKED_REF, &commit])
         .status()
         .unwrap();
     assert!(status.success());

@@ -13,6 +13,15 @@
 //! fingerprints; a compromised certificate authority is revoked by removing the
 //! CA member itself, since a CA is named by a whole ref rather than listed by
 //! fingerprint.
+//!
+//! # Migration note
+//!
+//! The on-disk map moved from a bare `String` value to a [`RevocationBody`]
+//! struct, dropping the `MapDoc`/`Row` `(String, String)` ceiling. This turns
+//! `revoked/<fingerprint>` from a blob into a subtree, an incompatible format
+//! change: data written in the prior flat-string layout no longer loads and
+//! must be re-recorded. Acceptable pre-1.0 (see the format compatibility
+//! rules in `git_store`'s module docs).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -23,25 +32,22 @@ use facet::Facet;
 /// set.
 pub const REVOKED_REF: &str = "refs/meta/revoked";
 
-/// The revocation document stored at [`REVOKED_REF`]: its `revoked/` subtree maps
-/// each revoked fingerprint to a free-text reason (`""` when none was given).
+/// A revoked key's on-disk body. The map key (its fingerprint) is its
+/// identity, so it is not duplicated inside the body.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+struct RevocationBody {
+    /// A free-text reason, or `""` when none was given.
+    reason: String,
+}
+
+/// The revocation document stored at [`REVOKED_REF`]: its `revoked/` subtree
+/// maps each revoked fingerprint to its [`RevocationBody`].
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Revocations {
-    revoked: BTreeMap<String, String>,
+    revoked: BTreeMap<String, RevocationBody>,
 }
 
-impl git_store::MapDoc for Revocations {
-    fn from_entries(entries: BTreeMap<String, String>) -> Self {
-        Self { revoked: entries }
-    }
-
-    fn into_entries(self) -> BTreeMap<String, String> {
-        self.revoked
-    }
-}
-
-/// One revoked key recorded in [`REVOKED_REF`]: its fingerprint and why it was
-/// revoked.
+/// One revoked key, assembled from its map key and [`RevocationBody`] at load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revocation {
     /// The revoked key's fingerprint — the `members/<fingerprint>` it denies.
@@ -50,33 +56,55 @@ pub struct Revocation {
     pub reason: String,
 }
 
-impl git_store::Row for Revocation {
-    fn from_pair(fingerprint: String, reason: String) -> Self {
-        Self {
-            fingerprint,
-            reason,
-        }
-    }
-
-    fn into_pair(self) -> (String, String) {
-        (self.fingerprint, self.reason)
-    }
+/// Load the revocations recorded at [`REVOKED_REF`] from an already-open
+/// `store`. An absent ref yields an empty list — nothing is revoked.
+pub fn load_with(store: &git_store::Store) -> Result<Vec<Revocation>, git_store::Error> {
+    Ok(store
+        .load::<Revocations>(REVOKED_REF)?
+        .map(|doc| {
+            doc.revoked
+                .into_iter()
+                .map(|(fingerprint, body)| Revocation {
+                    fingerprint,
+                    reason: body.reason,
+                })
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
-/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
-/// yields an empty list — nothing is revoked.
+/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. See
+/// [`load_with`].
 pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
-    git_store::Store::open(repo)?.load_rows::<Revocations, Revocation>(REVOKED_REF)
+    load_with(&git_store::Store::open(repo)?)
 }
 
-/// Write `revocations` to [`REVOKED_REF`], replacing any existing list, as a new
-/// commit.
+/// Write `revocations` to [`REVOKED_REF`] through an already-open `store`,
+/// replacing any existing list as a new commit.
+pub fn store_with(
+    store: &git_store::Store,
+    revocations: &[Revocation],
+) -> Result<(), git_store::Error> {
+    let doc = Revocations {
+        revoked: revocations
+            .iter()
+            .cloned()
+            .map(|revocation| {
+                (
+                    revocation.fingerprint,
+                    RevocationBody {
+                        reason: revocation.reason,
+                    },
+                )
+            })
+            .collect(),
+    };
+    store.store(REVOKED_REF, &doc, "Update revocations")
+}
+
+/// Write `revocations` to [`REVOKED_REF`]. See [`store_with`].
 pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_rows::<Revocations, _>(
-        REVOKED_REF,
-        revocations.iter().cloned(),
-        "Update revocations",
-    )
+    store_with(&git_store::Store::open(repo)?, revocations)
 }
 
 /// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`, for the
@@ -97,7 +125,7 @@ mod tests {
     )]
 
     use super::*;
-    use crate::testutil::{unique_repo as new_repo, write_meta_doc};
+    use crate::testutil::{unique_repo as new_repo, write_revocations_doc};
 
     fn unique_repo() -> std::path::PathBuf {
         new_repo("revocations")
@@ -145,16 +173,11 @@ mod tests {
 
     #[test]
     fn loads_the_on_disk_revoked_format() {
-        // A fixture written as the real `revoked/<fingerprint>` blob layout must
-        // keep loading, guarding the document's shape against an incompatible
-        // change to data already on a ref.
+        // A fixture written as the real `revoked/<fingerprint>/reason` subtree
+        // layout must keep loading, guarding the document's shape against an
+        // incompatible change to data already on a ref.
         let repo = unique_repo();
-        write_meta_doc(
-            &repo,
-            REVOKED_REF,
-            "revoked",
-            &[("aa:bb", "laptop stolen"), ("cc:dd", "")],
-        );
+        write_revocations_doc(&repo, &[("aa:bb", "laptop stolen"), ("cc:dd", "")]);
         let mut loaded = load(&repo).unwrap();
         loaded.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         assert_eq!(
