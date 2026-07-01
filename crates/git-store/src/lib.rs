@@ -99,6 +99,17 @@ pub trait HasId {
     fn id(&self) -> &str;
 }
 
+/// The content-addressed object id `value` would serialize to, as a hex
+/// string — computed against a throwaway in-memory object store, so it is
+/// available before deciding whether (or where) a repository should hold it.
+/// A genesis key (an issue's or a comment's stable id) is exactly this: the
+/// hash of the content that originates it, needing no counter and no ref to
+/// already exist.
+pub fn content_hash<T: for<'a> Facet<'a>>(value: &T) -> Result<String, Error> {
+    let (oid, _store) = facet_git_tree::serialize(value)?;
+    Ok(oid.to_string())
+}
+
 /// A repository's typed `refs/meta/*` store.
 ///
 /// Refs are read and updated through the high-level [`gix`] API, while all

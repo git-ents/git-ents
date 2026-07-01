@@ -339,9 +339,25 @@ than blocking the worker thread indefinitely.
 --
 Each issue MUST be stored at `refs/meta/issues/<id>` as an `Issue` document
 with fields: `title`, `body`, `state` (`open` or `closed`), `labels` (plain
-strings, no separate registry), and `author`.
+strings, no separate registry), `author`, and `id` (the friendly number
+described below).
 One ref per issue keeps issues independently loadable and separately historied;
 the ref's commit chain is the issue's edit history.
+--
+
+[role="requirement", id="issues.id"]
+.Issue Identity
+--
+An issue's stable identifier MUST be a content hash — the object id of the
+originating object, or of the issue's own initial content when it has none
+upstream — and MUST be the issue ref's last path segment, never renamed.
+This identifier is conflict-free and requires no counter.
+An issue MAY additionally carry a friendly sequential number, assigned only
+when a maintainer promotes it; before promotion this number is absent.
+Only promotion advances the number counter, so filing an issue never
+contends it.
+Cross-references (comments, reviews) MUST key off the stable content-hash
+identifier, not the friendly number.
 --
 
 === Web UI
