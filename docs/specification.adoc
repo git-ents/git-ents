@@ -263,6 +263,73 @@ global git config to sign pushes with an SSH key, using the key named by
 `user.signingkey` or a default `~/.ssh/id_ed25519`.
 --
 
+=== Client CLI
+
+[role="requirement", id="cli.remote-admin"]
+.Remote Administration Over Git
+--
+The `git-ents` CLI MUST administer a remote's trust and metadata refs as
+ordinary signed git pushes, with no separate admin API or server endpoint.
+A mutating command MUST fetch the relevant `refs/meta/*` ref(s) from the named
+remote (defaulting to `origin`) into the local clone, load the typed document,
+apply the change, store it, and push the updated ref back — signed per the
+client's git config, through the same `pre-receive` gate a content push
+traverses.
+A read-only command (`members list`, `members check`, `checks list`) MUST only
+fetch, never push.
+--
+
+[role="requirement", id="cli.compare-and-swap"]
+.Optimistic Concurrency
+--
+Every CLI push MUST be a compare-and-swap pinned to the ref tip observed at
+fetch time, expressed as `--force-with-lease=<ref>:<expected>` together with
+`--force-if-includes`, so a change made on the remote since the fetch is
+rejected rather than clobbered; a create pins the lease to the zero object id.
+This is the client-side counterpart to <<storage.concurrency>>.
+--
+
+[role="requirement", id="cli.members"]
+.Member Commands
+--
+The CLI MUST provide, under `git ents members`:
+
+* `list` — render the live member set, each key with its fingerprint, validity
+  window, and a flag when it appears on the revocation list.
+* `add` — authorize a leaf key or pin a certificate authority for a username,
+  with optional `valid-after` / `valid-before` window; adding a member MUST
+  create the ref when absent.
+* `remove` — delete the member's ref.
+* `revoke` / `unrevoke` — add or remove a fingerprint on `refs/meta/revoked`.
+* `check` — report whether a key is a member of the remote and echo the
+  client's signing config (`gpg.format`, `user.signingkey`, `push.gpgSign`).
+* `setup` — configure signed pushes (see <<auth.client-setup>>).
+
+Revoking the operator's own last authorizing key MUST prompt for confirmation
+before proceeding, since it can lock the operator out of the remote.
+--
+
+[role="requirement", id="cli.account-checks"]
+.Account and Check Commands
+--
+`git ents account create` MUST write or update `refs/meta/account`
+(<<account.ref>>).
+`git ents checks` MUST provide `list`, `add`, and `remove` over the
+`refs/meta/checks` set (<<checks.definition>>).
+--
+
+[role="requirement", id="cli.key-resolution"]
+.Key Resolution and Fingerprints
+--
+The key a command operates on MUST default to `user.signingkey`, accepting an
+inline `key::` value, a `.pub` file, or a private key whose public half is
+derived with `ssh-keygen -y`; `members setup` MAY generate a new
+`~/.ssh/id_ed25519` when none exists.
+A key's fingerprint MUST be the MD5 colon form, whose separators are safe as a
+ref-path/tree-entry segment, unlike the slashes a base64 SHA256 fingerprint
+would introduce.
+--
+
 === Account
 
 [role="requirement", id="account.ref"]
@@ -424,6 +491,15 @@ Page navigation MUST be ordinary links; folder expansion and file viewing MUST
 be plain GET requests to the server.
 --
 
+[role="requirement", id="web.index"]
+.Repository Index
+--
+The web root (`GET /`) MUST render an index of the repositories discoverable
+under the data directory, each linking to its overview page.
+When no repository exists yet, the index MUST show a blank-slate prompt
+explaining that a push creates one, rather than an error.
+--
+
 [role="requirement", id="web.tabs"]
 .Repository Tabs
 --
@@ -489,6 +565,9 @@ Sessions MUST be held only in server memory; no session state is persisted to
 disk.
 A session MUST store only the member's public key and display label — no
 private key is ever held or transmitted.
+Signing out MUST drop the session from server memory and clear the session
+cookie; the sign-out POST MUST itself carry the CSRF token, so a cross-site
+request cannot force a sign-out.
 --
 
 [role="requirement", id="web.auth.edit"]
@@ -655,7 +734,9 @@ invocations MUST pass `-c .config/fly.toml`.
 [role="requirement", id="deploy.health"]
 .Health Check
 --
-The server MUST expose a liveness probe at `GET /` that returns `200 ok`
-without touching the git repository, so the platform can route traffic before
-any repository exists.
+The server MUST expose a liveness probe at `GET /healthz` that returns `200`
+with body `ok` without touching any git repository, so the platform can route
+traffic before any repository exists.
+`GET /` itself is served by the web UI as the repository index
+(<<web.index>>), not the probe.
 --
