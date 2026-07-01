@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 git-ents = { path = "../git-ents" }
 acdc-parser = { workspace = true }
+askama = { workspace = true }
 acdc-converters-core = { workspace = true }
 acdc-converters-html = { workspace = true }
 arborium = { workspace = true }

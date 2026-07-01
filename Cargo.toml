@@ -32,6 +32,7 @@ arborium = { version = "2.18", default-features = false, features = [
 acdc-parser = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
 acdc-converters-core = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
 acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
+askama = "0.16"
 axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"

@@ -44,3 +44,25 @@ icons! {
     icon_logo => "north-star",
     icon_search => "search",
 }
+
+/// Zero-size icon bundle so Askama templates can emit an icon as
+/// `{{ icons.icon_search()|safe }}` — the same inline SVG the free functions
+/// hand to Maud, as a raw HTML string (Askama's `safe` filter needs `Display`,
+/// which Maud's `PreEscaped` does not implement). Methods are added here as
+/// tabs migrate off Maud.
+pub(super) struct Icons;
+
+impl Icons {
+    pub(super) fn icon_plus(&self) -> String {
+        icon_plus().into_string()
+    }
+    pub(super) fn icon_issue(&self) -> String {
+        icon_issue().into_string()
+    }
+    pub(super) fn icon_check(&self) -> String {
+        icon_check().into_string()
+    }
+    pub(super) fn icon_search(&self) -> String {
+        icon_search().into_string()
+    }
+}

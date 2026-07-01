@@ -8,6 +8,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use arborium::{Config, Highlighter, HtmlFormat};
+use askama::Template;
 use axum::response::{IntoResponse, Response};
 use gix_date::Time;
 use gix_hash::{ObjectId, Prefix};
@@ -29,6 +30,16 @@ use super::{RepoMeta, Tab, not_found, repo_shell};
 /// real source files while ruling out the multi-hundred-MiB objects that would
 /// exhaust the server.
 const MAX_RENDER_BYTES: usize = 2 * 1024 * 1024;
+
+/// Render an Askama tab-body template into [`Markup`] the Maud page shell can
+/// wrap. A template render failure is a programming error (a bad template),
+/// surfaced as an inline notice rather than a panic.
+fn render_body<T: Template>(tpl: &T) -> Markup {
+    match tpl.render() {
+        Ok(html) => PreEscaped(html),
+        Err(err) => html! { div.card { div.card-row.muted { "Template error: " (err) } } },
+    }
+}
 
 /// A single repository's overview: the rendered README beside an aside of
 /// clone, about, releases, and language cards.
@@ -747,61 +758,51 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, Str
 /// derived from the labels that exist. Issue creation is a write path that does
 /// not exist yet, so the "New issue" button stays disabled.
 pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let issues = load_issues(repo).await;
-    let body = match &issues {
-        Err(err) => html! { div.card { div.card-row.muted { "Could not read issues: " (err) } } },
+    let tpl = match load_issues(repo).await {
+        Err(err) => IssuesTemplate {
+            icons: Icons,
+            error: Some(err),
+            labels: Vec::new(),
+            open: Vec::new(),
+            open_count: 0,
+            closed_count: 0,
+        },
         Ok(issues) => {
             let open: Vec<&(String, git_ents::issues::Issue)> =
                 issues.iter().filter(|(_id, i)| i.is_open()).collect();
             let closed = issues.len().saturating_sub(open.len());
-            let mut labels: Vec<&str> = issues
+            let mut labels: Vec<String> = issues
                 .iter()
-                .flat_map(|(_id, i)| i.labels.iter().map(String::as_str))
+                .flat_map(|(_id, i)| i.labels.iter().cloned())
                 .collect();
             labels.sort_unstable();
             labels.dedup();
-            html! {
-                div.filter-row {
-                    div.filter-search {
-                        (icon_search())
-                        input type="search" placeholder="Filter bug reports" aria-label="Filter" disabled;
-                    }
-                    span.chip.active { "All" }
-                    @for label in &labels {
-                        span.chip { (label) }
-                    }
-                }
-                div.card {
-                    div.card-header.subtabs {
-                        span.subtab.active { (icon_issue()) "Open" span.tab-count { (open.len()) } }
-                        span.subtab { (icon_check()) "Closed" span.tab-count { (closed) } }
-                    }
-                    @if open.is_empty() {
-                        div.blankslate {
-                            h2 { "No open bug reports" }
-                            p { "Open one to start tracking a bug." }
-                        }
-                    } @else {
-                        @for (_id, issue) in &open {
-                            (issue.render())
-                        }
-                    }
-                }
+            IssuesTemplate {
+                icons: Icons,
+                error: None,
+                labels,
+                open_count: open.len(),
+                closed_count: closed,
+                open: open
+                    .iter()
+                    .map(|(_id, issue)| issue.render().into_string())
+                    .collect(),
             }
         }
     };
-    repo_shell(
-        meta,
-        Tab::Issues,
-        "Bug reports",
-        html! {
-            div.issues-head {
-                h1.page-title { "Bug reports" }
-                button.btn-primary type="button" disabled title="Not available yet" { (icon_plus()) "New issue" }
-            }
-            (body)
-        },
-    )
+    repo_shell(meta, Tab::Issues, "Bug reports", render_body(&tpl))
+}
+
+/// The Issues tab body: the open/closed filter and per-issue cards.
+#[derive(Template)]
+#[template(path = "issues.html")]
+struct IssuesTemplate {
+    icons: Icons,
+    error: Option<String>,
+    labels: Vec<String>,
+    open: Vec<String>,
+    open_count: usize,
+    closed_count: usize,
 }
 
 /// Load the repository's issues off the async runtime, since `issues::list`
