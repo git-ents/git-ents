@@ -59,6 +59,7 @@ tokio = { version = "1", features = [
     "io-util",
     "sync",
 ] }
+uuid = { version = "1", features = ["v4"] }
 
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/

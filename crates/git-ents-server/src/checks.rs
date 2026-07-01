@@ -27,8 +27,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use git_ents::checks::{self, Check, RunOutcome};
 use tokio::sync::Mutex;
@@ -262,16 +261,10 @@ fn enqueue(queue: &Path, repo: &Path, update: &Update) -> Result<(), String> {
     Ok(())
 }
 
-/// A unique job file stem (`<nanos>-<pid>-<counter>`) so concurrent pushes never
-/// collide on a queue file name.
+/// A unique job file stem so concurrent pushes never collide on a queue file
+/// name.
 fn job_stem() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{nanos}-{}-{n}", std::process::id())
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Parse a queued job file (`repo`, new oid, ref, one per line), or `None` when
