@@ -656,6 +656,12 @@ fn members_add(
                  revoke and re-add to switch to leaf keys"
             ));
         }
+        Trust::WebAuthn(_keys) => {
+            return Err(format!(
+                "{username} is a self-attested WebAuthn member; \
+                 an admin must promote them before adding leaf keys"
+            ));
+        }
     };
     if keys
         .values()

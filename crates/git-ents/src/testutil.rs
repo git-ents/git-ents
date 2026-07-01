@@ -100,6 +100,65 @@ pub(crate) fn write_member_doc(
     assert!(status.success());
 }
 
+/// Lay a `Member` document out at `refs/meta/member/<username>` with
+/// `Trust::WebAuthn` credentials and an explicit `provenance`, as the real
+/// on-disk format: a `trust/WebAuthn/<credential_id>/{cose_key,label}`
+/// subtree per credential (the `Trust::WebAuthn` newtype variant resolving
+/// directly to its map, each `WebAuthnKey` a two-field subtree) and a
+/// `provenance/<variant>` unit-variant tree. Asserts the loader still reads
+/// the format independent of the writer.
+pub(crate) fn write_webauthn_member_doc(
+    repo: &Path,
+    username: &str,
+    provenance: &str,
+    credentials: &[(&str, &str, &str)],
+) {
+    let empty_tree = git_with_stdin(repo, &["mktree"], "");
+    let principal_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], username);
+    let mut cred_entries = String::new();
+    for (credential_id, cose_key, label) in credentials {
+        let case_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], cose_key);
+        let label_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], label);
+        let cred_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!("100644 blob {case_blob}\tcose_key\n100644 blob {label_blob}\tlabel\n"),
+        );
+        cred_entries.push_str(&format!("040000 tree {cred_tree}\t{credential_id}\n"));
+    }
+    let creds_tree = git_with_stdin(repo, &["mktree"], &cred_entries);
+    let trust_tree = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {creds_tree}\tWebAuthn\n"),
+    );
+    let provenance_tree = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!("040000 tree {empty_tree}\t{provenance}\n"),
+    );
+    let root = git_with_stdin(
+        repo,
+        &["mktree"],
+        &format!(
+            "100644 blob {principal_blob}\tprincipal\n\
+             040000 tree {empty_tree}\tvalid_after\n\
+             040000 tree {empty_tree}\tvalid_before\n\
+             040000 tree {trust_tree}\ttrust\n\
+             040000 tree {provenance_tree}\tprovenance\n"
+        ),
+    );
+    let commit = git_with_stdin(repo, &["commit-tree", &root, "-m", "fixture"], "");
+    let refname = format!("refs/meta/member/{username}");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-ref", &refname, &commit])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 /// Lay an `Account` document out at `refs/meta/account` as the real on-disk
 /// format: `username`, `display_name`, `bio`, and `created_at` blobs (the
 /// integer in its decimal `Display` form). Asserts the loader still reads the

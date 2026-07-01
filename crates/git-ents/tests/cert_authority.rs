@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use git_ents::members::{Member, Trust, allowed_signers};
+use git_ents::members::{Member, allowed_signers};
 
 /// The principal the CA certifies and the verifier checks — the pusher identity.
 const PRINCIPAL: &str = "tester@example.com";
@@ -67,12 +67,7 @@ fn render_ca_allowed_signers(dir: &Path, name: &str, ca: &Key) -> PathBuf {
         .unwrap()
         .trim()
         .to_owned();
-    let member = Member {
-        principal: "anyone".to_owned(),
-        valid_after: None,
-        valid_before: None,
-        trust: Trust::CertAuthority(ca_pubkey),
-    };
+    let member = Member::with_ca("anyone".to_owned(), ca_pubkey);
     // Sanity: a CA member exposes no leaf keys.
     assert!(member.keys().is_empty());
     let path = dir.join(name);

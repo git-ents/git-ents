@@ -39,3 +39,7 @@ extend-ignore-identifiers-re = []
 extend-ignore-words-re = []
 # Fly.io 6PN (private network) — a real term, not a typo
 extend-ignore-re = ["6PN"]
+
+[default.extend-words]
+# COSE (CBOR Object Signing and Encryption) — a real WebAuthn term, not a typo
+cose = "cose"

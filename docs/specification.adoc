@@ -137,7 +137,7 @@ a member is an independent, separately-historied operation.
 [role="requirement", id="members.trust"]
 .Member Trust Modes
 --
-A member's trust MUST rest on exactly one of two mutually exclusive bases:
+A member's trust MUST rest on exactly one of three mutually exclusive bases:
 
 Keys::
   A set of leaf signing keys, mapping each fingerprint to its OpenSSH public
@@ -150,6 +150,22 @@ Certificate Authority::
   certificate's own validity window, is trusted.
   The enterprise option: rotation, expiry, and new devices require no edit to
   the member ref.
+
+WebAuthn::
+  A set of passkey credentials in CASE form, keyed by credential ID, each with
+  a human-readable label. WebAuthn credentials authorize browser sign-in only
+  and MUST NOT produce `allowed_signers` lines or authorize git push.
+--
+
+[role="requirement", id="members.provenance"]
+.Member Provenance
+--
+Every member MUST carry a `provenance` recording whether they were
+admin-registered or self-attested via web onboarding. A member ref written
+before this field existed MUST load as admin-registered. A self-attested
+member MUST be granted limited trust: the web service MUST refuse their writes
+outside an allowed set (such as issues and comments), and they MUST NOT be
+trusted for signed git push, until an admin promotes them.
 --
 
 [role="requirement", id="members.window"]
@@ -488,6 +504,16 @@ via the signed push; the staging ref MUST be deleted whether or not the push
 succeeds.
 If the server is not configured with a signing key or nonce seed, the Settings
 tab MUST hide the edit controls rather than present a form that cannot succeed.
+--
+
+[role="requirement", id="web.auth.webauthn-onboarding"]
+.Passkey Onboarding
+--
+A new member MAY onboard without a CLI by proving control of a passkey in the
+browser. The server MUST verify the attestation server-side and write the new
+member ref with `provenance` set to self-attested, recording the attestation
+evidence in the member ref's first commit as an audit record. The resulting
+member gets limited trust until an admin promotes them.
 --
 
 === Nonfunctional
