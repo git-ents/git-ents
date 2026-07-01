@@ -19,7 +19,6 @@
 //! rather than in production.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
@@ -59,31 +58,6 @@ pub enum Error {
     /// structural merge found the same leaf changed on both sides.
     #[error("conflicting concurrent write to the ref")]
     Conflict,
-}
-
-/// A meta-ref document that is a single named map of string keys to string
-/// values — the shape the check set, the revocation list, and a run's outcomes
-/// all share. The wrapping struct's one field fixes the on-disk subtree name
-/// (`checks/`, `revoked/`, `results/`), so each document stays its own type;
-/// this trait is only the bridge that lets them share the load/store plumbing
-/// in [`Store::load_entries`] and [`Store::store_entries`].
-pub trait MapDoc: for<'a> Facet<'a> {
-    /// Wrap `entries` as the document.
-    fn from_entries(entries: BTreeMap<String, String>) -> Self;
-    /// The document's entries, consuming it.
-    fn into_entries(self) -> BTreeMap<String, String>;
-}
-
-/// One `(key, value)` entry of a [`MapDoc`] presented as a named type. The set
-/// documents expose legible structs (`Check`, `Revocation`, `RunOutcome`) rather
-/// than bare pairs; this trait is the single bridge between such a struct and
-/// the `(key, value)` shape stored on disk, so the wrap/unwrap is written once
-/// here instead of at every load and store.
-pub trait Row {
-    /// Build a row from its stored `key` and `value`.
-    fn from_pair(key: String, value: String) -> Self;
-    /// The row's `(key, value)`, consuming it.
-    fn into_pair(self) -> (String, String);
 }
 
 /// A document that legitimately stores its own collection key.
@@ -278,50 +252,6 @@ impl Store {
         Ok(items)
     }
 
-    /// Load the [`MapDoc`] on `refname` as its `(key, value)` entries, or an
-    /// empty vec when the ref is absent. Centralizes the "missing ref reads
-    /// empty" policy the set documents share.
-    pub fn load_entries<T: MapDoc>(&self, refname: &str) -> Result<Vec<(String, String)>, Error> {
-        Ok(self
-            .load::<T>(refname)?
-            .map(|doc| doc.into_entries().into_iter().collect())
-            .unwrap_or_default())
-    }
-
-    /// Store `entries` as the [`MapDoc`] `T` on `refname` as a new commit.
-    pub fn store_entries<T: MapDoc>(
-        &self,
-        refname: &str,
-        entries: BTreeMap<String, String>,
-        message: &str,
-    ) -> Result<(), Error> {
-        self.store(refname, &T::from_entries(entries), message)
-    }
-
-    /// Load the [`MapDoc`] `D` on `refname` as its [`Row`] values `R`, or an
-    /// empty vec when the ref is absent.
-    pub fn load_rows<D: MapDoc, R: Row>(&self, refname: &str) -> Result<Vec<R>, Error> {
-        Ok(self
-            .load_entries::<D>(refname)?
-            .into_iter()
-            .map(|(key, value)| R::from_pair(key, value))
-            .collect())
-    }
-
-    /// Store `rows` as the [`MapDoc`] `D` on `refname` as a new commit.
-    pub fn store_rows<D: MapDoc, R: Row>(
-        &self,
-        refname: &str,
-        rows: impl IntoIterator<Item = R>,
-        message: &str,
-    ) -> Result<(), Error> {
-        self.store_entries::<D>(
-            refname,
-            rows.into_iter().map(Row::into_pair).collect(),
-            message,
-        )
-    }
-
     /// The documents on `refname`'s commit chain as `(committer date, value)`
     /// pairs, newest first — one entry per commit, following first parents.
     pub fn history<T: for<'a> Facet<'a>>(&self, refname: &str) -> Result<Vec<(u64, T)>, Error> {
@@ -481,25 +411,10 @@ mod tests {
         reason = "unit test"
     )]
 
+    use std::collections::BTreeMap;
     use std::process::Command;
 
     use super::*;
-
-    /// A single-field map document, the shape [`MapDoc`] abstracts over.
-    #[derive(Facet)]
-    struct Bag {
-        items: BTreeMap<String, String>,
-    }
-
-    impl MapDoc for Bag {
-        fn from_entries(entries: BTreeMap<String, String>) -> Self {
-            Self { items: entries }
-        }
-
-        fn into_entries(self) -> BTreeMap<String, String> {
-            self.items
-        }
-    }
 
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -521,49 +436,39 @@ mod tests {
     }
 
     #[test]
-    fn absent_ref_loads_no_entries() {
+    fn absent_ref_loads_none() {
         let dir = repo();
         let store = Store::open(dir.path()).unwrap();
-        assert!(
-            store
-                .load_entries::<Bag>("refs/meta/bag")
-                .unwrap()
-                .is_empty()
+        assert_eq!(store.load::<String>("refs/meta/bag").unwrap(), None);
+    }
+
+    #[test]
+    fn store_then_load_round_trips() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        store
+            .store("refs/meta/bag", &"first".to_owned(), "write")
+            .unwrap();
+        assert_eq!(
+            store.load::<String>("refs/meta/bag").unwrap(),
+            Some("first".to_owned())
         );
     }
 
     #[test]
-    fn store_entries_round_trips() {
-        let dir = repo();
-        let store = Store::open(dir.path()).unwrap();
-        let written = entries(&[("a", "1"), ("b", "2")]);
-        store
-            .store_entries::<Bag>("refs/meta/bag", written.clone(), "write")
-            .unwrap();
-        let loaded: BTreeMap<String, String> = store
-            .load_entries::<Bag>("refs/meta/bag")
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(loaded, written);
-    }
-
-    #[test]
-    fn store_entries_replaces_the_previous_set() {
+    fn store_replaces_the_previous_value() {
         let dir = repo();
         let store = Store::open(dir.path()).unwrap();
         store
-            .store_entries::<Bag>("refs/meta/bag", entries(&[("a", "1")]), "write")
+            .store("refs/meta/bag", &"first".to_owned(), "write")
             .unwrap();
         store
-            .store_entries::<Bag>("refs/meta/bag", entries(&[("b", "2")]), "write")
+            .store("refs/meta/bag", &"second".to_owned(), "write")
             .unwrap();
-        let loaded: BTreeMap<String, String> = store
-            .load_entries::<Bag>("refs/meta/bag")
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(loaded, entries(&[("b", "2")]));
+        assert_eq!(
+            store.load::<String>("refs/meta/bag").unwrap(),
+            Some("second".to_owned())
+        );
     }
 
     /// A minimal keyed item, used to exercise `load_item`/`store_item`/
