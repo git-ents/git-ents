@@ -13,6 +13,7 @@ form_urlencoded.workspace = true
 futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
 git-store = { workspace = true }
 iddqd = { workspace = true }
+inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }
 signal-hook = { version = "0.3", features = ["iterator"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

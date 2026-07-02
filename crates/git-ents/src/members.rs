@@ -73,6 +73,12 @@ pub struct Member {
     /// `loads_a_member_ref_with_no_provenance_entry`.
     #[facet(default)]
     pub provenance: Provenance,
+    /// The `@`-mentioned account this member is, by its stable
+    /// [`crate::account::genesis`] hash — `None` until an admin links one.
+    /// Plain `Option`, which `facet-git-tree` auto-defaults on an absent
+    /// entry, so a member ref written before this field existed keeps
+    /// loading unchanged.
+    pub account: Option<String>,
 }
 
 /// Whether a member was admin-registered or self-attested via web onboarding.
@@ -147,6 +153,7 @@ impl Member {
             valid_before: None,
             trust: Trust::Keys(keys),
             provenance: Provenance::AdminRegistered,
+            account: None,
         }
     }
 
@@ -160,6 +167,7 @@ impl Member {
             valid_before: None,
             trust: Trust::CertAuthority(ca),
             provenance: Provenance::AdminRegistered,
+            account: None,
         }
     }
 
@@ -173,6 +181,7 @@ impl Member {
             valid_before: None,
             trust: Trust::WebAuthn(keys),
             provenance: Provenance::SelfAttestedWeb,
+            account: None,
         }
     }
 

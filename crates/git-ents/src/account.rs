@@ -46,6 +46,21 @@ pub fn is_account_repo(repo: &Path) -> Result<bool, git_store::Error> {
     Ok(load(repo)?.is_some())
 }
 
+/// The account's stable, path-independent identity: the content hash of the
+/// very first [`Account`] ever recorded on [`ACCOUNT_REF`] — fixed at
+/// creation, so later profile edits (`display_name`, `bio`) never change it
+/// and a member's `@`-mention of it survives the account repo moving. `None`
+/// when the repo is not (yet) an account repo. Mirrors the genesis-key idiom
+/// `issues::new_id` uses: an identifier derived from content, never a stored
+/// field.
+pub fn genesis(repo: &Path) -> Result<Option<String>, git_store::Error> {
+    git_store::Store::open(repo)?
+        .history::<Account>(ACCOUNT_REF)?
+        .last()
+        .map(|(_at, account)| git_store::content_hash(account))
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(

@@ -9,6 +9,7 @@
 //! [`git_ents::members`], and pushing them back.
 
 mod debug_session;
+mod interactive;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -75,11 +76,12 @@ enum Action {
         #[arg(default_value = "origin")]
         remote: String,
     },
-    /// Authorize a key for a member on a remote and push the update.
+    /// Authorize a key for a member on a remote and push the update. Prompts
+    /// for any field left unset when run at an interactive terminal.
     Add {
         /// Member (username) to authorize the key under — its
         /// `refs/meta/member/<username>` ref.
-        username: String,
+        username: Option<String>,
         /// Remote whose member refs to update.
         #[arg(default_value = "origin")]
         remote: String,
@@ -98,6 +100,10 @@ enum Action {
         /// that never lapses on its own.
         #[arg(long, value_name = "TIMESTAMP")]
         valid_before: Option<String>,
+        /// Link this member to an account by its genesis hash (`git ents
+        /// account create` prints one).
+        #[arg(long, value_name = "GENESIS_HASH")]
+        account: Option<String>,
     },
     /// Remove a member, deleting its ref on a remote and pushing the update.
     Remove {
@@ -143,9 +149,10 @@ enum Action {
 enum AccountAction {
     /// Create or update this repository's account identity and push it. The
     /// presence of `refs/meta/account` is what marks the repo as an account.
+    /// Prompts for any field left unset when run at an interactive terminal.
     Create {
         /// The account username — by convention the `user/<username>` repo name.
-        username: String,
+        username: Option<String>,
         /// Remote whose `refs/meta/account` to update.
         #[arg(default_value = "origin")]
         remote: String,
@@ -153,8 +160,8 @@ enum AccountAction {
         #[arg(long)]
         display_name: Option<String>,
         /// Short free-text bio.
-        #[arg(long, default_value = "")]
-        bio: String,
+        #[arg(long)]
+        bio: Option<String>,
     },
 }
 
@@ -167,11 +174,12 @@ enum ChecksAction {
         remote: String,
     },
     /// Add (or replace) a check on a remote's set and push the update.
+    /// Prompts for any field left unset when run at an interactive terminal.
     Add {
         /// Name to record the check under (`checks/<name>`).
-        name: String,
+        name: Option<String>,
         /// Command the check runs (e.g. `cargo fmt --check`).
-        command: String,
+        command: Option<String>,
         /// Remote whose `refs/meta/checks` to update.
         #[arg(default_value = "origin")]
         remote: String,
@@ -222,13 +230,15 @@ fn run_members(action: Action) -> Result<(), String> {
             cert_authority,
             valid_after,
             valid_before,
+            account,
         } => members_add(
-            &username,
+            username,
             &remote,
-            key.as_deref(),
-            cert_authority.as_deref(),
+            key,
+            cert_authority,
             valid_after,
             valid_before,
+            account,
         ),
         Action::Remove { username, remote } => members_remove(&username, &remote),
         Action::Revoke {
@@ -251,7 +261,7 @@ fn run_account(action: AccountAction) -> Result<(), String> {
             remote,
             display_name,
             bio,
-        } => account_create(&username, &remote, display_name, bio),
+        } => account_create(username, &remote, display_name, bio),
     }
 }
 
@@ -262,7 +272,7 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
             name,
             command,
             remote,
-        } => add_check(&name, &command, &remote),
+        } => add_check(name, command, &remote),
         ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
         ChecksAction::Debug { remote } => checks_debug(&remote),
     }
@@ -376,15 +386,18 @@ fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
 }
 
 /// Add `name` running `command` to `remote`'s set, replacing any check already
-/// recorded under that name, and push the update.
-fn add_check(name: &str, command: &str, remote: &str) -> Result<(), String> {
+/// recorded under that name, and push the update. Prompts for either field
+/// left `None` when run at an interactive terminal.
+fn add_check(name: Option<String>, command: Option<String>, remote: &str) -> Result<(), String> {
+    let name = interactive::text_or(name, "Check name")?;
+    let command = interactive::text_or(command, "Command")?;
     let repo = repo()?;
     let expected = sync(remote, CHECKS_REF)?;
     let mut checks = checks::load(&repo).map_err(|error| error.to_string())?;
     checks.retain(|check| check.name != name);
     checks.push(Check {
-        name: name.to_owned(),
-        command: command.to_owned(),
+        name: name.clone(),
+        command,
     });
     checks::store(&repo, &checks).map_err(|error| error.to_string())?;
     push_signed(remote, CHECKS_REF, expected.as_deref())?;
@@ -629,16 +642,46 @@ fn members_unrevoke(fingerprint: &str, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The `key`/`cert_authority` pair for [`members_add`]. Used as given when
+/// either is already set or the terminal is non-interactive, so
+/// `--key`/`--cert-authority` and scripted runs are unchanged; otherwise
+/// prompts for which kind of trust to add.
+fn resolve_trust(
+    key: Option<PathBuf>,
+    cert_authority: Option<PathBuf>,
+) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
+    if key.is_some() || cert_authority.is_some() || !interactive::available() {
+        return Ok((key, cert_authority));
+    }
+    let choice = interactive::select_or("Trust", &["Signing key", "Certificate authority"], 0)?;
+    if choice == 1 {
+        let path = interactive::text_or(None, "Certificate authority public key path")?;
+        Ok((None, Some(PathBuf::from(path))))
+    } else {
+        let path =
+            interactive::optional_text_or(None, "Signing key path (blank for user.signingkey)")?;
+        Ok((path.map(PathBuf::from), None))
+    }
+}
+
 /// Authorize a key (or pin a CA) for the member `username` on `remote`, trusting
 /// the member within the given validity window, and push the updated member ref.
 fn members_add(
-    username: &str,
+    username: Option<String>,
     remote: &str,
-    key: Option<&Path>,
-    cert_authority: Option<&Path>,
+    key: Option<PathBuf>,
+    cert_authority: Option<PathBuf>,
     valid_after: Option<String>,
     valid_before: Option<String>,
+    account: Option<String>,
 ) -> Result<(), String> {
+    let username = interactive::text_or(username, "Username")?;
+    let (key, cert_authority) = resolve_trust(key, cert_authority)?;
+    let valid_after = interactive::optional_text_or(valid_after, "Valid after (blank for none)")?;
+    let valid_before =
+        interactive::optional_text_or(valid_before, "Valid before (blank for none)")?;
+    let account =
+        interactive::optional_text_or(account, "Link to account (genesis hash, blank to skip)")?;
     if let Some(after) = &valid_after {
         validate_timestamp(after)?;
     }
@@ -646,22 +689,25 @@ fn members_add(
         validate_timestamp(before)?;
     }
     let repo = repo()?;
-    let refname = member_ref(username);
+    let refname = member_ref(&username);
     let expected = sync(remote, &refname)?;
-    let mut member = members::load(&repo, username)
+    let mut member = members::load(&repo, &username)
         .map_err(|error| error.to_string())?
-        .unwrap_or_else(|| Member::with_keys(username.to_owned(), BTreeMap::new()));
+        .unwrap_or_else(|| Member::with_keys(username.clone(), BTreeMap::new()));
     if valid_after.is_some() {
         member.valid_after = valid_after;
     }
     if valid_before.is_some() {
         member.valid_before = valid_before;
     }
+    if account.is_some() {
+        member.account = account;
+    }
 
     // Pinning a CA replaces the member's trust wholesale — a member is either
     // leaf keys or a CA, never both.
     if let Some(ca_path) = cert_authority {
-        let ca = read_public_key(ca_path)?;
+        let ca = read_public_key(&ca_path)?;
         member.trust = Trust::CertAuthority(ca);
         members::store(&repo, &member).map_err(|error| error.to_string())?;
         push_signed(remote, &refname, expected.as_deref())?;
@@ -669,7 +715,7 @@ fn members_add(
         return Ok(());
     }
 
-    let public_key = public_key(key)?;
+    let public_key = public_key(key.as_deref())?;
     let fingerprint = fingerprint(&public_key)?;
     let keys = match &mut member.trust {
         Trust::Keys(keys) => keys,
@@ -714,24 +760,32 @@ fn members_remove(username: &str, remote: &str) -> Result<(), String> {
 
 /// Create or update this repository's account identity on `remote` and push it.
 fn account_create(
-    username: &str,
+    username: Option<String>,
     remote: &str,
     display_name: Option<String>,
-    bio: String,
+    bio: Option<String>,
 ) -> Result<(), String> {
+    let username = interactive::text_or(username, "Username")?;
+    let display_name =
+        interactive::optional_text_or(display_name, "Display name (blank to use username)")?;
+    let bio = interactive::optional_text_or(bio, "Bio (blank to skip)")?.unwrap_or_default();
     let repo = repo()?;
     let expected = sync(remote, account::ACCOUNT_REF)?;
     let existing = account::load(&repo).map_err(|error| error.to_string())?;
     let account = Account {
-        username: username.to_owned(),
-        display_name: display_name.unwrap_or_else(|| username.to_owned()),
+        username: username.clone(),
+        display_name: display_name.unwrap_or_else(|| username.clone()),
         bio,
         // Preserve the original creation time when updating an existing account.
         created_at: existing.map_or_else(now_seconds, |account| account.created_at),
     };
     account::store(&repo, &account).map_err(|error| error.to_string())?;
     push_signed(remote, account::ACCOUNT_REF, expected.as_deref())?;
+    let genesis = account::genesis(&repo).map_err(|error| error.to_string())?;
     println!("created account {username}");
+    if let Some(genesis) = genesis {
+        println!("genesis: {genesis} (pass to `members add --account` to link a member)");
+    }
     Ok(())
 }
 
