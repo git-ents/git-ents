@@ -2,11 +2,9 @@
 
 pub mod account;
 pub mod checks;
-pub mod comments;
 pub mod config;
 pub mod issues;
 pub mod members;
-pub mod reviews;
 pub mod revocations;
 #[cfg(test)]
 mod testutil;
