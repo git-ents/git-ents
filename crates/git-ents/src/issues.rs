@@ -37,6 +37,17 @@ pub const ISSUES_NS: &str = "refs/meta/issues";
 /// advances it, so filing an issue never contends it.
 pub const ISSUE_NUMBER_REF: &str = "refs/meta/issue-number";
 
+/// An issue's state — the closed set `Issue.state` legitimately takes, in
+/// place of a `String` every caller had to trust held one of two values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(u8)]
+pub enum State {
+    /// The issue is being tracked.
+    Open,
+    /// The issue has been resolved or dismissed.
+    Closed,
+}
+
 /// One issue stored at `refs/meta/issues/<id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Issue {
@@ -44,8 +55,8 @@ pub struct Issue {
     pub title: String,
     /// The issue's body text.
     pub body: String,
-    /// The issue's state — `open` or `closed`.
-    pub state: String,
+    /// The issue's state.
+    pub state: State,
     /// The labels applied to the issue, as plain strings.
     pub labels: Vec<String>,
     /// The identity that opened the issue.
@@ -57,10 +68,10 @@ pub struct Issue {
 }
 
 impl Issue {
-    /// Whether the issue is open (any state other than `closed`).
+    /// Whether the issue is open (any state other than [`State::Closed`]).
     #[must_use]
     pub fn is_open(&self) -> bool {
-        self.state != "closed"
+        self.state != State::Closed
     }
 }
 
@@ -179,11 +190,11 @@ mod tests {
         new_repo("issues")
     }
 
-    fn issue(title: &str, state: &str, labels: &[&str]) -> Issue {
+    fn issue(title: &str, state: State, labels: &[&str]) -> Issue {
         Issue {
             title: title.to_owned(),
             body: "A body".to_owned(),
-            state: state.to_owned(),
+            state,
             labels: labels.iter().map(|l| (*l).to_owned()).collect(),
             author: "alice".to_owned(),
             id: None,
@@ -193,7 +204,7 @@ mod tests {
     #[test]
     fn store_then_load_round_trips_an_issue() {
         let repo = unique_repo();
-        let written = issue("A bug", "open", &["bug", "p1"]);
+        let written = issue("A bug", State::Open, &["bug", "p1"]);
         store(&repo, "1", &written).unwrap();
         assert_eq!(load(&repo, "1").unwrap(), Some(written));
         let _ = std::fs::remove_dir_all(&repo);
@@ -209,8 +220,8 @@ mod tests {
     #[test]
     fn lists_issues_and_counts_the_open_ones() {
         let repo = unique_repo();
-        store(&repo, "1", &issue("Open one", "open", &["bug"])).unwrap();
-        store(&repo, "2", &issue("Closed one", "closed", &[])).unwrap();
+        store(&repo, "1", &issue("Open one", State::Open, &["bug"])).unwrap();
+        store(&repo, "2", &issue("Closed one", State::Closed, &[])).unwrap();
         let mut ids: Vec<String> = list(&repo).unwrap().into_iter().map(|(id, _)| id).collect();
         ids.sort();
         assert_eq!(ids, vec!["1".to_owned(), "2".to_owned()]);
@@ -221,36 +232,37 @@ mod tests {
     #[test]
     fn loads_the_on_disk_issue_format() {
         // A fixture written as the real on-disk layout — `title`, `body`,
-        // `state`, `author` blobs plus an index-keyed `labels/` subtree — must
-        // keep loading, guarding the Issue document's shape against an
-        // incompatible change to data already on a ref.
+        // `author` blobs, a `state/<Variant>` subtree, and an index-keyed
+        // `labels/` subtree — must keep loading, guarding the Issue
+        // document's shape against an incompatible change to data already on
+        // a ref.
         let repo = unique_repo();
         write_issue_doc(
             &repo,
             &format!("{ISSUES_NS}/1"),
             "A bug",
             "A body",
-            "open",
+            "Open",
             &["bug", "p1"],
             "alice",
         );
         assert_eq!(
             load(&repo, "1").unwrap(),
-            Some(issue("A bug", "open", &["bug", "p1"]))
+            Some(issue("A bug", State::Open, &["bug", "p1"]))
         );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
     fn new_id_uses_the_origin_when_one_is_given() {
-        let content = issue("A bug", "open", &[]);
+        let content = issue("A bug", State::Open, &[]);
         assert_eq!(new_id(Some("deadbeef"), &content).unwrap(), "deadbeef");
     }
 
     #[test]
     fn new_id_hashes_its_own_content_with_no_origin() {
-        let a = issue("A bug", "open", &[]);
-        let b = issue("A different bug", "open", &[]);
+        let a = issue("A bug", State::Open, &[]);
+        let b = issue("A different bug", State::Open, &[]);
         let a_id = new_id(None, &a).unwrap();
         let b_id = new_id(None, &b).unwrap();
         // Content-addressed: same content yields the same id, different
@@ -262,7 +274,7 @@ mod tests {
     #[test]
     fn filing_an_issue_leaves_its_friendly_number_unset() {
         let repo = unique_repo();
-        let content = issue("A bug", "open", &[]);
+        let content = issue("A bug", State::Open, &[]);
         let id = new_id(None, &content).unwrap();
         store(&repo, &id, &content).unwrap();
         assert_eq!(load(&repo, &id).unwrap().unwrap().id, None);
@@ -272,7 +284,7 @@ mod tests {
     #[test]
     fn promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref() {
         let repo = unique_repo();
-        let content = issue("A bug", "open", &[]);
+        let content = issue("A bug", State::Open, &[]);
         let id = new_id(None, &content).unwrap();
         store(&repo, &id, &content).unwrap();
 
@@ -283,7 +295,7 @@ mod tests {
 
         // A second issue promotes to the next number; the first issue's ref
         // — keyed by its stable genesis hash — still resolves.
-        let other = issue("Another bug", "open", &[]);
+        let other = issue("Another bug", State::Open, &[]);
         let other_id = new_id(None, &other).unwrap();
         store(&repo, &other_id, &other).unwrap();
         assert_eq!(promote(&repo, &other_id).unwrap(), "2");

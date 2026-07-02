@@ -151,7 +151,7 @@ fn signer_label(key: &str) -> String {
 fn run_summary(run: &Run) -> String {
     run.results
         .iter()
-        .map(|result| format!("{} {}", result.name, result.outcome))
+        .map(|result| format!("{} {}", result.name, result.status))
         .collect::<Vec<_>>()
         .join(" · ")
 }

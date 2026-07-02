@@ -2,7 +2,7 @@
 //!
 //! A check is anything a server runs against a push — CI, CD, linting,
 //! versioning gates, and so on. Their definitions live in exactly one place:
-//! the `refs/meta/checks` ref. Its tree is a [`Checks`] document mapping each
+//! the `refs/meta/checks` ref, whose tree is a scalar-keyed map from each
 //! check name to the [`CheckBody`] that runs it. The document is read and
 //! written through [`git_store`], so the check set is a typed value that
 //! lives in git — versioned, auditable, and itself pushable. Keeping it on a
@@ -11,15 +11,13 @@
 //!
 //! # Migration note
 //!
-//! `Checks`/`RunResults` moved their map values from a bare `String` to a
-//! struct (`CheckBody`/[`Outcome`]) so a run's outcome can carry more than one
-//! field (a duration, a log URL). This turns `checks/<name>` and
-//! `results/<name>` from blobs into subtrees on disk, an incompatible format
-//! change: data written in the prior flat-string layout no longer loads and
-//! must be re-recorded. Acceptable pre-1.0 (see the format compatibility
-//! rules in `git_store`'s module docs).
+//! `checks/<name>` and `results/<name>` moved from bare blobs to subtrees
+//! (`CheckBody`/[`Outcome`]) so a run's outcome can carry more than one field
+//! (a duration, a log URL), and a run's [`Status`] moved from a bare string to
+//! a closed enum. Each is an incompatible format change: data written in a
+//! prior layout no longer loads and must be re-recorded. Acceptable pre-1.0
+//! (see the format compatibility rules in `git_store`'s module docs).
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
@@ -35,13 +33,6 @@ struct CheckBody {
     command: String,
 }
 
-/// The document stored at [`CHECKS_REF`]: its `checks/` subtree maps each
-/// check name to its [`CheckBody`].
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct Checks {
-    checks: BTreeMap<String, CheckBody>,
-}
-
 /// One configured check, assembled from its map key and [`CheckBody`] at load.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Check {
@@ -51,45 +42,34 @@ pub struct Check {
     pub command: String,
 }
 
-/// Load the configured checks recorded at [`CHECKS_REF`] from an already-open
-/// `store`.
+/// Load the configured checks recorded at [`CHECKS_REF`] in `repo`.
 ///
 /// An absent ref yields an empty set, as on a server whose check set has not
 /// been pushed yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no checks configured".
 pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
-    Ok(git_store::Store::open(repo)?
-        .load::<Checks>(CHECKS_REF)?
-        .map(|doc| {
-            doc.checks
-                .into_iter()
-                .map(|(name, body)| Check {
-                    name,
-                    command: body.command,
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+    git_store::Store::open(repo)?.load_map(CHECKS_REF, |name, body: CheckBody| Check {
+        name,
+        command: body.command,
+    })
 }
 
 /// Write `checks` to [`CHECKS_REF`] in `repo`, replacing any existing set as a
 /// new commit.
 pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
-    let doc = Checks {
-        checks: checks
-            .iter()
-            .cloned()
-            .map(|check| {
-                (
-                    check.name,
-                    CheckBody {
-                        command: check.command,
-                    },
-                )
-            })
-            .collect(),
-    };
-    git_store::Store::open(repo)?.store(CHECKS_REF, &doc, "Update checks")
+    git_store::Store::open(repo)?.store_map(
+        CHECKS_REF,
+        checks,
+        |check| {
+            (
+                check.name.clone(),
+                CheckBody {
+                    command: check.command.clone(),
+                },
+            )
+        },
+        "Update checks",
+    )
 }
 
 /// The namespace under which a commit's check runs are recorded: one ref,
@@ -97,26 +77,48 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
 /// run against it. Definitions live on [`CHECKS_REF`]; this is their history.
 pub const RUNS_NS: &str = "refs/meta/runs";
 
+/// A check run's status, progressing `Queued` → `Running` → a terminal
+/// outcome. Closed set — the only values a run legitimately takes, in place
+/// of a `String` that every caller had to trust held one of five values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(u8)]
+pub enum Status {
+    /// Enqueued by `post-receive`, not yet picked up by the worker.
+    Queued,
+    /// The worker has started this run.
+    Running,
+    /// The check exited successfully.
+    Pass,
+    /// The check exited with a failure.
+    Fail,
+    /// An infrastructure failure (an unreachable sandbox, a timeout) kept the
+    /// check from completing.
+    Error,
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Error => "error",
+        })
+    }
+}
+
 /// One check's on-disk outcome. The map key (the check's name) is not
 /// duplicated inside it. Optional fields absent from an older record load as
 /// unset, so a run recorded before a field existed still loads.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Outcome {
     /// `queued`, `running`, then `pass`, `fail`, or `error`.
-    outcome: String,
+    status: Status,
     /// How long the check took to run, when known.
     duration_secs: Option<u64>,
     /// Where to read the check's full log, when the runner published one.
     log_url: Option<String>,
-}
-
-/// One run's outcomes, stored as the tree of a commit on the run ref:
-/// `results/<name>` maps each check to its [`Outcome`]. Each commit on the ref
-/// is one run and the commit's date is when it ran, so no timestamp is
-/// duplicated in the tree — the run history is the ref's commit chain.
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct RunResults {
-    results: BTreeMap<String, Outcome>,
 }
 
 /// One check's outcome within a [`Run`], assembled from its map key and
@@ -125,9 +127,8 @@ struct RunResults {
 pub struct RunOutcome {
     /// The check's name (its `checks/<name>` in [`CHECKS_REF`]).
     pub name: String,
-    /// The outcome recorded for it as a run progresses — `queued`, `running`,
-    /// then `pass`, `fail`, or `error`.
-    pub outcome: String,
+    /// The outcome recorded for it as a run progresses.
+    pub status: Status,
     /// How long the check took to run, when known.
     pub duration_secs: Option<u64>,
     /// Where to read the check's full log, when the runner published one.
@@ -158,9 +159,11 @@ pub struct CommitRuns {
 /// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
 /// chain is the run history. The commit's date is the run time.
 pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(
+    let store = git_store::Store::open(repo)?;
+    store.store_map(
         &format!("{RUNS_NS}/{commit}"),
-        &run_doc(outcomes),
+        outcomes,
+        outcome_split,
         "Record check run",
     )
 }
@@ -178,11 +181,10 @@ pub fn update_run(
     commit: &str,
     outcomes: &[RunOutcome],
 ) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.amend(
-        &format!("{RUNS_NS}/{commit}"),
-        &run_doc(outcomes),
-        "Record check run",
-    )
+    let refname = format!("{RUNS_NS}/{commit}");
+    let doc: std::collections::BTreeMap<String, Outcome> =
+        outcomes.iter().map(outcome_split).collect();
+    git_store::Store::open(repo)?.amend(&refname, &doc, "Record check run")
 }
 
 /// List the recorded runs per commit in `repo`, newest commit first. Each
@@ -197,12 +199,11 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
             continue;
         };
         let runs = store
-            .history::<RunResults>(&refname)?
+            .history::<std::collections::BTreeMap<String, Outcome>>(&refname)?
             .into_iter()
             .map(|(at, doc)| Run {
                 at,
                 results: doc
-                    .results
                     .into_iter()
                     .map(|(name, outcome)| assemble_outcome(name, outcome))
                     .collect(),
@@ -216,31 +217,23 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
     Ok(commits)
 }
 
-/// Build a [`RunResults`] from a run's `outcomes`.
-fn run_doc(outcomes: &[RunOutcome]) -> RunResults {
-    RunResults {
-        results: outcomes
-            .iter()
-            .cloned()
-            .map(|outcome| {
-                (
-                    outcome.name,
-                    Outcome {
-                        outcome: outcome.outcome,
-                        duration_secs: outcome.duration_secs,
-                        log_url: outcome.log_url,
-                    },
-                )
-            })
-            .collect(),
-    }
+/// Split a public [`RunOutcome`] into its map key and on-disk [`Outcome`].
+fn outcome_split(outcome: &RunOutcome) -> (String, Outcome) {
+    (
+        outcome.name.clone(),
+        Outcome {
+            status: outcome.status,
+            duration_secs: outcome.duration_secs,
+            log_url: outcome.log_url.clone(),
+        },
+    )
 }
 
 /// Assemble a public [`RunOutcome`] from its map key and on-disk [`Outcome`].
 fn assemble_outcome(name: String, outcome: Outcome) -> RunOutcome {
     RunOutcome {
         name,
-        outcome: outcome.outcome,
+        status: outcome.status,
         duration_secs: outcome.duration_secs,
         log_url: outcome.log_url,
     }
@@ -306,9 +299,9 @@ mod tests {
     #[test]
     fn loads_the_on_disk_checks_format() {
         // A fixture written as the real `checks/<name>/command` subtree layout
-        // (the 2c migration: a struct value, not a bare blob) must keep
-        // loading, guarding the Checks document's shape against an
-        // incompatible change to data already on a ref.
+        // (a struct value, not a bare blob) must keep loading, guarding the
+        // checks document's shape against an incompatible change to data
+        // already on a ref.
         let repo = unique_repo();
         write_checks_doc(
             &repo,
@@ -328,15 +321,15 @@ mod tests {
 
     #[test]
     fn loads_the_on_disk_runs_format() {
-        // A fixture written as the real `results/<name>/outcome` subtree
-        // layout (the 2c migration) with `duration_secs`/`log_url` omitted
-        // must keep loading, with the missing optional fields unset.
+        // A fixture written as the real `results/<name>/status/<Variant>`
+        // subtree layout, with `duration_secs`/`log_url` omitted, must keep
+        // loading, with the missing optional fields unset.
         let repo = unique_repo();
         let commit = "0123456789012345678901234567890123456789";
         write_runs_doc(
             &repo,
             &format!("{RUNS_NS}/{commit}"),
-            &[("fmt", "pass"), ("test", "fail")],
+            &[("fmt", "Pass"), ("test", "Fail")],
         );
         let commits = runs(&repo).unwrap();
         assert_eq!(commits.len(), 1);
@@ -344,15 +337,15 @@ mod tests {
         assert_eq!(commits[0].runs.len(), 1);
         assert_eq!(
             commits[0].runs[0].results,
-            vec![outcome("fmt", "pass"), outcome("test", "fail")]
+            vec![outcome("fmt", Status::Pass), outcome("test", Status::Fail)]
         );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    fn outcome(name: &str, outcome: &str) -> RunOutcome {
+    fn outcome(name: &str, status: Status) -> RunOutcome {
         RunOutcome {
             name: name.to_owned(),
-            outcome: outcome.to_owned(),
+            status,
             duration_secs: None,
             log_url: None,
         }
@@ -365,7 +358,7 @@ mod tests {
         record(
             &repo,
             commit,
-            &[outcome("fmt", "pass"), outcome("test", "fail")],
+            &[outcome("fmt", Status::Pass), outcome("test", Status::Fail)],
         )
         .unwrap();
 
@@ -375,7 +368,7 @@ mod tests {
         assert_eq!(commits[0].runs.len(), 1);
         assert_eq!(
             commits[0].runs[0].results,
-            vec![outcome("fmt", "pass"), outcome("test", "fail")]
+            vec![outcome("fmt", Status::Pass), outcome("test", Status::Fail)]
         );
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -384,14 +377,20 @@ mod tests {
     fn recording_a_commit_again_appends_a_run() {
         let repo = unique_repo();
         let commit = "0123456789012345678901234567890123456789";
-        record(&repo, commit, &[outcome("fmt", "fail")]).unwrap();
-        record(&repo, commit, &[outcome("fmt", "pass")]).unwrap();
+        record(&repo, commit, &[outcome("fmt", Status::Fail)]).unwrap();
+        record(&repo, commit, &[outcome("fmt", Status::Pass)]).unwrap();
         let commits = runs(&repo).unwrap();
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].runs.len(), 2);
         // Newest first: the second run (pass) leads, the first (fail) follows.
-        assert_eq!(commits[0].runs[0].results, vec![outcome("fmt", "pass")]);
-        assert_eq!(commits[0].runs[1].results, vec![outcome("fmt", "fail")]);
+        assert_eq!(
+            commits[0].runs[0].results,
+            vec![outcome("fmt", Status::Pass)]
+        );
+        assert_eq!(
+            commits[0].runs[1].results,
+            vec![outcome("fmt", Status::Fail)]
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
@@ -408,7 +407,7 @@ mod tests {
         let commit = "0123456789012345678901234567890123456789";
         let rich = RunOutcome {
             name: "fmt".to_owned(),
-            outcome: "pass".to_owned(),
+            status: Status::Pass,
             duration_secs: Some(12),
             log_url: Some("https://example.com/log".to_owned()),
         };
@@ -416,5 +415,27 @@ mod tests {
         let commits = runs(&repo).unwrap();
         assert_eq!(commits[0].runs[0].results, vec![rich]);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn update_run_advances_in_place_rather_than_appending() {
+        let repo = unique_repo();
+        let commit = "0123456789012345678901234567890123456789";
+        record(&repo, commit, &[outcome("fmt", Status::Queued)]).unwrap();
+        update_run(&repo, commit, &[outcome("fmt", Status::Running)]).unwrap();
+        update_run(&repo, commit, &[outcome("fmt", Status::Pass)]).unwrap();
+        let commits = runs(&repo).unwrap();
+        assert_eq!(commits[0].runs.len(), 1);
+        assert_eq!(
+            commits[0].runs[0].results,
+            vec![outcome("fmt", Status::Pass)]
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn displays_lowercase_status_words() {
+        assert_eq!(Status::Queued.to_string(), "queued");
+        assert_eq!(Status::Pass.to_string(), "pass");
     }
 }

@@ -23,7 +23,7 @@
 //! must be re-recorded. Acceptable pre-1.0 (see the format compatibility
 //! rules in `git_store`'s module docs).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use facet::Facet;
@@ -40,13 +40,6 @@ struct RevocationBody {
     reason: String,
 }
 
-/// The revocation document stored at [`REVOKED_REF`]: its `revoked/` subtree
-/// maps each revoked fingerprint to its [`RevocationBody`].
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct Revocations {
-    revoked: BTreeMap<String, RevocationBody>,
-}
-
 /// One revoked key, assembled from its map key and [`RevocationBody`] at load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revocation {
@@ -59,47 +52,41 @@ pub struct Revocation {
 /// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
 /// yields an empty list — nothing is revoked.
 pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
-    Ok(git_store::Store::open(repo)?
-        .load::<Revocations>(REVOKED_REF)?
-        .map(|doc| {
-            doc.revoked
-                .into_iter()
-                .map(|(fingerprint, body)| Revocation {
-                    fingerprint,
-                    reason: body.reason,
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+    git_store::Store::open(repo)?.load_map(REVOKED_REF, |fingerprint, body: RevocationBody| {
+        Revocation {
+            fingerprint,
+            reason: body.reason,
+        }
+    })
 }
 
 /// Write `revocations` to [`REVOKED_REF`] in `repo`, replacing any existing
 /// list as a new commit.
 pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
-    let doc = Revocations {
-        revoked: revocations
-            .iter()
-            .cloned()
-            .map(|revocation| {
-                (
-                    revocation.fingerprint,
-                    RevocationBody {
-                        reason: revocation.reason,
-                    },
-                )
-            })
-            .collect(),
-    };
-    git_store::Store::open(repo)?.store(REVOKED_REF, &doc, "Update revocations")
+    git_store::Store::open(repo)?.store_map(
+        REVOKED_REF,
+        revocations,
+        |revocation| {
+            (
+                revocation.fingerprint.clone(),
+                RevocationBody {
+                    reason: revocation.reason.clone(),
+                },
+            )
+        },
+        "Update revocations",
+    )
 }
 
 /// The set of revoked fingerprints recorded at [`REVOKED_REF`] from an
 /// already-open `store`, for the verifier to subtract from the trust set.
 pub fn fingerprints_with(store: &git_store::Store) -> Result<BTreeSet<String>, git_store::Error> {
     Ok(store
-        .load::<Revocations>(REVOKED_REF)?
-        .map(|doc| doc.revoked.into_keys().collect())
-        .unwrap_or_default())
+        .load_map(REVOKED_REF, |fingerprint, _body: RevocationBody| {
+            fingerprint
+        })?
+        .into_iter()
+        .collect())
 }
 
 /// The set of revoked fingerprints recorded at [`REVOKED_REF`] in `repo`. See
@@ -179,6 +166,14 @@ mod tests {
                 revocation("cc:dd", "")
             ]
         );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn store_rejects_a_fingerprint_that_is_not_a_safe_ref_segment() {
+        let repo = unique_repo();
+        let result = store(&repo, &[revocation("aa/bb", "slash is not a safe segment")]);
+        assert!(matches!(result, Err(git_store::Error::InvalidKey(_))));
         let _ = std::fs::remove_dir_all(&repo);
     }
 }

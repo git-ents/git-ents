@@ -29,7 +29,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use git_ents::checks::{self, Check, RunOutcome};
+use git_ents::checks::{self, Check, RunOutcome, Status};
 use tokio::sync::Mutex;
 
 /// Where the pushed tree is unpacked inside the Sprite.
@@ -77,7 +77,7 @@ pub fn post_receive() -> Result<(), String> {
         // Record the run as `queued` straight away so it shows up on the Checks
         // tab the moment the push lands, before the worker picks it up; a
         // recording hiccup is reported but never fails the hook.
-        let queued = statuses(&runnable, "queued");
+        let queued = statuses(&runnable, Status::Queued);
         if let Err(e) = checks::record(&repo, update.new, &queued) {
             eprintln!(
                 "checks: could not record queued run for {}: {e}",
@@ -95,12 +95,12 @@ pub fn post_receive() -> Result<(), String> {
 
 /// Every check's [`RunOutcome`] set to one shared `status` — the queued/running
 /// snapshot a run starts from before per-check results land.
-fn statuses(checks: &[Check], status: &str) -> Vec<RunOutcome> {
+fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
     checks
         .iter()
         .map(|check| RunOutcome {
             name: check.name.clone(),
-            outcome: status.to_owned(),
+            status,
             duration_secs: None,
             log_url: None,
         })
@@ -193,7 +193,7 @@ fn process_job(job: &Job) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut outcomes = statuses(&runnable, "running");
+    let mut outcomes = statuses(&runnable, Status::Running);
     let sprite = sprite_name(&job.repo);
     if let Err(e) = ensure_auth().and_then(|()| ensure_sprite(&sprite)) {
         finalize_error(&job.repo, &job.new, &mut outcomes);
@@ -214,7 +214,7 @@ fn process_job(job: &Job) -> Result<(), String> {
     for (index, check) in runnable.iter().enumerate() {
         let result = run_one(&sprite, check);
         if let Some(outcome) = outcomes.get_mut(index) {
-            outcome.outcome = result.to_owned();
+            outcome.status = result;
         }
         advance(&job.repo, &job.new, &outcomes);
     }
@@ -233,7 +233,7 @@ fn advance(repo: &Path, new: &str, outcomes: &[RunOutcome]) {
 /// a run the worker could not carry out.
 fn finalize_error(repo: &Path, new: &str, outcomes: &mut [RunOutcome]) {
     for outcome in outcomes.iter_mut() {
-        outcome.outcome = "error".to_owned();
+        outcome.status = Status::Error;
     }
     advance(repo, new, outcomes);
 }
@@ -416,9 +416,9 @@ fn sync_tree(repo: &Path, sprite: &str, new: &str) -> Result<(), String> {
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Run one check in the Sprite's [`WORKDIR`], logging a `PASS`/`FAIL` line and
-/// echoing the output on failure. Returns its outcome (`pass`/`fail`/`error`); a
-/// check that exceeds [`CHECK_TIMEOUT`] or cannot be captured is `error`.
-fn run_one(sprite: &str, check: &Check) -> &'static str {
+/// echoing the output on failure. Returns its outcome; a check that exceeds
+/// [`CHECK_TIMEOUT`] or cannot be captured is [`Status::Error`].
+fn run_one(sprite: &str, check: &Check) -> Status {
     let child = Command::new("sprite")
         .args([
             "exec",
@@ -438,7 +438,7 @@ fn run_one(sprite: &str, check: &Check) -> &'static str {
         Ok(child) => child,
         Err(e) => {
             eprintln!("checks: ERROR {} (could not run: {e})", check.name);
-            return "error";
+            return Status::Error;
         }
     };
     let Some(output) = wait_bounded(child, CHECK_TIMEOUT) else {
@@ -446,11 +446,11 @@ fn run_one(sprite: &str, check: &Check) -> &'static str {
             "checks: ERROR {} (timed out after {:?} or could not be captured)",
             check.name, CHECK_TIMEOUT
         );
-        return "error";
+        return Status::Error;
     };
     if output.status.success() {
         eprintln!("checks: PASS {}", check.name);
-        "pass"
+        Status::Pass
     } else {
         eprintln!("checks: FAIL {} ({})", check.name, check.command);
         let logs = String::from_utf8_lossy(&output.stderr);
@@ -462,7 +462,7 @@ fn run_one(sprite: &str, check: &Check) -> &'static str {
         for line in logs.lines() {
             eprintln!("checks:   {line}");
         }
-        "fail"
+        Status::Fail
     }
 }
 
