@@ -233,31 +233,82 @@ pub(super) fn edit_config(
     config.homepage = edit.homepage.clone();
     config.topics = edit.topics.clone();
 
-    let staging = format!("refs/web-staging/{}", random_token()?);
-    let result = stage_and_push(repo, &staging, &config, &username, signing_key, seed, hooks);
-    // Clean up the staging ref whether or not the push was accepted.
-    let _cleanup = git(repo, &["update-ref", "-d", &staging]);
-    result
+    signed_edit(
+        repo,
+        git_ents::config::CONFIG_REF,
+        &config,
+        "Update configuration",
+        &username,
+        signing_key,
+        seed,
+        hooks,
+    )
 }
 
-/// Point `staging` at the current config tip, build the new config commit on it
-/// authored by `username`, then push it signed with the server's key onto
-/// `refs/meta/config`.
-fn stage_and_push(
+/// Land `value` onto `target_ref` as a real `git push --signed`, authored by
+/// `username` and signed with the server's own `signing_key`, through the
+/// same `pre-receive` gate a CLI push traverses — the one landing operation
+/// every authenticated browser write shares, whatever meta-ref it targets.
+///
+/// The contract: `value` is built on a fresh ref staged at `target_ref`'s
+/// current tip (so the push is a clean fast-forward), the staging ref is
+/// *always* deleted before returning — whether or not the push was accepted,
+/// so a rejected edit never leaves a zombie ref behind — and the commit that
+/// lands is authored by `username` while the server is the committer.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the server identity a signed edit requires"
+)]
+fn signed_edit<T: for<'a> facet::Facet<'a>>(
     repo: &Path,
-    staging: &str,
-    config: &git_ents::config::Config,
+    target_ref: &str,
+    value: &T,
+    message: &str,
     username: &str,
     signing_key: &Path,
     seed: &str,
     hooks: &Path,
 ) -> Result<(), String> {
-    if let Some(tip) = rev_parse(repo, git_ents::config::CONFIG_REF) {
+    let staging = format!("refs/web-staging/{}", random_token()?);
+    let result = stage_and_push(
+        repo,
+        &staging,
+        target_ref,
+        value,
+        message,
+        username,
+        signing_key,
+        seed,
+        hooks,
+    );
+    // Clean up the staging ref whether or not the push was accepted.
+    let _cleanup = git(repo, &["update-ref", "-d", &staging]);
+    result
+}
+
+/// Point `staging` at `target_ref`'s current tip, build the new commit on it
+/// authored by `username`, then push it signed with the server's key onto
+/// `target_ref`.
+#[expect(clippy::too_many_arguments, reason = "internal step of signed_edit")]
+fn stage_and_push<T: for<'a> facet::Facet<'a>>(
+    repo: &Path,
+    staging: &str,
+    target_ref: &str,
+    value: &T,
+    message: &str,
+    username: &str,
+    signing_key: &Path,
+    seed: &str,
+    hooks: &Path,
+) -> Result<(), String> {
+    if let Some(tip) = rev_parse(repo, target_ref) {
         git(repo, &["update-ref", staging, &tip])
             .map_err(|e| format!("could not stage the edit: {e}"))?;
     }
     let email = format!("{username}@web");
-    git_ents::config::store_to_ref_authored(repo, staging, config, (username, &email))
+    git_store::Store::open(repo)
+        .map_err(|e| format!("could not open store: {e}"))?
+        .store_authored(staging, value, message, (username, &email))
         .map_err(|e| format!("could not build the edit: {e}"))?;
 
     let signer = signing_key
@@ -270,7 +321,7 @@ fn stage_and_push(
         "git -c receive.certNonceSeed={seed} -c receive.certNonceSlop=60 -c core.hooksPath={hooks} receive-pack"
     );
     let url = format!("file://{}", repo.display());
-    let refspec = format!("{staging}:{}", git_ents::config::CONFIG_REF);
+    let refspec = format!("{staging}:{target_ref}");
 
     let output = Command::new("git")
         .arg("-C")
