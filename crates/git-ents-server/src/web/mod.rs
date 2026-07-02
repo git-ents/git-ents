@@ -9,6 +9,7 @@
 //! This file owns routing and the shared page shell.
 
 mod assets;
+mod debug;
 mod git;
 mod icons;
 mod pages;
@@ -26,6 +27,7 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use crate::AppState;
 use crate::http::{MAX_REPO_DEPTH, is_bare_repo, valid_segment};
 
+pub(crate) use self::debug::handshake;
 pub(crate) use self::write::{Challenges, Sessions, new_challenges, new_sessions};
 
 /// Who is signed in for the current request, resolved per repository: a member's
@@ -64,6 +66,14 @@ pub(crate) async fn render(
             None => write::issue_challenge(&state.challenges).ok(),
         };
         return login_page(session.as_ref(), challenge.as_deref(), None).into_response();
+    }
+    // The CLI signs in the same way the browser form does, just without the
+    // HTML: a bare nonce to sign, and (via `handle_post`) a bare token back.
+    if segments == ["login", "cli"] {
+        return match write::issue_challenge(&state.challenges) {
+            Ok(nonce) => nonce.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        };
     }
 
     if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
@@ -121,6 +131,12 @@ pub(crate) async fn handle_post(
                 let challenge = write::issue_challenge(&state.challenges).ok();
                 login_page(None, challenge.as_deref(), Some(&error)).into_response()
             }
+        };
+    }
+    if segments == ["login", "cli"] {
+        return match write::login(&state.sessions, &state.challenges, &body) {
+            Ok(token) => token.into_response(),
+            Err(error) => (StatusCode::UNAUTHORIZED, error).into_response(),
         };
     }
     if segments == ["logout"] {

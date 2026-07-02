@@ -8,6 +8,8 @@
 //! `refs/meta/member/*` refs into the local repository, editing them through
 //! [`git_ents::members`], and pushing them back.
 
+mod debug_session;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -41,6 +43,17 @@ enum Top {
     Checks {
         #[command(subcommand)]
         action: ChecksAction,
+    },
+    /// Sign in to a remote's server the same way the web UI does — sign a
+    /// server-issued challenge with your key — so this machine can also open a
+    /// debug session (`checks debug`).
+    Login {
+        /// Remote whose server to sign in to.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Key to sign in with; defaults to `user.signingkey`.
+        #[arg(long)]
+        key: Option<PathBuf>,
     },
 }
 
@@ -171,6 +184,14 @@ enum ChecksAction {
         #[arg(default_value = "origin")]
         remote: String,
     },
+    /// Open an interactive, read-write shell in `remote`'s persistent checks
+    /// Sprite — the same sandbox its check runs execute in. Requires
+    /// `git ents login <remote>` first.
+    Debug {
+        /// Remote whose checks Sprite to open a shell in.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -179,6 +200,7 @@ fn main() -> ExitCode {
         Top::Members { action } => run_members(action),
         Top::Account { action } => run_account(action),
         Top::Checks { action } => run_checks(action),
+        Top::Login { remote, key } => login(&remote, key.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -242,6 +264,7 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
             remote,
         } => add_check(&name, &command, &remote),
         ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
+        ChecksAction::Debug { remote } => checks_debug(&remote),
     }
 }
 
@@ -710,6 +733,209 @@ fn account_create(
     push_signed(remote, account::ACCOUNT_REF, expected.as_deref())?;
     println!("created account {username}");
     Ok(())
+}
+
+/// The SSHSIG namespace a sign-in signature is made under; must match the
+/// server's `git-ents-server::web::write::LOGIN_NAMESPACE`.
+const LOGIN_NAMESPACE: &str = "git-ents-login";
+
+/// Sign in to `remote`'s server: fetch its one-time challenge, sign it locally
+/// with `key` (never handing the private key anywhere), and post the
+/// signature back — the same proof the browser login page collects by hand.
+/// The returned session token is stored locally so `checks_debug` can reuse
+/// it.
+fn login(remote: &str, key: Option<&Path>) -> Result<(), String> {
+    let (base, _repo_path) = remote_http_base(remote)?;
+    let private_key = signing_key_file(key)?;
+    let public_key = public_key(key)?;
+
+    let nonce = http_get(&format!("{base}/login/cli"))?;
+    let signature = sign_challenge(&private_key, &nonce)?;
+    let body = form_urlencoded::Serializer::new(String::new())
+        .append_pair("public_key", &public_key)
+        .append_pair("signature", &signature)
+        .append_pair("nonce", &nonce)
+        .finish();
+    let token = http_post_form(&format!("{base}/login/cli"), &body)?;
+
+    store_session(&host_of(&base)?, &token)?;
+    println!("signed in to {remote}");
+    Ok(())
+}
+
+/// Open an interactive, read-write shell in `remote`'s persistent checks
+/// Sprite, brokered by the server over a WebSocket using the session
+/// `login` stored.
+fn checks_debug(remote: &str) -> Result<(), String> {
+    let (base, repo_path) = remote_http_base(remote)?;
+    let host = host_of(&base)?;
+    let token = load_session(&host)?
+        .ok_or_else(|| format!("not signed in to {remote}; run `git ents login {remote}` first"))?;
+    let ws_url = format!("{}/_debug/{repo_path}", to_ws(&base));
+
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| format!("could not start the async runtime: {error}"))?;
+    runtime.block_on(crate::debug_session::run(&ws_url, &token))
+}
+
+/// The path to the private half of the signing key to use: `key` verbatim, or
+/// the path behind `user.signingkey`, resolved the same way `setup` does.
+fn signing_key_file(key: Option<&Path>) -> Result<PathBuf, String> {
+    match key {
+        Some(path) => Ok(key_paths(path).0),
+        None => {
+            let configured = config_get("user.signingkey")
+                .ok_or("no --key given and user.signingkey is unset")?;
+            Ok(key_paths(&signing_key_path(&configured)).0)
+        }
+    }
+}
+
+/// Sign `nonce` under [`LOGIN_NAMESPACE`] with the private key at `path`,
+/// returning the armored SSH signature. `ssh-keygen -Y sign` only writes a
+/// signature next to a file it read, so the nonce is staged there first.
+fn sign_challenge(private_key: &Path, nonce: &str) -> Result<String, String> {
+    let dir = tempfile::tempdir().map_err(|error| format!("could not create temp dir: {error}"))?;
+    let data = dir.path().join("nonce");
+    std::fs::write(&data, nonce).map_err(|error| format!("could not write challenge: {error}"))?;
+    let status = Command::new("ssh-keygen")
+        .args(["-Y", "sign", "-f"])
+        .arg(private_key)
+        .args(["-n", LOGIN_NAMESPACE])
+        .arg(&data)
+        .status()
+        .map_err(|error| format!("could not run ssh-keygen: {error}"))?;
+    if !status.success() {
+        return Err("ssh-keygen could not sign the challenge".to_owned());
+    }
+    std::fs::read_to_string(dir.path().join("nonce.sig"))
+        .map_err(|error| format!("could not read the signature: {error}"))
+}
+
+/// The server's http(s) base URL and repository path (without `.git`) for
+/// `remote`'s configured URL, e.g. `https://ents.example.com` and `org/repo`.
+fn remote_http_base(remote: &str) -> Result<(String, String), String> {
+    let url = git_capture(&["remote", "get-url", remote])?;
+    let url = url.trim();
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| format!("{remote} is not an http(s) remote; login and debug need one"))?;
+    if scheme != "http" && scheme != "https" {
+        return Err(format!(
+            "{remote} is not an http(s) remote; login and debug need one"
+        ));
+    }
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let repo_path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    Ok((format!("{scheme}://{host}"), repo_path.to_owned()))
+}
+
+/// The `host[:port]` portion of an `http(s)://host[:port]` base URL.
+fn host_of(base: &str) -> Result<String, String> {
+    base.split_once("://")
+        .map(|(_scheme, host)| host.to_owned())
+        .ok_or_else(|| "malformed server URL".to_owned())
+}
+
+/// Rewrite an `http(s)://` base URL to its `ws(s)://` equivalent.
+fn to_ws(base: &str) -> String {
+    if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        base.to_owned()
+    }
+}
+
+/// GET `url`, returning the response body, or its body text as the error on a
+/// non-2xx status.
+fn http_get(url: &str) -> Result<String, String> {
+    let mut response = ureq::get(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|error| format!("GET {url} failed: {error}"))?;
+    let status = response.status();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("could not read the response: {error}"))?;
+    if status.is_success() {
+        Ok(text)
+    } else if text.is_empty() {
+        Err(format!("GET {url} returned {status}"))
+    } else {
+        Err(text)
+    }
+}
+
+/// POST an `application/x-www-form-urlencoded` `body` to `url`, returning the
+/// response body, or its body text as the error on a non-2xx status.
+fn http_post_form(url: &str, body: &str) -> Result<String, String> {
+    let mut response = ureq::post(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .send(body)
+        .map_err(|error| format!("POST {url} failed: {error}"))?;
+    let status = response.status();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("could not read the response: {error}"))?;
+    if status.is_success() {
+        Ok(text)
+    } else if text.is_empty() {
+        Err(format!("POST {url} returned {status}"))
+    } else {
+        Err(text)
+    }
+}
+
+/// Where `login` stores the session token for `host`, one file per host.
+fn session_path(host: &str) -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_unset| "HOME is not set".to_owned())?;
+    let sanitized: String = host
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(Path::new(&home)
+        .join(".config/git-ents/sessions")
+        .join(sanitized))
+}
+
+/// Persist the session `token` for `host`, restricted to the owner.
+fn store_session(host: &str, token: &str) -> Result<(), String> {
+    let path = session_path(host)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+    }
+    std::fs::write(&path, token).map_err(|error| format!("could not write session: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _permissions = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// The stored session token for `host`, if `login` has been run against it.
+fn load_session(host: &str) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(session_path(host)?) {
+        Ok(token) => Ok(Some(token.trim().to_owned())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("could not read the stored session: {error}")),
+    }
 }
 
 /// This client's own signing-key fingerprint, best-effort — `None` when no key

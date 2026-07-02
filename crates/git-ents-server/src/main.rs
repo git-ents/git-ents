@@ -161,6 +161,7 @@ async fn serve(args: Args) -> ExitCode {
     let app = Router::new()
         .route("/healthz", get(http::health))
         .route("/", get(http::get_request))
+        .route("/_debug/{*path}", get(web::handshake))
         .route("/{*path}", get(http::get_request).post(http::post_request))
         .layer(DefaultBodyLimit::disable())
         .with_state(state);

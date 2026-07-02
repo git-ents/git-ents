@@ -314,7 +314,10 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
 
 /// A Sprite name derived from the repository directory, kept to the
 /// `[a-z0-9-]` a Sprite name allows so the same repo reuses the same sandbox.
-fn sprite_name(repo: &Path) -> String {
+///
+/// Shared with [`crate::web`]'s debug-session broker, which targets the same
+/// persistent per-repo Sprite a check run used.
+pub(crate) fn sprite_name(repo: &Path) -> String {
     let stem = repo
         .file_name()
         .map(|name| name.to_string_lossy())
@@ -341,7 +344,7 @@ fn sprite_name(repo: &Path) -> String {
 /// token per call, so without this it reports "no organizations configured"
 /// even with the token in the environment. `auth setup` is idempotent, so it is
 /// run on every push to keep the steady state self-healing.
-fn ensure_auth() -> Result<(), String> {
+pub(crate) fn ensure_auth() -> Result<(), String> {
     let token = std::env::var("SPRITES_TOKEN")
         .ok()
         .ok_or("SPRITES_TOKEN is not set in the hook environment")?;
@@ -363,7 +366,7 @@ fn ensure_auth() -> Result<(), String> {
 /// fails when the Sprite is already there, which is the steady state once the
 /// first push has run, so its failure is tolerated and surfaces only later if
 /// the Sprite turns out to be unreachable.
-fn ensure_sprite(sprite: &str) -> Result<(), String> {
+pub(crate) fn ensure_sprite(sprite: &str) -> Result<(), String> {
     let _existing = Command::new("sprite")
         .args(["create", "--skip-console", sprite])
         .output()

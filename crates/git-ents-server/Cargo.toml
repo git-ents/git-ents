@@ -12,7 +12,7 @@ askama = { workspace = true }
 acdc-converters-core = { workspace = true }
 acdc-converters-html = { workspace = true }
 arborium = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 clap = { workspace = true }
 clap_mangen = { workspace = true }
 facet = { workspace = true }

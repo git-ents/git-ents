@@ -7,11 +7,17 @@ license.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+crossterm = "0.29.0"
 facet = { workspace = true }
+form_urlencoded.workspace = true
+futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
 git-store = { workspace = true }
 iddqd = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
+ureq = "3.3.0"
 
 [lints]
 workspace = true
