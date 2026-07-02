@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "git-ents"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "git-ents-server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "acdc-converters-core",
  "acdc-converters-html",
