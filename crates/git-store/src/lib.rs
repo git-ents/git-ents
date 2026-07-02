@@ -256,10 +256,7 @@ impl Store {
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
-        if !ref_segment_ok(id) {
-            return Err(Error::InvalidKey(id.to_owned()));
-        }
-        self.store(&format!("{prefix}/{id}"), value, message)
+        self.store(&item_ref(prefix, id)?, value, message)
     }
 
     /// Like [`store_item`](Self::store_item), but attributing authorship to
@@ -274,10 +271,7 @@ impl Store {
         message: &str,
         author: (&str, &str),
     ) -> Result<(), Error> {
-        if !ref_segment_ok(id) {
-            return Err(Error::InvalidKey(id.to_owned()));
-        }
-        self.store_impl(&format!("{prefix}/{id}"), value, message, Some(author))
+        self.store_authored(&item_ref(prefix, id)?, value, message, author)
     }
 
     /// Like [`store_item`](Self::store_item), but for a [`HasId`] value that
@@ -372,13 +366,15 @@ impl Store {
         let Some(tip) = self.ref_commit(refname)? else {
             return Ok(None);
         };
-        let updated = self.read_authorship(&tip)?;
-        let mut genesis = tip;
-        while let Some(parent) = self.read_commit(&genesis)?.parents.into_iter().next() {
-            genesis = parent;
+        let mut commit = self.read_commit(&tip)?;
+        let updated = commit.author.clone();
+        while let Some(parent) = commit.parents.first().copied() {
+            commit = self.read_commit(&parent)?;
         }
-        let created = self.read_authorship(&genesis)?;
-        Ok(Some(Provenance { created, updated }))
+        Ok(Some(Provenance {
+            created: commit.author,
+            updated,
+        }))
     }
 
     /// [`provenance`](Self::provenance) for the item `id` under the collection
@@ -427,7 +423,8 @@ impl Store {
         }
     }
 
-    /// Read `oid`'s tree, parents, and committer date from the durable store.
+    /// Read `oid`'s tree, parents, author, and committer date from the
+    /// durable store.
     fn read_commit(&self, oid: &ObjectId) -> Result<CommitFacts, Error> {
         let mut buffer = Vec::new();
         let commit = self
@@ -438,27 +435,18 @@ impl Store {
             .committer()
             .map_err(|error| Error::Object(error.to_string()))?
             .seconds();
+        let author = commit
+            .author()
+            .map_err(|error| Error::Object(error.to_string()))?;
         Ok(CommitFacts {
             tree: commit.tree(),
             parents: commit.parents().collect(),
             seconds: u64::try_from(seconds).unwrap_or(0),
-        })
-    }
-
-    /// Read the author stamped on `oid`'s commit header.
-    fn read_authorship(&self, oid: &ObjectId) -> Result<Authorship, Error> {
-        let mut buffer = Vec::new();
-        let commit = self
-            .odb
-            .find_commit(oid, &mut buffer)
-            .map_err(|error| Error::Object(error.to_string()))?;
-        let author = commit
-            .author()
-            .map_err(|error| Error::Object(error.to_string()))?;
-        Ok(Authorship {
-            name: author.name.to_string(),
-            email: author.email.to_string(),
-            seconds: u64::try_from(author.seconds()).unwrap_or(0),
+            author: Authorship {
+                name: author.name.to_string(),
+                email: author.email.to_string(),
+                seconds: u64::try_from(author.seconds()).unwrap_or(0),
+            },
         })
     }
 
@@ -534,6 +522,16 @@ impl Store {
 /// contention; ordinary racing writers resolve within one or two rounds.
 const MAX_MERGE_RETRIES: usize = 5;
 
+/// The ref name for item `id` under the collection namespace `prefix`
+/// (`{prefix}/{id}`), rejecting an `id` that fails [`ref_segment_ok`] since it
+/// becomes the ref's last path segment.
+fn item_ref(prefix: &str, id: &str) -> Result<String, Error> {
+    if !ref_segment_ok(id) {
+        return Err(Error::InvalidKey(id.to_owned()));
+    }
+    Ok(format!("{prefix}/{id}"))
+}
+
 /// An author identity and date read off one of a document ref's commits —
 /// recovered from the commit header rather than stored in the document tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -555,11 +553,13 @@ pub struct Provenance {
     pub updated: Authorship,
 }
 
-/// The facts read off a commit: its tree, its parents, and its committer date.
+/// The facts read off a commit: its tree, its parents, its author, and its
+/// committer date.
 struct CommitFacts {
     tree: ObjectId,
     parents: Vec<ObjectId>,
     seconds: u64,
+    author: Authorship,
 }
 
 #[cfg(test)]
