@@ -2,8 +2,10 @@
 //!
 //! An [`Anchor`] records exactly where in a repository something (a comment, a
 //! review note) was attached: the commit it was written against, the path and
-//! blob at that commit, an optional line range, and the anchored text itself.
-//! The anchor is authoritative at creation and never mutated. [`project`]
+//! blob at that commit, and an optional line range. The anchored text is never
+//! stored — the blob is content-addressed, so [`snippet`] derives it exactly
+//! at read time. The anchor is authoritative at creation and never mutated.
+//! [`project`]
 //! answers, at read time, where that position sits on any *other* commit —
 //! following renames through git's rewrite tracking and shifting line ranges
 //! through the blob's diff hunks, the way git itself re-derives positions when
@@ -83,9 +85,6 @@ pub struct Anchor {
     pub blob: String,
     /// The anchored lines, or `None` for a whole-file anchor.
     pub lines: Option<LineRange>,
-    /// The exact text of the anchored lines (empty for a whole-file anchor),
-    /// kept for display and for fuzzy re-matching as a later enhancement.
-    pub snippet: String,
 }
 
 /// Where an [`Anchor`] sits on a target commit, as computed by [`project`].
@@ -114,9 +113,9 @@ pub enum Projection {
 }
 
 /// Build the [`Anchor`] for `path` (and optionally `lines`) as it exists at
-/// `revision` in `repo`, resolving the revision to a full commit id, recording
-/// the file's blob id, and capturing the anchored lines' exact text. Fails
-/// when the path is not a file at that commit or the range does not fit it.
+/// `revision` in `repo`, resolving the revision to a full commit id and
+/// recording the file's blob id. Fails when the path is not a file at that
+/// commit or the range does not fit it.
 pub fn capture(
     repo: &Path,
     revision: &str,
@@ -138,35 +137,51 @@ pub fn capture(
             path: path.to_owned(),
         })?;
     let blob = entry.object_id();
-    let snippet = match lines {
-        None => String::new(),
-        Some(range) => {
-            let data = read_blob(&repo, blob)?;
-            let all: Vec<&[u8]> = data.lines_with_terminator().collect();
-            let out_of_range = || Error::LinesOutOfRange {
-                path: path.to_owned(),
-                start: range.start,
-                end: range.end,
-                len: u64::try_from(all.len()).unwrap_or(u64::MAX),
-            };
-            // One slice lookup validates the whole range: start == 0 dies in
-            // checked_sub, an inverted or oversized range dies in get.
-            let first = usize::try_from(range.start)
-                .ok()
-                .and_then(|start| start.checked_sub(1))
-                .ok_or_else(out_of_range)?;
-            let last = usize::try_from(range.end).ok().ok_or_else(out_of_range)?;
-            let bytes = all.get(first..last).ok_or_else(out_of_range)?.concat();
-            String::from_utf8_lossy(&bytes).into_owned()
-        }
-    };
+    if let Some(range) = lines {
+        let data = read_blob(&repo, blob)?;
+        lines_of(&data, path, range)?;
+    }
     Ok(Anchor {
         commit: commit_id,
         path: path.to_owned(),
         blob: blob.to_string(),
         lines,
-        snippet,
     })
+}
+
+/// The exact text of `anchor`'s lines — the whole file for a whole-file
+/// anchor — derived at read time from the content-addressed blob the anchor
+/// names, so it can never disagree with what was anchored.
+pub fn snippet(repo: &Path, anchor: &Anchor) -> Result<String, Error> {
+    let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
+    let blob = ObjectId::from_hex(anchor.blob.as_bytes())
+        .map_err(|_error| Error::Resolve(anchor.blob.clone()))?;
+    let data = read_blob(&repo, blob)?;
+    match anchor.lines {
+        None => Ok(String::from_utf8_lossy(&data).into_owned()),
+        Some(range) => lines_of(&data, &anchor.path, range),
+    }
+}
+
+/// The text of the 1-based inclusive `range` within `data`, or
+/// [`Error::LinesOutOfRange`] (naming `path`) when the range does not fit.
+fn lines_of(data: &[u8], path: &str, range: LineRange) -> Result<String, Error> {
+    let all: Vec<&[u8]> = data.lines_with_terminator().collect();
+    let out_of_range = || Error::LinesOutOfRange {
+        path: path.to_owned(),
+        start: range.start,
+        end: range.end,
+        len: u64::try_from(all.len()).unwrap_or(u64::MAX),
+    };
+    // One slice lookup validates the whole range: start == 0 dies in
+    // checked_sub, an inverted or oversized range dies in get.
+    let first = usize::try_from(range.start)
+        .ok()
+        .and_then(|start| start.checked_sub(1))
+        .ok_or_else(out_of_range)?;
+    let last = usize::try_from(range.end).ok().ok_or_else(out_of_range)?;
+    let bytes = all.get(first..last).ok_or_else(out_of_range)?.concat();
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Project `anchor` onto `target` (a revision in `repo`): the fast path
@@ -412,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_records_the_commit_blob_and_snippet() {
+    fn capture_records_the_commit_and_blob_and_snippet_derives_the_text() {
         let dir = repo();
         std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
         commit_all(dir.path(), "one");
@@ -420,9 +435,9 @@ mod tests {
         let anchor = capture(dir.path(), "HEAD", "file.txt", range(3, 4)).unwrap();
         assert_eq!(anchor.commit, head(dir.path()));
         assert_eq!(anchor.path, "file.txt");
-        assert_eq!(anchor.snippet, "line 3\nline 4\n");
         assert_eq!(anchor.lines, range(3, 4));
         assert!(!anchor.blob.is_empty());
+        assert_eq!(snippet(dir.path(), &anchor).unwrap(), "line 3\nline 4\n");
     }
 
     #[test]
@@ -559,7 +574,7 @@ mod tests {
         std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
         commit_all(dir.path(), "one");
         let anchor = capture(dir.path(), "HEAD", "file.txt", None).unwrap();
-        assert_eq!(anchor.snippet, "");
+        assert_eq!(snippet(dir.path(), &anchor).unwrap(), numbered(1..=10));
 
         let edited = numbered(1..=10).replace("line 5\n", "line five\n");
         std::fs::write(dir.path().join("file.txt"), edited).unwrap();

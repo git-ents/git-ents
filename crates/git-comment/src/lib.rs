@@ -134,7 +134,6 @@ mod tests {
                 path: "src/lib.rs".to_owned(),
                 blob: "89abcdef0123456789abcdef0123456789abcdef".to_owned(),
                 lines: Some(LineRange { start: 3, end: 4 }),
-                snippet: "let x = 1;\nlet y = 2;\n".to_owned(),
             },
             issue: issue.map(str::to_owned),
         }
@@ -248,7 +247,10 @@ mod tests {
         store(dir.path(), &id, &written, AUTHOR).unwrap();
 
         let loaded = load(dir.path(), &id).unwrap().unwrap();
-        assert_eq!(loaded.anchor.snippet, "two\n");
+        assert_eq!(
+            git_anchor::snippet(dir.path(), &loaded.anchor).unwrap(),
+            "two\n"
+        );
         assert_eq!(
             project(dir.path(), &loaded, "HEAD").unwrap(),
             Projection::Current
@@ -280,7 +282,7 @@ mod tests {
     #[test]
     fn loads_the_on_disk_comment_format() {
         // A fixture written as the real on-disk layout — a `body` blob, an
-        // `anchor/` subtree of `commit`/`path`/`blob`/`snippet` blobs with a
+        // `anchor/` subtree of `commit`/`path`/`blob` blobs with a
         // `lines/some/{start,end}` Option subtree, and an `issue/some` Option
         // blob — must keep loading, guarding the Comment document's shape
         // against an incompatible change to data already on a ref.
@@ -311,12 +313,10 @@ mod tests {
                 "100644 blob {}\tcommit\n\
                  100644 blob {}\tpath\n\
                  100644 blob {}\tblob\n\
-                 040000 tree {lines_tree}\tlines\n\
-                 100644 blob {}\tsnippet\n",
+                 040000 tree {lines_tree}\tlines\n",
                 blob(&expected.anchor.commit),
                 blob(&expected.anchor.path),
                 blob(&expected.anchor.blob),
-                blob(&expected.anchor.snippet),
             ),
         );
         let issue_tree = git_with_stdin(
