@@ -11,7 +11,7 @@ gix = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+git-store = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

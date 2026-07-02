@@ -364,59 +364,9 @@ mod tests {
         reason = "unit test"
     )]
 
-    use std::path::Path;
-    use std::process::Command;
+    use git_store::test_support::{commit_all, head, repo};
 
     use super::*;
-
-    fn repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(["init", "-q"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        dir
-    }
-
-    fn commit_all(dir: &Path, message: &str) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["add", "-A"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "user.name=test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-q",
-                "-m",
-                message,
-            ])
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    fn head(dir: &Path) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    }
 
     fn numbered(range: std::ops::RangeInclusive<u32>) -> String {
         range.map(|n| format!("line {n}\n")).collect()

@@ -1248,8 +1248,8 @@ name = "git-anchor"
 version = "0.0.0"
 dependencies = [
  "facet",
+ "git-store",
  "gix",
- "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -1260,7 +1260,6 @@ dependencies = [
  "facet",
  "git-anchor",
  "git-store",
- "tempfile",
 ]
 
 [[package]]

@@ -14,9 +14,8 @@
     reason = "test support"
 )]
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A freshly initialized, uniquely named git repository under the temp dir.
@@ -377,21 +376,5 @@ pub(crate) fn write_revocations_doc(repo: &Path, revoked: &[(&str, &str)]) {
 
 /// Run git in `repo` with `input` on stdin, returning its trimmed stdout.
 fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    git_store::test_support::git_with_stdin(repo, args, input)
 }

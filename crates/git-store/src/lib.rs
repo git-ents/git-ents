@@ -574,20 +574,22 @@ struct CommitFacts {
     author: Authorship,
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::let_underscore_must_use,
-        reason = "unit test"
-    )]
+/// Shared git test fixtures: a throwaway repository and the plumbing helpers
+/// the workspace's test suites drive it with, kept here once instead of as a
+/// copy per crate. Compiled for this crate's own tests and under the
+/// `test-support` feature, which downstream crates enable from their
+/// dev-dependencies.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    #![allow(clippy::unwrap_used, reason = "test fixture")]
 
-    use std::collections::BTreeMap;
-    use std::process::Command;
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
 
-    use super::*;
-
-    fn repo() -> tempfile::TempDir {
+    /// A fresh temporary directory holding an initialized git repository.
+    #[must_use]
+    pub fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let status = Command::new("git")
             .arg("-C")
@@ -598,6 +600,83 @@ mod tests {
         assert!(status.success());
         dir
     }
+
+    /// Stage everything in `dir` and commit it as `message` under the fixed
+    /// test identity.
+    pub fn commit_all(dir: &Path, message: &str) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["add", "-A"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// The full hex id of `dir`'s `HEAD` commit.
+    #[must_use]
+    pub fn head(dir: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    /// Run git in `repo` with `input` on stdin, returning its trimmed stdout.
+    #[must_use]
+    pub fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::let_underscore_must_use,
+        reason = "unit test"
+    )]
+
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::test_support::repo;
 
     fn entries(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

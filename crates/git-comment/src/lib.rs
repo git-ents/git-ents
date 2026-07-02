@@ -107,24 +107,12 @@ mod tests {
         reason = "unit test"
     )]
 
-    use std::io::Write as _;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
 
     use git_anchor::LineRange;
+    use git_store::test_support::{commit_all, git_with_stdin, repo};
 
     use super::*;
-
-    fn repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(["init", "-q"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        dir
-    }
 
     fn comment(body: &str, issue: Option<&str>) -> Comment {
         Comment {
@@ -207,29 +195,7 @@ mod tests {
     fn a_stored_comment_projects_onto_the_commit_it_was_written_against() {
         let dir = repo();
         std::fs::write(dir.path().join("file.txt"), "one\ntwo\nthree\n").unwrap();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(["add", "-A"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args([
-                "-c",
-                "user.name=test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-q",
-                "-m",
-                "one",
-            ])
-            .status()
-            .unwrap();
-        assert!(status.success());
+        commit_all(dir.path(), "one");
 
         let anchor = git_anchor::capture(
             dir.path(),
@@ -255,28 +221,6 @@ mod tests {
             project(dir.path(), &loaded, "HEAD").unwrap(),
             Projection::Current
         );
-    }
-
-    /// Run a git plumbing command in `repo` with `input` on stdin, returning
-    /// its trimmed stdout.
-    fn git_with_stdin(repo: &Path, args: &[&str], input: &str) -> String {
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
     #[test]
