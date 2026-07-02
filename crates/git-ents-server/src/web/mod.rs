@@ -570,7 +570,12 @@ fn login_page(
                     div.card-row.muted { "Could not sign in: " (error) }
                 }
                 @if let Some(nonce) = challenge {
-                    p.shell-note { "Run this, then paste the output and your public key:" }
+                    p.shell-note {
+                        "Have " code { "git-ents" } " installed? Run "
+                        code { "git ents login <remote>" }
+                        " instead."
+                    }
+                    p.shell-note { "Otherwise, run this, then paste the output and your public key:" }
                     pre.signin-cmd {
                         "printf %s '" (nonce) "' | ssh-keygen -Y sign -n "
                         (write::LOGIN_NAMESPACE) " -f ~/.ssh/your_web_key"

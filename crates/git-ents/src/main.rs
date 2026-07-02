@@ -737,7 +737,7 @@ fn account_create(
 
 /// The SSHSIG namespace a sign-in signature is made under; must match the
 /// server's `git-ents-server::web::write::LOGIN_NAMESPACE`.
-const LOGIN_NAMESPACE: &str = "git-ents-login";
+const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 
 /// Sign in to `remote`'s server: fetch its one-time challenge, sign it locally
 /// with `key` (never handing the private key anywhere), and post the

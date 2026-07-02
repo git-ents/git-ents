@@ -26,7 +26,7 @@ pub(super) const COOKIE: &str = "ents_session";
 /// The SSHSIG namespace a sign-in signature is made under — distinct from git's
 /// own `git` namespace, so a login signature can never double as a push and vice
 /// versa.
-pub(super) const LOGIN_NAMESPACE: &str = "git-ents-login";
+pub(super) const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 
 /// How long an issued sign-in challenge stays valid.
 const CHALLENGE_TTL: Duration = Duration::from_secs(600);

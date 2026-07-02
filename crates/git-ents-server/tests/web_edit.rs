@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-ents-server");
-const LOGIN_NAMESPACE: &str = "git-ents-login";
+const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 
 #[test]
 fn a_member_edits_settings_through_the_browser() {
