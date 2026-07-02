@@ -143,21 +143,20 @@ pub fn capture(
         Some(range) => {
             let data = read_blob(&repo, blob)?;
             let all: Vec<&[u8]> = data.lines_with_terminator().collect();
-            let len = u64::try_from(all.len()).unwrap_or(u64::MAX);
-            let out_of_range = Error::LinesOutOfRange {
+            let out_of_range = || Error::LinesOutOfRange {
                 path: path.to_owned(),
                 start: range.start,
                 end: range.end,
-                len,
+                len: u64::try_from(all.len()).unwrap_or(u64::MAX),
             };
-            if range.start == 0 || range.end < range.start || range.end > len {
-                return Err(out_of_range);
-            }
+            // One slice lookup validates the whole range: start == 0 dies in
+            // checked_sub, an inverted or oversized range dies in get.
             let first = usize::try_from(range.start)
-                .unwrap_or(usize::MAX)
-                .saturating_sub(1);
-            let last = usize::try_from(range.end).unwrap_or(usize::MAX);
-            let bytes = all.get(first..last).ok_or(out_of_range)?.concat();
+                .ok()
+                .and_then(|start| start.checked_sub(1))
+                .ok_or_else(out_of_range)?;
+            let last = usize::try_from(range.end).ok().ok_or_else(out_of_range)?;
+            let bytes = all.get(first..last).ok_or_else(out_of_range)?.concat();
             String::from_utf8_lossy(&bytes).into_owned()
         }
     };
@@ -280,15 +279,15 @@ fn resolve_commit<'repo>(
     repo: &'repo gix::Repository,
     revision: &str,
 ) -> Result<gix::Commit<'repo>, Error> {
-    let resolve = |_ignored| Error::Resolve(revision.to_owned());
+    let resolve = || Error::Resolve(revision.to_owned());
     repo.rev_parse_single(revision)
-        .map_err(|error| resolve(error.to_string()))?
+        .map_err(|_error| resolve())?
         .object()
-        .map_err(|error| resolve(error.to_string()))?
+        .map_err(|_error| resolve())?
         .peel_to_kind(gix::object::Kind::Commit)
-        .map_err(|error| resolve(error.to_string()))?
+        .map_err(|_error| resolve())?
         .try_into_commit()
-        .map_err(|error| resolve(error.to_string()))
+        .map_err(|_error| resolve())
 }
 
 /// Read the full contents of the blob at `id`.
@@ -306,34 +305,39 @@ fn read_blob(repo: &gix::Repository, id: ObjectId) -> Result<Vec<u8>, Error> {
 /// region itself changed, reported as `None` (outdated) rather than guessed
 /// at.
 fn map_range(old: &[u8], new: &[u8], range: LineRange) -> Option<LineRange> {
-    // Work in 0-based half-open line coordinates, as the hunks do.
-    let start = i64::try_from(range.start).ok()?.checked_sub(1)?;
-    let end = i64::try_from(range.end).ok()?;
-    if start < 0 || end <= start {
+    // Work in 0-based half-open line coordinates, as the hunks do. Everything
+    // stays unsigned: the shift is tallied as lines added and lines removed
+    // above the range, and any overflow is an honest `None` (outdated) via the
+    // checked arithmetic rather than a saturated wrong answer.
+    let start = range.start.checked_sub(1)?;
+    let end = range.end;
+    if end <= start {
         return None;
     }
     let input = InternedInput::new(old, new);
-    if end > i64::try_from(input.before.len()).ok()? {
+    if end > u64::try_from(input.before.len()).ok()? {
         return None;
     }
     let diff = Diff::compute(Algorithm::Histogram, &input);
-    let mut offset: i64 = 0;
+    let mut added: u64 = 0;
+    let mut removed: u64 = 0;
     for hunk in diff.hunks() {
-        let before_start = i64::from(hunk.before.start);
-        let before_end = i64::from(hunk.before.end);
+        let before_start = u64::from(hunk.before.start);
+        let before_end = u64::from(hunk.before.end);
         if before_end <= start {
-            let removed = before_end.saturating_sub(before_start);
-            let added = i64::from(hunk.after.end).saturating_sub(i64::from(hunk.after.start));
-            offset = offset.saturating_add(added.saturating_sub(removed));
+            removed = removed.checked_add(before_end.checked_sub(before_start)?)?;
+            added = added
+                .checked_add(u64::from(hunk.after.end).checked_sub(u64::from(hunk.after.start))?)?;
         } else if before_start >= end {
             break;
         } else {
             return None;
         }
     }
+    let map = |line: u64| line.checked_add(added)?.checked_sub(removed);
     Some(LineRange {
-        start: u64::try_from(start.saturating_add(offset).saturating_add(1)).ok()?,
-        end: u64::try_from(end.saturating_add(offset)).ok()?,
+        start: map(start)?.checked_add(1)?,
+        end: map(end)?,
     })
 }
 
