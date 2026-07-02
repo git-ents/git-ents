@@ -50,10 +50,7 @@ pub struct Comment {
 /// comment derives from one, otherwise the hash of the comment's own initial
 /// content — every comment is a git object, so it always has one.
 pub fn new_id(origin: Option<&str>, content: &Comment) -> Result<String, git_store::Error> {
-    match origin {
-        Some(origin) => Ok(origin.to_owned()),
-        None => git_store::content_hash(content),
-    }
+    git_store::new_id(origin, content)
 }
 
 /// Load the comment recorded at `refs/meta/comments/<id>` in `repo`, or `None`

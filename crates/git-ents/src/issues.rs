@@ -87,10 +87,7 @@ struct IssueNumber {
 /// provenance — otherwise the hash of the issue's own initial content, since
 /// every issue is a git object and so always has one.
 pub fn new_id(origin: Option<&str>, content: &Issue) -> Result<String, git_store::Error> {
-    match origin {
-        Some(origin) => Ok(origin.to_owned()),
-        None => git_store::content_hash(content),
-    }
+    git_store::new_id(origin, content)
 }
 
 /// Load the issue recorded at `refs/meta/issues/<id>` in `repo`, or `None` when

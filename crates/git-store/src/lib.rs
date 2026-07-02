@@ -117,6 +117,18 @@ pub fn content_hash<T: for<'a> Facet<'a>>(value: &T) -> Result<String, Error> {
     Ok(oid.to_string())
 }
 
+/// Derive a document's stable genesis key: `origin`'s object id (hex) when the
+/// document derives from one — one origin, one document, deduplicated on
+/// provenance — otherwise its own [`content_hash`], since every document is a
+/// git object and so always has one. The key is computed once and never
+/// renamed; cross-references key off it.
+pub fn new_id<T: for<'a> Facet<'a>>(origin: Option<&str>, content: &T) -> Result<String, Error> {
+    match origin {
+        Some(origin) => Ok(origin.to_owned()),
+        None => content_hash(content),
+    }
+}
+
 /// A repository's typed `refs/meta/*` store.
 ///
 /// Refs are read and updated through the high-level [`gix`] API, while all
