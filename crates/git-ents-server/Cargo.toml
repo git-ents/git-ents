@@ -18,12 +18,15 @@ clap_mangen = { workspace = true }
 facet = { workspace = true }
 form_urlencoded = { workspace = true }
 getrandom = { workspace = true }
+git-anchor = { workspace = true }
+git-comment = { workspace = true }
 git-store = { workspace = true }
 gix-actor = { workspace = true }
 gix-date = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 maud = { workspace = true }
+pulldown-cmark = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }

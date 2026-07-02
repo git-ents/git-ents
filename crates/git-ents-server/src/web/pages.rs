@@ -10,6 +10,7 @@ use std::pin::Pin;
 use arborium::{Config, Highlighter, HtmlFormat};
 use askama::Template;
 use axum::response::{IntoResponse, Response};
+use git_anchor::{LineRange, Projection};
 use gix_date::Time;
 use gix_hash::{ObjectId, Prefix};
 use gix_object::bstr::ByteSlice;
@@ -156,14 +157,14 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
     )
 }
 
-/// The rendered README for the overview: the first AsciiDoc file in the root
-/// tree whose stem is `README`, converted to HTML, paired with its filename.
-/// `None` when there is no such file or it fails to render.
+/// The rendered README for the overview: the first AsciiDoc or Markdown file
+/// in the root tree whose stem is `README`, converted to HTML, paired with its
+/// filename. `None` when there is no such file or it fails to render.
 async fn readme(repo: &Path, tree: &[Entry]) -> Option<(String, String)> {
     let entry = tree.iter().find(|e| {
         let name = e.filename.to_str_lossy();
         !e.mode.is_tree()
-            && crate::asciidoc::is_asciidoc(&name)
+            && (crate::asciidoc::is_asciidoc(&name) || crate::markdown::is_markdown(&name))
             && name
                 .rsplit_once('.')
                 .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"))
@@ -171,8 +172,18 @@ async fn readme(repo: &Path, tree: &[Entry]) -> Option<(String, String)> {
     let name = entry.filename.to_str_lossy();
     let spec = format!("HEAD:{name}");
     let bytes = git_output_bytes(repo, &["cat-file", "-p", &spec]).await?;
-    let html = crate::asciidoc::to_html(&String::from_utf8_lossy(&bytes))?;
+    let html = doc_html(&name, &String::from_utf8_lossy(&bytes))?;
     Some((name.into_owned(), html))
+}
+
+/// The formatted-document HTML for `name`, when it is a prose format the forge
+/// renders (AsciiDoc via acdc, Markdown via pulldown-cmark), or `None` when it
+/// is not one or fails to render.
+fn doc_html(name: &str, text: &str) -> Option<String> {
+    if crate::asciidoc::is_asciidoc(name) {
+        return crate::asciidoc::to_html(text);
+    }
+    crate::markdown::is_markdown(name).then(|| crate::markdown::to_html(text))
 }
 
 /// The clone URL for `rel`, using the request host when known.
@@ -306,7 +317,11 @@ pub(super) async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Re
     .await;
 
     let right = match &selected_file {
-        Some(path) => blob_pane(repo, path).await,
+        Some(path) => {
+            let pane = blob_pane(repo, path).await;
+            let comments = file_comments(repo, path).await;
+            html! { (pane) (comments_card(&comments)) }
+        }
         None => html! {
             div.files-empty {
                 (icon_file())
@@ -414,7 +429,12 @@ fn short_oid(oid: &ObjectId) -> String {
 /// A git date rendered as a relative "time ago" label, measured against the
 /// current time.
 fn ago(time: &Time) -> String {
-    let secs = Time::now_utc().seconds.saturating_sub(time.seconds).max(0);
+    ago_seconds(time.seconds)
+}
+
+/// [`ago`] for a bare epoch-seconds timestamp.
+fn ago_seconds(then: i64) -> String {
+    let secs = Time::now_utc().seconds.saturating_sub(then).max(0);
     let mins = secs.checked_div(60).unwrap_or(0);
     let hours = mins.checked_div(60).unwrap_or(0);
     let days = hours.checked_div(24).unwrap_or(0);
@@ -509,14 +529,12 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
         html! { div.blob { div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." } } }
     } else {
         let text = String::from_utf8_lossy(&bytes);
-        match crate::asciidoc::is_asciidoc(name)
-            .then(|| crate::asciidoc::to_html(&text))
-            .flatten()
-        {
+        match doc_html(name, &text) {
             Some(html) => html! { div.card { article.adoc-body { (PreEscaped(html)) } } },
             None => blob_body(name, &text),
         }
     };
+    let comments = file_comments(repo, &path).await;
     repo_shell(
         meta,
         Tab::Files,
@@ -524,24 +542,25 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
         html! {
             (crumbs(rel, &path, true))
             (body)
+            (comments_card(&comments))
         },
     )
     .into_response()
 }
 
-/// Render text file `source` with a line-number gutter, highlighting via
-/// `arborium` when the filename maps to a known grammar.
+/// Render text file `source` with a line-number gutter — each number a
+/// self-linking `#L<n>` anchor — highlighting via `arborium` when the filename
+/// maps to a known grammar.
 fn blob_body(name: &str, source: &str) -> Markup {
     let lines = source.lines().count().max(1);
-    let mut gutter = String::new();
-    for n in 1..=lines {
-        gutter.push_str(&n.to_string());
-        gutter.push('\n');
-    }
     let highlighted = highlight(name, source);
     html! {
         div.blob {
-            pre.blob-nums { (gutter) }
+            pre.blob-nums {
+                @for n in 1..=lines {
+                    a id={ "L" (n) } href={ "#L" (n) } { (n) }
+                }
+            }
             pre.blob-code {
                 @match highlighted {
                     Some(html) => code.code { (PreEscaped(html)) },
@@ -571,6 +590,89 @@ fn highlight(name: &str, source: &str) -> Option<String> {
 /// the same heuristic git uses).
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8000).any(|b| *b == 0)
+}
+
+/// A comment as a file view shows it: who wrote it and when, where its anchor
+/// lands on `HEAD`, and its body.
+struct FileComment {
+    author: String,
+    seconds: i64,
+    lines: Option<LineRange>,
+    outdated: bool,
+    body: String,
+}
+
+/// The comments whose anchors project onto `path` at `HEAD`, read off the
+/// async runtime since git-comment reads the object database synchronously.
+/// Comments that fail to project (say, an anchor commit the repository no
+/// longer has) are skipped rather than failing the page.
+async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
+    let repo = repo.to_owned();
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let Ok(comments) = git_comment::list(&repo) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (id, comment) in comments {
+            let Ok(projection) = git_comment::project(&repo, &comment, "HEAD") else {
+                continue;
+            };
+            let (landed, lines, outdated) = match projection {
+                Projection::Current => (comment.anchor.path.clone(), comment.anchor.lines, false),
+                Projection::Relocated { path, lines } => (path, lines, false),
+                Projection::Outdated { path } => (path, None, true),
+                Projection::FileDeleted => continue,
+            };
+            if landed != path {
+                continue;
+            }
+            let provenance = git_comment::provenance(&repo, &id).ok().flatten();
+            out.push(FileComment {
+                author: provenance
+                    .as_ref()
+                    .map_or_else(|| "?".to_owned(), |p| p.created.name.clone()),
+                seconds: provenance
+                    .map_or(0, |p| i64::try_from(p.created.seconds).unwrap_or(i64::MAX)),
+                lines,
+                outdated,
+                body: comment.body,
+            });
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The Comments card under a file view, or nothing when the file has none.
+/// A line-anchored comment links its range to the gutter's `#L<n>` anchors;
+/// an outdated one is flagged instead, since its lines no longer exist.
+fn comments_card(comments: &[FileComment]) -> Markup {
+    if comments.is_empty() {
+        return html! {};
+    }
+    html! {
+        div.card.file-comments {
+            div.card-header { "Comments (" (comments.len()) ")" }
+            @for comment in comments {
+                div.comment-row {
+                    div.comment-meta {
+                        span.author { (comment.author) }
+                        @if comment.seconds > 0 { span { (ago_seconds(comment.seconds)) } }
+                        @if let Some(range) = comment.lines {
+                            a.chip href={ "#L" (range.start) } {
+                                @if range.start == range.end { "line " (range.start) }
+                                @else { "lines " (range.start) "\u{2013}" (range.end) }
+                            }
+                        }
+                        @if comment.outdated { span.chip { "outdated" } }
+                    }
+                    p.comment-body { (comment.body) }
+                }
+            }
+        }
+    }
 }
 
 /// A single commit: its metadata and a colorized unified diff.

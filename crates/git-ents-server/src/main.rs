@@ -3,6 +3,7 @@
 mod asciidoc;
 mod checks;
 mod http;
+mod markdown;
 mod verify;
 mod web;
 

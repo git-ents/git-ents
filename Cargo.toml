@@ -57,6 +57,7 @@ gix-actor = "0.41"
 gix-date = "0.15"
 iddqd = "0.4"
 maud = { version = "0.27", features = ["axum"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 rstest = "0.26"
 tempfile = "3"
 thiserror = "2"
