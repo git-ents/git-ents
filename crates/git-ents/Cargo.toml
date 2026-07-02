@@ -11,6 +11,8 @@ crossterm = "0.29.0"
 facet = { workspace = true }
 form_urlencoded.workspace = true
 futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
+git-anchor = { workspace = true }
+git-comment = { workspace = true }
 git-store = { workspace = true }
 iddqd = { workspace = true }
 inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }

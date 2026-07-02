@@ -1271,6 +1271,8 @@ dependencies = [
  "facet",
  "form_urlencoded",
  "futures-util",
+ "git-anchor",
+ "git-comment",
  "git-store",
  "iddqd",
  "inquire",

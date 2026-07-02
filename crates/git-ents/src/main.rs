@@ -3,7 +3,8 @@
 //! It carries `git ents members` for managing the repository members recorded
 //! one-ref-per-person at `refs/meta/member/<username>`, `git ents account` for
 //! the account identity at `refs/meta/account`, `git ents checks` for the check
-//! set, and the client setup that produces the signed pushes the server
+//! set, `git ents comment` for the code comments at `refs/meta/comments/<id>`,
+//! and the client setup that produces the signed pushes the server
 //! requires. The member commands read and write a remote's set by fetching the
 //! `refs/meta/member/*` refs into the local repository, editing them through
 //! [`git_ents::members`], and pushing them back.
@@ -16,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use clap::{Parser, Subcommand};
+use git_anchor::{LineRange, Projection};
+use git_comment::{COMMENTS_NS, Comment};
 use git_ents::account::{self, Account};
 use git_ents::checks::{self, CHECKS_REF, Check};
 use git_ents::members::{self, MEMBER_NS, Member, Trust, member_ref};
@@ -44,6 +47,12 @@ enum Top {
     Checks {
         #[command(subcommand)]
         action: ChecksAction,
+    },
+    /// Comment on code: one comment per ref at `refs/meta/comments/<id>`,
+    /// anchored to a blob (and optionally lines) at a commit.
+    Comment {
+        #[command(subcommand)]
+        action: CommentAction,
     },
     /// Sign in to a remote's server the same way the web UI does — sign a
     /// server-issued challenge with your key — so this machine can also open a
@@ -202,12 +211,67 @@ enum ChecksAction {
     },
 }
 
+#[derive(Subcommand)]
+enum CommentAction {
+    /// Anchor a comment to a file at a revision and push it. Prompts for the
+    /// path and body when left unset at an interactive terminal.
+    Add {
+        /// Repository-relative path of the file the comment anchors to.
+        path: Option<String>,
+        /// Remote whose comment refs to update.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// The comment's body text.
+        #[arg(long)]
+        body: Option<String>,
+        /// Lines to anchor, as `<start>[:<end>]` (1-based, inclusive); omit
+        /// for a whole-file comment.
+        #[arg(long)]
+        lines: Option<String>,
+        /// Revision to anchor against.
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+        /// Genesis id of the issue the comment belongs to.
+        #[arg(long)]
+        issue: Option<String>,
+    },
+    /// List the comments on a remote, each projected onto a revision.
+    List {
+        /// Remote to read the `refs/meta/comments/*` refs from.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Revision to project each comment's anchor onto.
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+    },
+    /// Show one comment: author, anchor, projection, anchored text, and body.
+    Show {
+        /// The comment's id (or a unique prefix of it).
+        id: String,
+        /// Remote to read the `refs/meta/comments/*` refs from.
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Revision to project the comment's anchor onto.
+        #[arg(long, default_value = "HEAD")]
+        rev: String,
+    },
+    /// Remove a comment, deleting its ref on a remote.
+    Remove {
+        /// The comment's id (or a unique prefix of it).
+        id: String,
+        /// Remote whose comment ref to delete.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Top::Members { action } => run_members(action),
         Top::Account { action } => run_account(action),
         Top::Checks { action } => run_checks(action),
+        Top::Comment { action } => run_comment(action),
         Top::Login { remote, key } => login(&remote, key.as_deref()),
     };
     match result {
@@ -276,6 +340,200 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
         ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
         ChecksAction::Debug { remote } => checks_debug(&remote),
     }
+}
+
+fn run_comment(action: CommentAction) -> Result<(), String> {
+    match action {
+        CommentAction::Add {
+            path,
+            remote,
+            body,
+            lines,
+            rev,
+            issue,
+        } => comment_add(path, body, lines.as_deref(), &rev, issue, &remote),
+        CommentAction::List { remote, rev } => comment_list(&remote, &rev),
+        CommentAction::Show { id, remote, rev } => comment_show(&id, &remote, &rev),
+        CommentAction::Remove { id, remote } => comment_remove(&id, &remote),
+    }
+}
+
+/// Anchor a comment to `path` (and optionally `lines`) as it exists at `rev`,
+/// record it at `refs/meta/comments/<id>` authored as the configured git
+/// identity, and push it. Prompts for the path and body left `None` when run
+/// at an interactive terminal.
+fn comment_add(
+    path: Option<String>,
+    body: Option<String>,
+    lines: Option<&str>,
+    rev: &str,
+    issue: Option<String>,
+    remote: &str,
+) -> Result<(), String> {
+    let path = interactive::text_or(path, "File path")?;
+    let body = interactive::text_or(body, "Comment")?;
+    let lines = parse_lines(lines)?;
+    let repo = repo()?;
+    let anchor =
+        git_anchor::capture(&repo, rev, &path, lines).map_err(|error| error.to_string())?;
+    let comment = Comment {
+        body,
+        anchor,
+        issue,
+    };
+    let id = git_comment::new_id(None, &comment).map_err(|error| error.to_string())?;
+    let refname = format!("{COMMENTS_NS}/{id}");
+    let expected = sync(remote, &refname)?;
+    let name = config_get("user.name").ok_or("user.name is unset")?;
+    let email = config_get("user.email").ok_or("user.email is unset")?;
+    git_comment::store(&repo, &id, &comment, (&name, &email)).map_err(|error| error.to_string())?;
+    push_signed(remote, &refname, expected.as_deref())?;
+    println!("recorded comment {id}");
+    Ok(())
+}
+
+/// List every comment on `remote` as `<id>  <author>  <location>  <body>`,
+/// with each anchor projected onto `rev`.
+fn comment_list(remote: &str, rev: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, COMMENTS_NS)?;
+    let comments = git_comment::list(&repo).map_err(|error| error.to_string())?;
+    if comments.is_empty() {
+        println!("no comments on {remote}");
+        return Ok(());
+    }
+    for (id, comment) in comments {
+        let author = git_comment::provenance(&repo, &id)
+            .map_err(|error| error.to_string())?
+            .map_or_else(|| "?".to_owned(), |provenance| provenance.created.name);
+        let place = describe_projection(&repo, &comment, rev);
+        let title = comment.body.lines().next().unwrap_or_default();
+        println!("{}  {author}  {place}  {title}", short_id(&id));
+    }
+    Ok(())
+}
+
+/// Show the comment `id` (or a unique prefix): who wrote and last edited it,
+/// where it was anchored, where that sits on `rev`, the anchored text, and
+/// the body.
+fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, COMMENTS_NS)?;
+    let id = resolve_comment_id(&repo, id, remote)?;
+    let comment = git_comment::load(&repo, &id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("no comment {id} on {remote}"))?;
+    println!("comment {id}");
+    if let Some(provenance) =
+        git_comment::provenance(&repo, &id).map_err(|error| error.to_string())?
+    {
+        println!(
+            "author  {} <{}>",
+            provenance.created.name, provenance.created.email
+        );
+        if provenance.updated != provenance.created {
+            println!(
+                "edited  {} <{}>",
+                provenance.updated.name, provenance.updated.email
+            );
+        }
+    }
+    println!(
+        "anchor  {} @ {}",
+        location(&comment.anchor.path, comment.anchor.lines),
+        short_id(&comment.anchor.commit)
+    );
+    println!("on {rev}: {}", describe_projection(&repo, &comment, rev));
+    if let Some(issue) = &comment.issue {
+        println!("issue   {issue}");
+    }
+    if comment.anchor.lines.is_some()
+        && let Ok(snippet) = git_anchor::snippet(&repo, &comment.anchor)
+    {
+        println!();
+        for line in snippet.lines() {
+            println!("  | {line}");
+        }
+    }
+    println!();
+    for line in comment.body.lines() {
+        println!("  {line}");
+    }
+    Ok(())
+}
+
+/// Remove the comment `id` (or a unique prefix) on `remote`, deleting its ref
+/// and pushing the deletion.
+fn comment_remove(id: &str, remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, COMMENTS_NS)?;
+    let id = resolve_comment_id(&repo, id, remote)?;
+    let refname = format!("{COMMENTS_NS}/{id}");
+    let expected = sync(remote, &refname)?.ok_or_else(|| format!("no comment {id} on {remote}"))?;
+    push_delete(remote, &refname, &expected)?;
+    println!("removed comment {}", short_id(&id));
+    Ok(())
+}
+
+/// Parse `--lines` as `<start>[:<end>]`, 1-based inclusive; a bare `<start>`
+/// anchors that single line.
+fn parse_lines(lines: Option<&str>) -> Result<Option<LineRange>, String> {
+    let Some(lines) = lines else {
+        return Ok(None);
+    };
+    let (start, end) = lines.split_once(':').unwrap_or((lines, lines));
+    let parse = |number: &str| {
+        number
+            .trim()
+            .parse::<u64>()
+            .map_err(|_error| format!("invalid line number {number:?} in --lines"))
+    };
+    Ok(Some(LineRange {
+        start: parse(start)?,
+        end: parse(end)?,
+    }))
+}
+
+/// Resolve `id` — a full comment genesis hash or a unique prefix of one —
+/// against the synced local comment refs.
+fn resolve_comment_id(repo: &Path, id: &str, remote: &str) -> Result<String, String> {
+    let all = git_comment::list(repo).map_err(|error| error.to_string())?;
+    let mut matches = all
+        .into_iter()
+        .map(|(full, _comment)| full)
+        .filter(|full| full.starts_with(id));
+    let Some(first) = matches.next() else {
+        return Err(format!("no comment {id} on {remote}"));
+    };
+    if matches.next().is_some() {
+        return Err(format!("comment id {id} is ambiguous on {remote}"));
+    }
+    Ok(first)
+}
+
+/// `path:lines` as the CLI prints an anchored location.
+fn location(path: &str, lines: Option<LineRange>) -> String {
+    match lines {
+        Some(range) if range.start == range.end => format!("{path}:{}", range.start),
+        Some(range) => format!("{path}:{}-{}", range.start, range.end),
+        None => path.to_owned(),
+    }
+}
+
+/// One-line description of where `comment` sits on `rev`.
+fn describe_projection(repo: &Path, comment: &Comment, rev: &str) -> String {
+    match git_comment::project(repo, comment, rev) {
+        Ok(Projection::Current) => location(&comment.anchor.path, comment.anchor.lines),
+        Ok(Projection::Relocated { path, lines }) => location(&path, lines),
+        Ok(Projection::Outdated { path }) => format!("{path} [outdated]"),
+        Ok(Projection::FileDeleted) => format!("{} [deleted]", comment.anchor.path),
+        Err(_error) => format!("{} [unresolved]", comment.anchor.path),
+    }
+}
+
+/// The first 12 characters of a hex id, as listings abbreviate it.
+fn short_id(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
 }
 
 /// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
