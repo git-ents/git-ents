@@ -1244,6 +1244,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-anchor"
+version = "0.0.0"
+dependencies = [
+ "facet",
+ "gix",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "git-ents"
 version = "0.0.0"
 dependencies = [
