@@ -196,6 +196,56 @@ impl Member {
             Trust::Keys(_) | Trust::WebAuthn(_) => None,
         }
     }
+
+    /// Check invariants the type system does not enforce: a set validity
+    /// bound must be a well-formed OpenSSH timestamp, and when both bounds
+    /// are set, `valid_after` must not be after `valid_before` — an inverted
+    /// window would authorize nothing, silently locking every one of the
+    /// member's keys out rather than the admin's intended restriction.
+    /// [`store`] checks this before every write, so it holds regardless of
+    /// which caller builds the member (the CLI today, an admin web action
+    /// later).
+    pub fn validate(&self) -> Result<(), String> {
+        for bound in [&self.valid_after, &self.valid_before] {
+            if let Some(value) = bound
+                && !valid_timestamp(value)
+            {
+                return Err(format!(
+                    "{value:?} is not a valid OpenSSH timestamp \
+                     (expected YYYYMMDD[Z] or YYYYMMDDHHMM[SS][Z])"
+                ));
+            }
+        }
+        if let (Some(after), Some(before)) = (&self.valid_after, &self.valid_before)
+            && timestamp_key(after) > timestamp_key(before)
+        {
+            return Err(format!(
+                "valid-after {after:?} is after valid-before {before:?}: \
+                 this window would never authorize a push"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `value` is a well-formed OpenSSH `allowed_signers` timestamp:
+/// `YYYYMMDD`, `YYYYMMDDHHMM`, or `YYYYMMDDHHMMSS`, each optionally suffixed
+/// `Z` for UTC. Without `Z` the verifying server reads it in its own local
+/// time zone.
+#[must_use]
+pub fn valid_timestamp(value: &str) -> bool {
+    let digits = value.strip_suffix('Z').unwrap_or(value);
+    matches!(digits.len(), 8 | 12 | 14) && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `value`'s digits, right-padded to 14 (`YYYYMMDDHHMMSS`), so two timestamps
+/// of different precision compare correctly as calendar time. Ignores any `Z`
+/// suffix — comparing a UTC bound against a local one is inherently
+/// approximate; exact time-zone arithmetic is out of scope for this ordering
+/// check.
+fn timestamp_key(value: &str) -> String {
+    let digits = value.strip_suffix('Z').unwrap_or(value);
+    format!("{digits:0<14}")
 }
 
 /// Load the member named `username` from an already-open `store`.
@@ -248,8 +298,10 @@ pub fn load_all_indexed(repo: &Path) -> Result<iddqd::IdOrdMap<Member>, git_stor
 }
 
 /// Write `member` to its `refs/meta/member/<principal>` ref in `repo`,
-/// replacing any prior value, as a new commit.
+/// replacing any prior value, as a new commit. Rejects a member whose
+/// validity window is malformed or inverted — see [`Member::validate`].
 pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
+    member.validate().map_err(git_store::Error::Invalid)?;
     git_store::Store::open(repo)?.store_keyed(MEMBER_NS, member, "Update member")
 }
 
@@ -554,5 +606,40 @@ mod tests {
             allowed_signers(&[member]),
             format!("* cert-authority,valid-before=\"20270101\",namespaces=\"git\" {KEY_A}\n")
         );
+    }
+
+    #[test]
+    fn validate_rejects_a_malformed_timestamp() {
+        let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
+        member.valid_before = Some("not-a-timestamp".to_owned());
+        assert!(member.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_an_inverted_window() {
+        let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
+        member.valid_after = Some("20270101".to_owned());
+        member.valid_before = Some("20260101".to_owned());
+        assert!(member.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_an_ordered_window_of_mixed_precision() {
+        let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
+        member.valid_after = Some("20260101".to_owned());
+        member.valid_before = Some("20270101120000Z".to_owned());
+        member.validate().unwrap();
+    }
+
+    #[test]
+    fn store_rejects_a_member_with_an_inverted_window() {
+        let repo = unique_repo();
+        let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
+        member.valid_after = Some("20270101".to_owned());
+        member.valid_before = Some("20260101".to_owned());
+        let result = store(&repo, &member);
+        assert!(matches!(result, Err(git_store::Error::Invalid(_))));
+        assert_eq!(load(&repo, "alice").unwrap(), None);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

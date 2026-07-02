@@ -726,14 +726,12 @@ fn now_seconds() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// Check that `value` is an OpenSSH `allowed_signers` timestamp: `YYYYMMDD`,
-/// `YYYYMMDDHHMM`, or `YYYYMMDDHHMMSS`, each optionally suffixed `Z` for UTC.
-/// Without `Z` the verifying server reads it in its own local time zone.
+/// Fail-fast check, ahead of any network sync, that `value` is a well-formed
+/// OpenSSH `allowed_signers` timestamp — the same rule [`Member::validate`]
+/// (via [`members::store`]) checks again before the write actually lands, and
+/// which also checks the two bounds are not inverted.
 fn validate_timestamp(value: &str) -> Result<(), String> {
-    let digits = value.strip_suffix('Z').unwrap_or(value);
-    let well_formed =
-        matches!(digits.len(), 8 | 12 | 14) && digits.bytes().all(|b| b.is_ascii_digit());
-    if well_formed {
+    if members::valid_timestamp(value) {
         Ok(())
     } else {
         Err(format!(
