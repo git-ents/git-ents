@@ -262,6 +262,24 @@ impl Store {
         self.store(&format!("{prefix}/{id}"), value, message)
     }
 
+    /// Like [`store_item`](Self::store_item), but attributing authorship to
+    /// `author` the way [`store_authored`](Self::store_authored) does — for a
+    /// collection whose documents recover their author from the ref's commits
+    /// instead of storing one in the tree.
+    pub fn store_item_authored<T: for<'a> Facet<'a>>(
+        &self,
+        prefix: &str,
+        id: &str,
+        value: &T,
+        message: &str,
+        author: (&str, &str),
+    ) -> Result<(), Error> {
+        if !ref_segment_ok(id) {
+            return Err(Error::InvalidKey(id.to_owned()));
+        }
+        self.store_impl(&format!("{prefix}/{id}"), value, message, Some(author))
+    }
+
     /// Like [`store_item`](Self::store_item), but for a [`HasId`] value that
     /// carries its own collection key, so the caller does not pass it twice.
     pub fn store_keyed<T: for<'a> Facet<'a> + HasId>(
@@ -343,6 +361,32 @@ impl Store {
         Ok(out)
     }
 
+    /// Who created and who last updated the document on `refname`, recovered
+    /// from the ref's commit chain — the genesis commit's author and the tip
+    /// commit's author, following first parents — or `None` when the ref is
+    /// absent. The commit *is* the document's provenance: a collection that
+    /// writes through [`store_authored`](Self::store_authored) never stores an
+    /// author or timestamp field in its tree, so neither can disagree with the
+    /// history that actually produced it.
+    pub fn provenance(&self, refname: &str) -> Result<Option<Provenance>, Error> {
+        let Some(tip) = self.ref_commit(refname)? else {
+            return Ok(None);
+        };
+        let updated = self.read_authorship(&tip)?;
+        let mut genesis = tip;
+        while let Some(parent) = self.read_commit(&genesis)?.parents.into_iter().next() {
+            genesis = parent;
+        }
+        let created = self.read_authorship(&genesis)?;
+        Ok(Some(Provenance { created, updated }))
+    }
+
+    /// [`provenance`](Self::provenance) for the item `id` under the collection
+    /// ref namespace `prefix` (`{prefix}/{id}`).
+    pub fn item_provenance(&self, prefix: &str, id: &str) -> Result<Option<Provenance>, Error> {
+        self.provenance(&format!("{prefix}/{id}"))
+    }
+
     /// The full names of the refs under `prefix`, newest committer date first.
     pub fn list(&self, prefix: &str) -> Result<Vec<String>, Error> {
         let platform = self
@@ -398,6 +442,23 @@ impl Store {
             tree: commit.tree(),
             parents: commit.parents().collect(),
             seconds: u64::try_from(seconds).unwrap_or(0),
+        })
+    }
+
+    /// Read the author stamped on `oid`'s commit header.
+    fn read_authorship(&self, oid: &ObjectId) -> Result<Authorship, Error> {
+        let mut buffer = Vec::new();
+        let commit = self
+            .odb
+            .find_commit(oid, &mut buffer)
+            .map_err(|error| Error::Object(error.to_string()))?;
+        let author = commit
+            .author()
+            .map_err(|error| Error::Object(error.to_string()))?;
+        Ok(Authorship {
+            name: author.name.to_string(),
+            email: author.email.to_string(),
+            seconds: u64::try_from(author.seconds()).unwrap_or(0),
         })
     }
 
@@ -472,6 +533,27 @@ impl Store {
 /// giving up with [`Error::Conflict`]. Bounds retry under sustained
 /// contention; ordinary racing writers resolve within one or two rounds.
 const MAX_MERGE_RETRIES: usize = 5;
+
+/// An author identity and date read off one of a document ref's commits —
+/// recovered from the commit header rather than stored in the document tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Authorship {
+    /// The author's name.
+    pub name: String,
+    /// The author's email.
+    pub email: String,
+    /// The author date, in seconds since the epoch.
+    pub seconds: u64,
+}
+
+/// Who created and who last updated a document, per its ref's commit chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provenance {
+    /// The genesis commit's authorship — who created the document.
+    pub created: Authorship,
+    /// The tip commit's authorship — who last updated the document.
+    pub updated: Authorship,
+}
 
 /// The facts read off a commit: its tree, its parents, and its committer date.
 struct CommitFacts {
@@ -634,6 +716,35 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    #[test]
+    fn provenance_recovers_the_creating_and_updating_authors() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.provenance("refs/meta/doc").unwrap(), None);
+        store
+            .store_authored(
+                "refs/meta/doc",
+                &"first".to_owned(),
+                "write",
+                ("alice", "alice@example.com"),
+            )
+            .unwrap();
+        store
+            .store_authored(
+                "refs/meta/doc",
+                &"second".to_owned(),
+                "write",
+                ("bob", "bob@example.com"),
+            )
+            .unwrap();
+        let provenance = store.provenance("refs/meta/doc").unwrap().unwrap();
+        assert_eq!(provenance.created.name, "alice");
+        assert_eq!(provenance.created.email, "alice@example.com");
+        assert_eq!(provenance.updated.name, "bob");
+        assert_eq!(provenance.updated.email, "bob@example.com");
+        assert!(provenance.created.seconds > 0);
     }
 
     /// A small multi-field, multi-collection document used to exercise the
