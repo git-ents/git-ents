@@ -8,14 +8,25 @@
 //! literally named `_debug` is shadowed, the same tradeoff `/login` already
 //! makes against a repo named `login`.
 
+use std::io::{Read as _, Write as _};
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::process::Command;
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::AppState;
+
+/// The pty's initial size, before the CLI's first resize control frame
+/// arrives — the CLI sends one immediately on connecting, so this only
+/// matters for the handful of frames in between.
+const INITIAL_SIZE: PtySize = PtySize {
+    rows: 24,
+    cols: 80,
+    pixel_width: 0,
+    pixel_height: 0,
+};
 
 /// Upgrade an authenticated member's request into an interactive shell in
 /// `repo_path`'s checks Sprite.
@@ -75,42 +86,82 @@ pub(crate) async fn handshake(
 }
 
 /// Spawn an interactive shell in `sprite` and relay it over `socket` until
-/// either side closes: the Sprite CLI's own `--tty` handles the pseudo-TTY, so
-/// the broker only ever pumps bytes.
+/// either side closes: the Sprite CLI's own `--tty` handles the remote
+/// pseudo-TTY, but the broker allocates its *own* local pty for the `sprite
+/// exec --tty` process so a resize control frame (see below) has something to
+/// apply to — plain pipes have no window size to change.
 async fn relay(mut socket: WebSocket, sprite: String) {
-    let child = Command::new("sprite")
-        .args(["exec", "--tty", "-s", &sprite, "--", "/bin/bash"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-    let mut child = match child {
+    let pair = match native_pty_system().openpty(INITIAL_SIZE) {
+        Ok(pair) => pair,
+        Err(_could_not_allocate) => return,
+    };
+    let mut cmd = CommandBuilder::new("sprite");
+    cmd.args(["exec", "--tty", "-s", &sprite, "--", "/bin/bash"]);
+    let mut child = match pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(_could_not_spawn) => return,
     };
-    let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
+    // Drop our copy of the slave side once the child holds it, so the
+    // master's reader sees EOF when the child actually exits rather than
+    // when this process happens to close it.
+    drop(pair.slave);
+
+    let master = pair.master;
+    let (Ok(reader), Ok(mut writer)) = (master.try_clone_reader(), master.take_writer()) else {
         return;
     };
 
-    let mut buf = [0u8; 4096];
+    // The pty's Read/Write are blocking, so each direction gets its own
+    // thread; the read side hands chunks to the async loop over a channel,
+    // the write side is fed the same way so a slow write never blocks the
+    // select loop.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let Some(chunk) = buf.get(..n) else { break };
+                    if out_tx.send(chunk.to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        while let Ok(data) = in_rx.recv() {
+            if writer.write_all(&data).is_err() {
+                break;
+            }
+        }
+    });
+
     loop {
         tokio::select! {
-            read = stdout.read(&mut buf) => {
-                match read {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let Some(chunk) = buf.get(..n) else { break };
-                        if socket.send(Message::Binary(chunk.to_vec().into())).await.is_err() {
+            chunk = out_rx.recv() => {
+                match chunk {
+                    Some(data) => {
+                        if socket.send(Message::Binary(data.into())).await.is_err() {
                             break;
                         }
                     }
+                    None => break,
                 }
             }
             frame = socket.recv() => {
                 match frame {
                     Some(Ok(Message::Binary(data))) => {
-                        if stdin.write_all(&data).await.is_err() {
+                        if in_tx.send(data.to_vec()).is_err() {
                             break;
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(size) = parse_resize(&text) {
+                            let _resized = master.resize(size);
                         }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -119,5 +170,17 @@ async fn relay(mut socket: WebSocket, sprite: String) {
             }
         }
     }
-    let _killed = child.kill().await;
+    let _killed = child.kill();
+}
+
+/// Parse a resize control frame, `"<cols> <rows>"`, as sent by the CLI on
+/// connect and on every local `SIGWINCH`.
+fn parse_resize(text: &str) -> Option<PtySize> {
+    let (cols, rows) = text.split_once(' ')?;
+    Some(PtySize {
+        cols: cols.parse().ok()?,
+        rows: rows.parse().ok()?,
+        pixel_width: 0,
+        pixel_height: 0,
+    })
 }

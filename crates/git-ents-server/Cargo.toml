@@ -27,6 +27,7 @@ maud = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+portable-pty = "0.9.0"
 
 [dev-dependencies]
 rstest = { workspace = true }

@@ -58,6 +58,14 @@ where
         }
     });
 
+    let (resize_tx, mut resize_rx) = tokio::sync::mpsc::unbounded_channel::<(u16, u16)>();
+    spawn_resize_watcher(resize_tx.clone());
+    // Size the remote pty to match this terminal before the first byte flows,
+    // rather than leaving it at the broker's default until the first resize.
+    if let Ok(size) = crossterm::terminal::size() {
+        let _sent = resize_tx.send(size);
+    }
+
     loop {
         tokio::select! {
             input = rx.recv() => {
@@ -68,6 +76,14 @@ where
                         }
                     }
                     None => return Ok(()),
+                }
+            }
+            resize = resize_rx.recv() => {
+                if let Some((cols, rows)) = resize {
+                    let frame = Message::Text(format!("{cols} {rows}").into());
+                    if sink.send(frame).await.is_err() {
+                        return Ok(());
+                    }
                 }
             }
             frame = source.next() => {
@@ -83,4 +99,25 @@ where
             }
         }
     }
+}
+
+/// Watch for local terminal resizes (`SIGWINCH`) on a dedicated thread,
+/// sending the new `(cols, rows)` through `tx` each time. `crossterm`'s own
+/// event reader also reports resizes, but isn't an option here — we forward
+/// raw stdin bytes rather than events it would parse and consume them from.
+fn spawn_resize_watcher(tx: tokio::sync::mpsc::UnboundedSender<(u16, u16)>) {
+    let Ok(mut signals) = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])
+    else {
+        return;
+    };
+    std::thread::spawn(move || {
+        for _signal in signals.forever() {
+            let Ok(size) = crossterm::terminal::size() else {
+                continue;
+            };
+            if tx.send(size).is_err() {
+                break;
+            }
+        }
+    });
 }
