@@ -57,6 +57,66 @@ An in-place state advance (a run's progression) is a deliberate replace and
 MUST fail cleanly on a race rather than merge.
 --
 
+=== Invariants & Abstractions
+
+This section documents, rather than mandates, how `git-store` (the crate
+implementing <<storage.meta-ref>> and <<storage.concurrency>>) makes the
+storage layer's invariants explicit in code instead of leaving them to be
+re-derived per module. It exists so the next module added to `git-ents`
+reuses these instead of re-inventing them.
+
+Key strategy::
+  Every meta-ref document falls into one of three shapes. A *singleton* lives
+  on one fixed ref (`config`, `account`, `checks`, `revoked`,
+  `issue-number`) and is read and written with `Store::load`/`store`. A
+  *named collection* is decomposed one-ref-per-item under a namespace prefix,
+  keyed by a caller-supplied name (`member/<username>`) or a scalar-keyed map
+  on a single ref (`checks/<name>`, `revoked/<fingerprint>`,
+  `runs/<commit>/results/<name>`) — `Store::load_item`/`store_item`,
+  `load_map`/`store_map`. A *content-addressed* collection is keyed by the
+  hash of its own content (`issues/<genesis-hash>`) via `content_hash`, so
+  filing an item never contends a counter.
+
+Collection-key safety::
+  `git_store::ref_segment_ok` is the one place a collection key (a username, a
+  check name, a colon-form fingerprint, a content hash) is checked before it
+  becomes a ref path segment or tree entry name: 1-64 ASCII alphanumerics,
+  `.`, `_`, `-`, or `:`, never starting with `.`, never containing `/`.
+  `Store::store_item`, `store_keyed`, and `store_map` all enforce it, failing
+  with `Error::InvalidKey` rather than silently injecting an extra path
+  component or colliding with a sibling entry.
+
+The map-document helper::
+  `Store::load_map`/`store_map` is the shared conversion every "named entries
+  on one ref" collection needs — a scalar-keyed map document whose flattened
+  public item type carries the key once, not the hand-written wrapper
+  document (a `Checks { checks: BTreeMap<...> }`-shaped struct) each of
+  `checks`, `revocations`, and run outcomes previously declared for itself.
+
+Domain validation::
+  A type that carries an invariant the type system cannot express (a
+  member's validity window must not be inverted) exposes its own `validate`
+  and calls it from its own `store`, returning `git_store::Error::Invalid` —
+  distinct from `InvalidKey`, which is about the collection key rather than
+  the document's content. This runs for every caller of that `store`
+  function, not just the CLI command that happens to build the value today.
+
+Closed sets are enums, not strings::
+  `Issue.state`, and a check run's status, are closed sets the specification
+  enumerates (<<issues.ref>>, <<checks.outcomes>>); they are modeled as
+  `facet`-derived enums (`issues::State`, `checks::Status`) rather than
+  `String`, so an invalid value cannot be constructed instead of merely being
+  discouraged by a comment.
+
+Format stability::
+  Unchanged from <<storage.meta-ref>>: a document's `Facet` shape is its
+  on-disk format, and every document type carries a load test against a
+  hand-built fixture in the exact on-disk layout. Introducing `load_map` and
+  the closed-set enums above changed several documents' on-disk shape
+  (`checks/<name>`, `revoked/<fingerprint>`, `runs/<commit>` outcomes, and
+  `issues/<id>` state each moved a scalar to a subtree); each carries an
+  updated fixture rather than a version negotiation, acceptable pre-1.0.
+
 === Protocol
 
 [role="requirement", id="protocol.git"]
@@ -164,8 +224,9 @@ Every member MUST carry a `provenance` recording whether they were
 admin-registered or self-attested via web onboarding. A member ref written
 before this field existed MUST load as admin-registered. A self-attested
 member MUST be granted limited trust: the web service MUST refuse their writes
-outside an allowed set (such as issues and comments), and they MUST NOT be
-trusted for signed git push, until an admin promotes them.
+outside an allowed set defined by whatever member-writable surfaces exist
+(currently none — see <<web.auth.edit>>), and they MUST NOT be trusted for
+signed git push, until an admin promotes them.
 --
 
 [role="requirement", id="members.window"]
@@ -444,40 +505,8 @@ An issue MAY additionally carry a friendly sequential number, assigned only
 when a maintainer promotes it; before promotion this number is absent.
 Only promotion advances the number counter, so filing an issue never
 contends it.
-Cross-references (comments, reviews) MUST key off the stable content-hash
-identifier, not the friendly number.
---
-
-=== Comments
-
-[role="requirement", id="comments.ref"]
-.Comment Documents
---
-Each comment on an issue MUST be stored at
-`refs/meta/comments/<issue_id>/<comment_id>` as a `Comment` document with
-fields `body`, `author`, and `issue_id`, where `issue_id` is the issue's
-stable content-hash identifier and `comment_id` is the comment's own content
-hash. One ref per comment keeps comments independently loadable and separately
-historied, and content-hash ids mean concurrent additions never collide.
---
-
-=== Reviews
-
-[role="requirement", id="reviews.ref"]
-.Review Documents
---
-Per-reviewer verdicts MUST be stored at
-`refs/meta/reviews/<target_id>/<reviewer_principal>`, one ref per reviewer
-per target, as a `Review` document with fields `principal`, `verdict`
-(`approve`, `request_changes`, or `comment`), and `body`. `target_id` is the
-target's stable content-hash identifier.
---
-
-[role="requirement", id="reviews.readiness"]
-.Merge Readiness
---
-Merge readiness MUST be computed at read time by aggregating check runs and
-review verdicts. It MUST NOT be stored separately.
+Any future cross-referencing feature (comments, reviews, and the like) MUST
+key off the stable content-hash identifier, not the friendly number.
 --
 
 === Web UI
@@ -588,6 +617,14 @@ tab MUST hide the edit controls rather than present a form that cannot succeed.
 [role="requirement", id="web.auth.webauthn-onboarding"]
 .Passkey Onboarding
 --
+[NOTE]
+Planned, not yet implemented. `Trust::WebAuthn` and `Provenance::SelfAttestedWeb`
+exist and are exercised by `members::allowed_signers` (a `WebAuthn` member never
+produces a push line) and by the web write path (`require_admin_registered`
+refuses a self-attested member's edit), but no endpoint yet lets a new member
+create that ref by proving a passkey. Tracked so this section states an
+intended feature rather than current behavior.
+
 A new member MAY onboard without a CLI by proving control of a passkey in the
 browser. The server MUST verify the attestation server-side and write the new
 member ref with `provenance` set to self-attested, recording the attestation
@@ -740,3 +777,73 @@ traffic before any repository exists.
 `GET /` itself is served by the web UI as the repository index
 (<<web.index>>), not the probe.
 --
+
+[appendix]
+== Conformance
+
+A map from each requirement to the module or function implementing it and the
+test guarding it, so a requirement with no entry (or an entry marked
+_Planned_) is immediately visible as unimplemented rather than discovered by
+reading every module. Update this table in the same change that adds,
+renames, or removes a requirement or its implementation.
+
+[cols="1,2,2", options="header"]
+|===
+|Requirement |Implementation |Guarding test
+
+|`storage.bare` |`git-ents-server/src/http.rs` (`backend`, repo auto-init) |`server::push_then_clone_round_trip`
+|`storage.meta-ref` |`git-store/src/lib.rs` (`Store::load`/`store`) |per-document `loads_the_on_disk_*_format` fixture tests
+|`storage.concurrency` |`git-store/src/merge.rs` (`three_way_merge`), `Store::store_impl`/`amend` |`git-store::tests::merge_*`, `amend_fails_closed_on_a_race_instead_of_merging`
+|`protocol.git` |`git-ents-server/src/http.rs` (`backend`) |`server::push_then_clone_round_trip`
+|`protocol.routing` |`git-ents-server/src/http.rs` (`get_request`/`post_request`, `detects_pushes`) |`http::tests::detects_pushes`, `routes_browser_gets`
+|`namespace.url` |`README.adoc`/deployment config | _(documentation only)_
+|`namespace.path` |`git-ents-server/src/http.rs` (segment validation) |`http::tests::validates_segments`, `extracts_repo_path`
+|`namespace.auto-create` |`git-ents-server/src/http.rs` (`backend` init lock, `reconcile_head`) |`server::rejects_colliding_pushes`
+|`members.ref` |`git-ents/src/members.rs` (`MEMBER_NS`, `load_all`/`store`) |`members::load_all_unions_every_member_ref`
+|`members.trust` |`git-ents/src/members.rs` (`Trust`) |`members::store_then_load_round_trips_a_{member,ca_member,webauthn_member}`
+|`members.provenance` |`git-ents/src/members.rs` (`Provenance`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`
+|`members.window` |`git-ents/src/members.rs` (`Member::validate`, `valid_timestamp`) |`members::validate_rejects_*`, `store_rejects_a_member_with_an_inverted_window`
+|`members.allowed-signers` |`git-ents/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
+|`revocations.ref` |`git-ents/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
+|`revocations.ca` |`git-ents/src/members.rs` (`without_revoked`, CA branch untouched) |`members::without_revoked_leaves_ca_members_untouched`
+|`auth.bootstrap` |`git-ents-server/src/verify.rs` (`pre_receive`, empty-members early return) |`pre_receive` integration tests (bootstrap case)
+|`auth.signed-push` |`git-ents-server/src/verify.rs` (`verify_certificate`) |`pre_receive::rejects_an_unsigned_push_when_signers_exist`, `rejects_a_push_signed_by_an_unknown_key`
+|`auth.nonce` |`git-ents-server/src/http.rs` (`backend_config_injects_nonce_seed_and_hooks_path`) |`http::tests::backend_config_injects_nonce_seed_and_hooks_path`
+|`auth.client-setup` |`git-ents/src/main.rs` (`setup`, `ensure_key`) | _(manual/CLI UX, no automated test)_
+|`cli.remote-admin` |`git-ents/src/main.rs` (`sync`, `push_signed`) | _(manual/CLI UX, no automated test)_
+|`cli.compare-and-swap` |`git-ents/src/main.rs` (`push_signed`, `push_delete`, `--force-with-lease`) | _(manual/CLI UX, no automated test)_
+|`cli.members` |`git-ents/src/main.rs` (`Action`, `run_members`) | _(manual/CLI UX, no automated test)_
+|`cli.account-checks` |`git-ents/src/main.rs` (`AccountAction`, `ChecksAction`) | _(manual/CLI UX, no automated test)_
+|`cli.key-resolution` |`git-ents/src/main.rs` (`fingerprint`, MD5 colon form) | _(manual/CLI UX, no automated test)_
+|`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
+|`config.ref` |`git-ents/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
+|`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`) |`checks::store_then_load_round_trips_the_check_set`
+|`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
+|`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`
+|`checks.sandbox` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
+|`checks.outcomes` |`git-ents/src/checks.rs` (`Status`, `record`/`update_run`); `git-ents-server/src/checks.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`checks::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_log_url`
+|`issues.ref` |`git-ents/src/issues.rs` (`Issue`, `State`) |`issues::store_then_load_round_trips_an_issue`
+|`issues.id` |`git-ents/src/issues.rs` (`new_id`, `promote`) |`issues::new_id_hashes_its_own_content_with_no_origin`, `promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref`
+|`web.server-rendered` |`git-ents-server/src/web/*.rs` (Askama/maud templates, no client JS required) | _(manual UI verification)_
+|`web.index` |`git-ents-server/src/web/mod.rs` (`index`) | _(manual UI verification)_
+|`web.tabs` |`git-ents-server/src/web/pages.rs`, `templates/issues.html` | _(manual UI verification)_
+|`web.syntax-highlight` |`git-ents-server/src/web/git.rs` (`capped_read`, 2 MiB cap) |`web::git::tests::capped_read_flags_oversized_output`
+|`web.auth.challenge` |`git-ents-server/src/web/write.rs` (`issue_challenge`, `take_challenge`) |`write::tests::a_consumed_challenge_does_not_verify_twice`
+|`web.auth.session` |`git-ents-server/src/web/write.rs` (`Session`, `csrf_ok`, `logout`) |`web_edit::an_edit_without_a_valid_csrf_token_is_refused`
+|`web.auth.edit` |`git-ents-server/src/web/write.rs` (`edit_config`, `signed_edit`, `require_admin_registered`) |`web_edit::a_member_edits_settings_through_the_browser`, `a_self_attested_member_is_refused_a_settings_edit`
+|`web.auth.webauthn-onboarding` | _Planned — see the requirement's note_ | —
+|`nonfunctional.push-latency` |`git-ents-server/src/checks.rs` (`post_receive` returns after `enqueue`) | _(structural; see `checks.post-receive`)_
+|`nonfunctional.memory-cap` |`git-ents-server/src/web/git.rs` (`capped_read`, `capped_read_bytes`) |`web::git::tests::capped_read_*`
+|`nonfunctional.concurrency` |`git-ents-server/src/http.rs` (`backend`, concurrent stdin/stdout); `checks.rs` (`spawn_blocking`) |`server::responds_to_requests`
+|`nonfunctional.no-panic` |workspace-wide clippy lint configuration (`#![forbid(clippy::unwrap_used, ...)]`) |`cargo clippy --workspace --all-targets`
+|`nonfunctional.no-unsafe` |workspace-wide (`#![forbid(unsafe_code)]`) |`cargo clippy --workspace --all-targets`
+|`nonfunctional.object-store` |`git-store/src/lib.rs` (`Store::open`, common-dir odb) | _(see the module's own doc comment; exercised by hook integration tests)_
+|`compat.git` |`git-ents-server/src/http.rs`, `web/git.rs` (subprocess invocations) | _(implicit in all integration tests)_
+|`compat.ssh-keygen` |`git-ents-server/src/verify.rs` (`verify_certificate`), `web/write.rs` (`verify_login_signature`) |`pre_receive::*`, `web_edit::*`
+|`compat.openssh-signed-push` |`git-ents-server/src/verify.rs` (`GIT_PUSH_CERT`, `GIT_PUSH_CERT_NONCE_STATUS`) |`pre_receive::rejects_a_push_signed_by_an_expired_key`
+|`compat.sprite` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`) | _(requires a live Sprite; not covered by unit tests)_
+|`compat.cgi` |`git-ents-server/src/http.rs` (`backend`, CGI env vars) |`server::push_then_clone_round_trip`
+|`compat.edition` |workspace `Cargo.toml` (`edition = "2024"`, `publish = false`) | _(build-time)_
+|`deploy.fly` |`.config/fly.toml` | _(deployment-time)_
+|`deploy.health` |`git-ents-server/src/main.rs` (`/healthz` route) | _(manual/liveness check)_
+|===
