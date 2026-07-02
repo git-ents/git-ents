@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/git-anchor",
+    "crates/git-comment",
     "crates/git-ents",
     "crates/git-ents-server",
     "crates/git-store",

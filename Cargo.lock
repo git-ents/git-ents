@@ -1254,6 +1254,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-comment"
+version = "0.0.0"
+dependencies = [
+ "facet",
+ "git-anchor",
+ "git-store",
+ "tempfile",
+]
+
+[[package]]
 name = "git-ents"
 version = "0.0.0"
 dependencies = [
