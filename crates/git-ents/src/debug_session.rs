@@ -105,6 +105,10 @@ where
 /// sending the new `(cols, rows)` through `tx` each time. `crossterm`'s own
 /// event reader also reports resizes, but isn't an option here — we forward
 /// raw stdin bytes rather than events it would parse and consume them from.
+///
+/// `SIGWINCH` doesn't exist outside Unix, so there's no resize forwarding
+/// on other platforms.
+#[cfg(unix)]
 fn spawn_resize_watcher(tx: tokio::sync::mpsc::UnboundedSender<(u16, u16)>) {
     let Ok(mut signals) = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])
     else {
@@ -121,3 +125,6 @@ fn spawn_resize_watcher(tx: tokio::sync::mpsc::UnboundedSender<(u16, u16)>) {
         }
     });
 }
+
+#[cfg(not(unix))]
+fn spawn_resize_watcher(_tx: tokio::sync::mpsc::UnboundedSender<(u16, u16)>) {}
