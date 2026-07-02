@@ -19,6 +19,7 @@
 //! rather than in production.
 
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
@@ -58,6 +59,38 @@ pub enum Error {
     /// structural merge found the same leaf changed on both sides.
     #[error("conflicting concurrent write to the ref")]
     Conflict,
+    /// A collection key (an id passed to [`Store::store_item`], a value's
+    /// [`HasId::id`], or a map key given to [`Store::store_map`]) is unsafe
+    /// as a ref path segment or tree entry name.
+    #[error(
+        "{0:?} is not a valid collection key: expected 1-64 ASCII alphanumerics, '.', '_', '-', or ':', not starting with '.'"
+    )]
+    InvalidKey(String),
+    /// A document failed a domain invariant checked before the write (e.g. a
+    /// member's validity window is inverted). Distinct from
+    /// [`Error::InvalidKey`], which is about the collection key's ref-safety
+    /// rather than the document's own content.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+/// Whether `segment` is safe as a single ref-path or tree-entry segment: one
+/// to sixty-four ASCII alphanumerics, `.`, `_`, `-`, or `:`, not starting with
+/// `.`, and never containing `/`. Every collection key (a member's principal,
+/// a check's name, a revoked key's colon-form MD5 fingerprint, an issue's
+/// genesis hash) is stored as exactly one such segment, so an unchecked key
+/// could otherwise inject an extra path component or collide with a sibling
+/// entry. `:` is allowed — narrower than a repository path segment
+/// (`namespace.path`) — because the MD5 fingerprint form the specification
+/// requires (`cli.key-resolution`) is colon-separated.
+#[must_use]
+pub fn ref_segment_ok(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= 64
+        && !segment.starts_with('.')
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b':'))
 }
 
 /// A document that legitimately stores its own collection key.
@@ -214,7 +247,8 @@ impl Store {
 
     /// Store `value` as item `id` under the collection ref namespace `prefix`
     /// (`{prefix}/{id}`), inheriting [`store`](Self::store)'s CAS-and-merge
-    /// behavior.
+    /// behavior. Rejects `id` per [`ref_segment_ok`] before writing anything,
+    /// since it becomes the ref's last path segment.
     pub fn store_item<T: for<'a> Facet<'a>>(
         &self,
         prefix: &str,
@@ -222,6 +256,9 @@ impl Store {
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
+        if !ref_segment_ok(id) {
+            return Err(Error::InvalidKey(id.to_owned()));
+        }
         self.store(&format!("{prefix}/{id}"), value, message)
     }
 
@@ -234,6 +271,46 @@ impl Store {
         message: &str,
     ) -> Result<(), Error> {
         self.store_item(prefix, value.id(), value, message)
+    }
+
+    /// Load the scalar-keyed map document on `refname` as its flattened
+    /// `Item` list, via `assemble` (the map key plus its `Body`, joined back
+    /// into the public item that names it once instead of storing it twice).
+    /// An absent ref yields an empty list.
+    ///
+    /// The one conversion every "named entries on a single ref" collection
+    /// (checks, revocations, run outcomes) needs, done once rather than by a
+    /// hand-written wrapper document per module.
+    pub fn load_map<Body: for<'a> Facet<'a>, Item>(
+        &self,
+        refname: &str,
+        assemble: impl Fn(String, Body) -> Item,
+    ) -> Result<Vec<Item>, Error> {
+        Ok(self
+            .load::<BTreeMap<String, Body>>(refname)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, body)| assemble(key, body))
+            .collect())
+    }
+
+    /// Replace the scalar-keyed map document on `refname` with `items`, via
+    /// `split` (an item back to its map key and `Body`). Rejects any key that
+    /// fails [`ref_segment_ok`] before writing anything.
+    pub fn store_map<Body: for<'a> Facet<'a>, Item>(
+        &self,
+        refname: &str,
+        items: &[Item],
+        split: impl Fn(&Item) -> (String, Body),
+        message: &str,
+    ) -> Result<(), Error> {
+        let doc: BTreeMap<String, Body> = items.iter().map(split).collect();
+        for key in doc.keys() {
+            if !ref_segment_ok(key) {
+                return Err(Error::InvalidKey(key.clone()));
+            }
+        }
+        self.store(refname, &doc, message)
     }
 
     /// Every item under the collection ref namespace `prefix`, paired with the
