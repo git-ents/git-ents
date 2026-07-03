@@ -74,6 +74,14 @@ pub(crate) const TERMINAL_VIEW_CSS: &str = "\
 .terminal-view__row{white-space:pre;min-height:1.2em}
 ";
 
+/// Whether an asciicast v2/v3 `recording` has no output events beyond its
+/// header line — e.g. a check that passed without printing anything. acdc's
+/// replay player renders this as a bare empty box with no explanation, so
+/// callers should check this first and show their own message instead.
+pub(crate) fn recording_has_no_output(recording: &str) -> bool {
+    recording.lines().skip(1).all(|line| line.trim().is_empty())
+}
+
 /// Render an asciicast v2/v3 `recording` as a replayable terminal session via
 /// acdc's `[terminal%replay]` block, or `None` if it cannot be parsed or
 /// converted. Wraps `recording` in a listing block, so a recording containing

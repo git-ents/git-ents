@@ -995,19 +995,29 @@ pub(super) async fn check_recording_page(
     let Some(recording) = recording else {
         return not_found().into_response();
     };
-    let Some(player) = crate::asciidoc::render_recording(&recording) else {
-        return not_found().into_response();
+    let short_commit = commit.get(..8).unwrap_or(commit);
+    let body = if crate::asciidoc::recording_has_no_output(&recording) {
+        html! {
+            p.muted { "This check produced no terminal output." }
+        }
+    } else {
+        let Some(player) = crate::asciidoc::render_recording(&recording) else {
+            return not_found().into_response();
+        };
+        html! {
+            style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
+            (PreEscaped(player))
+        }
     };
     repo_shell(
         meta,
         Tab::Checks,
-        &format!("{name} @ {}", commit.get(..8).unwrap_or(commit)),
+        &format!("{name} @ {short_commit}"),
         html! {
-            style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
             div.page-header {
-                h1.page-title { (name) " on " code { (commit.get(..8).unwrap_or(commit)) } }
+                h1.page-title { (name) " on " code { (short_commit) } }
             }
-            (PreEscaped(player))
+            (body)
         },
     )
     .into_response()
