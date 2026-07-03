@@ -64,6 +64,13 @@ pub(super) struct ConfigEdit {
     pub(super) topics: Vec<String>,
 }
 
+/// The fields of a new code comment posted from a file view.
+pub(super) struct CommentEdit {
+    pub(super) path: String,
+    pub(super) lines: Option<git_anchor::LineRange>,
+    pub(super) body: String,
+}
+
 /// Create an empty session table.
 pub(crate) fn new_sessions() -> Sessions {
     Arc::new(Mutex::new(HashMap::new()))
@@ -208,19 +215,8 @@ pub(super) fn edit_config(
     hooks: &Path,
     signing_key: &Path,
 ) -> Result<(), String> {
-    let token = cookie
-        .and_then(token)
+    let public_key = session_public_key(sessions, cookie)
         .ok_or_else(|| "sign in to edit settings".to_owned())?;
-    let public_key = {
-        let table = sessions
-            .lock()
-            .map_err(|_poisoned| "session store unavailable".to_owned())?;
-        table
-            .get(&token)
-            .ok_or_else(|| "sign in to edit settings".to_owned())?
-            .public_key
-            .clone()
-    };
 
     let store = git_store::Store::open(repo).map_err(|e| format!("cannot open store: {e}"))?;
     let username = member_for_public_key_with(&store, &public_key)
@@ -243,6 +239,74 @@ pub(super) fn edit_config(
         seed,
         hooks,
     )
+}
+
+/// Land a new code comment on `refs/meta/comments/<id>`, anchored to `HEAD`'s
+/// blob at the commented path. Any signed-in member may comment — including a
+/// self-attested web member, whose allowed writes are exactly issues and
+/// comments — so there is no [`require_admin_registered`] gate here.
+pub(super) fn add_comment(
+    sessions: &Sessions,
+    cookie: Option<&str>,
+    repo: &Path,
+    edit: &CommentEdit,
+    seed: &str,
+    hooks: &Path,
+    signing_key: &Path,
+) -> Result<(), String> {
+    let public_key =
+        session_public_key(sessions, cookie).ok_or_else(|| "sign in to comment".to_owned())?;
+    let store = git_store::Store::open(repo).map_err(|e| format!("cannot open store: {e}"))?;
+    let username = member_for_public_key_with(&store, &public_key)
+        .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
+
+    let anchor = git_anchor::capture(repo, "HEAD", &edit.path, edit.lines)
+        .map_err(|e| format!("could not anchor the comment: {e}"))?;
+    let comment = git_comment::Comment {
+        body: edit.body.clone(),
+        anchor,
+        issue: None,
+    };
+    let id = git_comment::new_id(None, &comment)
+        .map_err(|e| format!("could not derive the comment id: {e}"))?;
+    let target = format!("{}/{id}", git_comment::COMMENTS_NS);
+    signed_edit(
+        repo,
+        &target,
+        &comment,
+        "Add comment",
+        &username,
+        signing_key,
+        seed,
+        hooks,
+    )
+}
+
+/// Parse an optional `<start>[:<end>]` line-range form field; empty means a
+/// whole-file comment.
+pub(super) fn parse_lines(field: &str) -> Result<Option<git_anchor::LineRange>, String> {
+    let field = field.trim();
+    if field.is_empty() {
+        return Ok(None);
+    }
+    let (start, end) = field.split_once(':').unwrap_or((field, field));
+    let parse = |number: &str| {
+        number
+            .trim()
+            .parse::<u64>()
+            .map_err(|_error| format!("invalid line number {number:?}"))
+    };
+    Ok(Some(git_anchor::LineRange {
+        start: parse(start)?,
+        end: parse(end)?,
+    }))
+}
+
+/// The signed-in session's public key, when `cookie` names a live session.
+fn session_public_key(sessions: &Sessions, cookie: Option<&str>) -> Option<String> {
+    let token = cookie.and_then(token)?;
+    let table = sessions.lock().ok()?;
+    Some(table.get(&token)?.public_key.clone())
 }
 
 /// Land `value` onto `target_ref` as a real `git push --signed`, authored by

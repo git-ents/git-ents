@@ -156,10 +156,11 @@ pub(crate) async fn handle_post(
     let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) else {
         return not_found().into_response();
     };
-    if rest != ["settings"] {
-        return not_found().into_response();
+    match rest {
+        ["settings"] => save_settings(state, &repo, &rel, cookie, body).await,
+        ["comment"] => save_comment(state, &repo, &rel, cookie, body).await,
+        _ => not_found().into_response(),
     }
-    save_settings(state, &repo, &rel, cookie, body).await
 }
 
 /// Whether this server can actually land browser edits: it needs the signed-push
@@ -195,7 +196,7 @@ async fn save_settings(
         state.web_signing_key.clone(),
     ) else {
         return edit_error(
-            rel,
+            &format!("/{rel}/settings"),
             "Editing is disabled: this server has no web signing key or signed-push gate.",
         )
         .into_response();
@@ -205,8 +206,11 @@ async fn save_settings(
         cookie,
         &write::field(&body, "csrf").unwrap_or_default(),
     ) {
-        return edit_error(rel, "the edit could not be verified; reload and try again")
-            .into_response();
+        return edit_error(
+            &format!("/{rel}/settings"),
+            "the edit could not be verified; reload and try again",
+        )
+        .into_response();
     }
     let edit = write::ConfigEdit {
         description: write::field(&body, "description").unwrap_or_default(),
@@ -236,10 +240,84 @@ async fn save_settings(
     })
     .await;
 
+    let back = format!("/{rel}/settings");
     match result {
-        Ok(Ok(())) => redirect(&format!("/{rel}/settings"), None),
-        Ok(Err(error)) => edit_error(rel, &error).into_response(),
-        Err(_join) => edit_error(rel, "the edit did not complete").into_response(),
+        Ok(Ok(())) => redirect(&back, None),
+        Ok(Err(error)) => edit_error(&back, &error).into_response(),
+        Err(_join) => edit_error(&back, "the edit did not complete").into_response(),
+    }
+}
+
+/// Record a code comment posted from a file view, then redirect back to that
+/// file on success or render the reason it was rejected.
+async fn save_comment(
+    state: &AppState,
+    repo: &Path,
+    rel: &str,
+    cookie: Option<&str>,
+    body: Bytes,
+) -> Response {
+    let path = write::field(&body, "path").unwrap_or_default();
+    let back = format!("/{rel}/blob/{path}");
+    let (Some(seed), Some(hooks), Some(signing_key)) = (
+        state.cert_nonce_seed.clone(),
+        state.hooks_dir.clone(),
+        state.web_signing_key.clone(),
+    ) else {
+        return edit_error(
+            &back,
+            "Editing is disabled: this server has no web signing key or signed-push gate.",
+        )
+        .into_response();
+    };
+    if !write::csrf_ok(
+        &state.sessions,
+        cookie,
+        &write::field(&body, "csrf").unwrap_or_default(),
+    ) {
+        return edit_error(
+            &back,
+            "the comment could not be verified; reload and try again",
+        )
+        .into_response();
+    }
+    let lines = match write::parse_lines(&write::field(&body, "lines").unwrap_or_default()) {
+        Ok(lines) => lines,
+        Err(error) => return edit_error(&back, &error).into_response(),
+    };
+    let text = write::field(&body, "body")
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if path.is_empty() || text.is_empty() {
+        return edit_error(&back, "a comment needs a file path and a body").into_response();
+    }
+    let edit = write::CommentEdit {
+        path,
+        lines,
+        body: text,
+    };
+
+    let sessions = state.sessions.clone();
+    let cookie = cookie.map(str::to_owned);
+    let repo = repo.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        write::add_comment(
+            &sessions,
+            cookie.as_deref(),
+            &repo,
+            &edit,
+            &seed,
+            &hooks,
+            &signing_key,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => redirect(&back, None),
+        Ok(Err(error)) => edit_error(&back, &error).into_response(),
+        Err(_join) => edit_error(&back, "the comment did not complete").into_response(),
     }
 }
 
@@ -288,9 +366,35 @@ async fn route(
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
         None => pages::repo_page(repo, &meta, host).await.into_response(),
-        Some((&"files", sub)) => pages::files_page(repo, &meta, sub).await,
+        Some((&"files", sub)) => {
+            let auth = resolve_auth(repo, session).await;
+            pages::files_page(repo, &meta, sub, auth.as_ref(), editing).await
+        }
         Some((&"tree", sub)) => pages::tree_page(repo, &meta, sub).await,
-        Some((&"blob", sub)) => pages::blob_page(repo, &meta, sub).await,
+        Some((&"blob", sub)) => {
+            let auth = resolve_auth(repo, session).await;
+            pages::blob_page(
+                repo,
+                &meta,
+                sub,
+                auth.as_ref(),
+                editing,
+                pages::BlobView::Rendered,
+            )
+            .await
+        }
+        Some((&"source", sub)) => {
+            let auth = resolve_auth(repo, session).await;
+            pages::blob_page(
+                repo,
+                &meta,
+                sub,
+                auth.as_ref(),
+                editing,
+                pages::BlobView::Source,
+            )
+            .await
+        }
         Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
@@ -598,14 +702,15 @@ fn login_page(
     )
 }
 
-/// A page reporting why a settings edit was rejected, with a way back.
-fn edit_error(rel: &str, error: &str) -> Markup {
+/// A page reporting why a browser write was rejected, with a way back to the
+/// page it was posted from.
+fn edit_error(back: &str, error: &str) -> Markup {
     page(
         "Edit rejected",
         html! {
             div.page-header { h1.page-title { "Edit rejected" } }
             div.card-row.muted { (error) }
-            p { a.btn href={ "/" (rel) "/settings" } { "Back to settings" } }
+            p { a.btn href=(back) { "Back" } }
         },
     )
 }

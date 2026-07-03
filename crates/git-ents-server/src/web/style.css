@@ -228,6 +228,10 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
 
+.view-toggle { display: flex; justify-content: flex-end; margin-bottom: .6rem; }
+.view-toggle a.chip { cursor: pointer; text-decoration: none; }
+.view-toggle a.chip:hover { color: var(--color-accent); border-color: var(--color-accent); }
+
 .file-comments { margin-bottom: 1.5rem; }
 .comment-row { padding: .8rem 1.1rem; border-bottom: 1px solid var(--color-border); }
 .comment-row:last-child { border-bottom: 0; }

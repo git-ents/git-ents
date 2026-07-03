@@ -268,7 +268,13 @@ fn collect_rows<'a>(
 /// client JavaScript, expanding a folder or opening a file is a link to
 /// `/<repo>/files/<path>`; the tree is rendered already expanded along the
 /// selected path.
-pub(super) async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+pub(super) async fn files_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    sub: &[&str],
+    auth: Option<&super::Auth>,
+    editing: bool,
+) -> Response {
     let rel = &meta.rel;
     let Some(selected) = browse_path(sub) else {
         return not_found().into_response();
@@ -320,7 +326,7 @@ pub(super) async fn files_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Re
         Some(path) => {
             let pane = blob_pane(repo, path).await;
             let comments = file_comments(repo, path).await;
-            html! { (pane) (comments_card(&comments)) }
+            html! { (pane) (comments_card(&comments, comment_form(rel, path, auth, editing))) }
         }
         None => html! {
             div.files-empty {
@@ -502,9 +508,27 @@ pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
     .into_response()
 }
 
-/// A single file's contents at `sub`, syntax-highlighted when the language is
-/// recognized and the file is text.
-pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+/// Which form of a blob the blob route shows: prose formats (AsciiDoc,
+/// Markdown) rendered as a document, or the underlying source.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlobView {
+    Rendered,
+    Source,
+}
+
+/// A single file's contents at `sub`. A prose format renders as a formatted
+/// document under [`BlobView::Rendered`] and as its source under
+/// [`BlobView::Source`], with a toggle between the two; everything else is
+/// syntax-highlighted source when the language is recognized and the file is
+/// text.
+pub(super) async fn blob_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    sub: &[&str],
+    auth: Option<&super::Auth>,
+    editing: bool,
+    view: BlobView,
+) -> Response {
     let rel = &meta.rel;
     let Some(path) = browse_path(sub).filter(|p| !p.is_empty()) else {
         return not_found().into_response();
@@ -523,15 +547,19 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
         return not_found().into_response();
     };
     let name = path.rsplit('/').next().unwrap_or(&path);
+    let displayable = !truncated && !is_binary(&bytes);
     let body = if truncated {
         html! { div.blob { div.binary { "File too large to display (over " (human_size(MAX_RENDER_BYTES)) ")." } } }
-    } else if is_binary(&bytes) {
+    } else if !displayable {
         html! { div.blob { div.binary { "Binary file (" (human_size(bytes.len())) ") not shown." } } }
     } else {
         let text = String::from_utf8_lossy(&bytes);
-        match doc_html(name, &text) {
-            Some(html) => html! { div.card { article.adoc-body { (PreEscaped(html)) } } },
-            None => blob_body(name, &text),
+        match view {
+            BlobView::Rendered => match doc_html(name, &text) {
+                Some(html) => html! { div.card { article.adoc-body { (PreEscaped(html)) } } },
+                None => blob_body(name, &text),
+            },
+            BlobView::Source => blob_body(name, &text),
         }
     };
     let comments = file_comments(repo, &path).await;
@@ -541,11 +569,25 @@ pub(super) async fn blob_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
         name,
         html! {
             (crumbs(rel, &path, true))
+            @if displayable && is_doc(name) {
+                div.view-toggle {
+                    @match view {
+                        BlobView::Rendered => a.chip href={ "/" (rel) "/source/" (path) } { "View source" },
+                        BlobView::Source => a.chip href={ "/" (rel) "/blob/" (path) } { "View rendered" },
+                    }
+                }
+            }
             (body)
-            (comments_card(&comments))
+            (comments_card(&comments, comment_form(rel, &path, auth, editing)))
         },
     )
     .into_response()
+}
+
+/// Whether `name` is a prose format the forge renders as a document, and so
+/// gets the rendered/source toggle.
+fn is_doc(name: &str) -> bool {
+    crate::asciidoc::is_asciidoc(name) || crate::markdown::is_markdown(name)
 }
 
 /// Render text file `source` with a line-number gutter — each number a
@@ -645,11 +687,12 @@ async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
     .unwrap_or_default()
 }
 
-/// The Comments card under a file view, or nothing when the file has none.
-/// A line-anchored comment links its range to the gutter's `#L<n>` anchors;
-/// an outdated one is flagged instead, since its lines no longer exist.
-fn comments_card(comments: &[FileComment]) -> Markup {
-    if comments.is_empty() {
+/// The Comments card under a file view: existing comments, then the add form
+/// when the viewer may comment; nothing when there are neither. A
+/// line-anchored comment links its range to the gutter's `#L<n>` anchors; an
+/// outdated one is flagged instead, since its lines no longer exist.
+fn comments_card(comments: &[FileComment], form: Option<Markup>) -> Markup {
+    if comments.is_empty() && form.is_none() {
         return html! {};
     }
     html! {
@@ -671,8 +714,34 @@ fn comments_card(comments: &[FileComment]) -> Markup {
                     p.comment-body { (comment.body) }
                 }
             }
+            @if let Some(form) = form { (form) }
         }
     }
+}
+
+/// The add-comment form under a file view, shown when a signed-in member views
+/// a server that can land edits; `None` otherwise, since a submit would only
+/// fail. The comment anchors to `HEAD`'s blob at `path`.
+fn comment_form(
+    rel: &str,
+    path: &str,
+    auth: Option<&super::Auth>,
+    editing: bool,
+) -> Option<Markup> {
+    let auth = auth.filter(|a| editing && a.username.is_some())?;
+    Some(html! {
+        div.comment-row {
+            form.edit-form method="post" action={ "/" (rel) "/comment" } {
+                input type="hidden" name="csrf" value=(auth.csrf);
+                input type="hidden" name="path" value=(path);
+                label { "Lines" }
+                input type="text" name="lines" placeholder="12 or 12:15 — empty for the whole file";
+                label { "Comment" }
+                textarea name="body" rows="3" placeholder="Anchored to this file as of the current HEAD" {}
+                button.btn type="submit" { "Comment" }
+            }
+        }
+    })
 }
 
 /// A single commit: its metadata and a colorized unified diff.
