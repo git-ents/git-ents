@@ -521,10 +521,14 @@ fn parse_lines(lines: Option<&str>) -> Result<Option<LineRange>, String> {
             .parse::<u64>()
             .map_err(|_error| format!("invalid line number {number:?} in --lines"))
     };
-    Ok(Some(LineRange {
-        start: parse(start)?,
-        end: parse(end)?,
-    }))
+    let start = parse(start)?;
+    let end = parse(end)?;
+    if start > end {
+        return Err(format!(
+            "--lines {start}:{end} is inverted (start must not come after end)"
+        ));
+    }
+    Ok(Some(LineRange { start, end }))
 }
 
 /// Resolve `id` — a full comment genesis hash or a unique prefix of one —
