@@ -6,7 +6,9 @@
 //! the *embedded* fragment (no `<!DOCTYPE>`/`<html>` frame) so it can drop
 //! straight into a card body styled by the page's own stylesheet.
 
-use acdc_converters_core::{Converter, Options as ConvertOptions, inlines_to_string};
+use acdc_converters_core::{
+    Converter, Diagnostics, Options as ConvertOptions, WarningSource, inlines_to_string,
+};
 use acdc_converters_html::{Processor, RenderOptions};
 use acdc_parser::Options as ParseOptions;
 use maud::html;
@@ -86,5 +88,15 @@ pub(crate) fn render_recording(recording: &str) -> Option<String> {
         embedded: true,
         ..RenderOptions::default()
     };
-    processor.convert_to_string(doc, &options).ok()
+    let mut output = Vec::new();
+    let source = WarningSource::new("html").with_variant("recording");
+    let mut warnings = Vec::new();
+    let mut diagnostics = Diagnostics::new(&source, &mut warnings);
+    processor
+        .convert_to_writer(doc, &mut output, &options, &mut diagnostics)
+        .ok()?;
+    for warning in &warnings {
+        eprintln!("check recording render: {warning}");
+    }
+    String::from_utf8(output).ok()
 }
