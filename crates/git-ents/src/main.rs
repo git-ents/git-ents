@@ -1384,7 +1384,7 @@ fn repo() -> Result<PathBuf, String> {
 /// it has no such ref — for the signer set, the open bootstrap window). When the
 /// remote has none, clear any stale local ref so the set reads empty.
 fn sync(remote: &str, refname: &str) -> Result<Option<String>, String> {
-    let listing = git_capture(&["ls-remote", remote, refname])?;
+    let listing = ls_remote(remote, refname)?;
     let oid = listing.split_whitespace().next().map(str::to_owned);
     if oid.is_some() {
         let refspec = format!("+{refname}:{refname}");
@@ -1584,6 +1584,27 @@ fn git_run(args: &[&str]) -> Result<(), String> {
             args.first().copied().unwrap_or("?")
         ))
     }
+}
+
+/// List `refname` on `remote`, translating git's raw "not found" fatal output
+/// into a single message in the CLI's own words rather than stacking git's
+/// `fatal: ...` lines above it; other failures fall back to git's own
+/// (trimmed) stderr.
+fn ls_remote(remote: &str, refname: &str) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["ls-remote", remote, refname])
+        .output()
+        .map_err(|error| format!("failed to run git: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("does not appear to be a git repository")
+            || stderr.contains("Could not read from remote repository")
+        {
+            return Err(format!("remote '{remote}' not found"));
+        }
+        return Err(stderr.trim().to_owned());
+    }
+    String::from_utf8(output.stdout).map_err(|_invalid| "git produced non-UTF-8 output".to_owned())
 }
 
 /// Run git and capture its stdout (stderr inherited), erroring on a non-zero
