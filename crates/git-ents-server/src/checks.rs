@@ -27,9 +27,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::{Duration, Instant};
 
 use git_ents::checks::{self, Check, RunOutcome, Status};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
 
 /// Where the pushed tree is unpacked inside the Sprite.
@@ -102,7 +104,7 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
             name: check.name.clone(),
             status,
             duration_secs: None,
-            log_url: None,
+            recording: None,
         })
         .collect()
 }
@@ -214,7 +216,9 @@ fn process_job(job: &Job) -> Result<(), String> {
     for (index, check) in runnable.iter().enumerate() {
         let result = run_one(&sprite, check);
         if let Some(outcome) = outcomes.get_mut(index) {
-            outcome.status = result;
+            outcome.status = result.status;
+            outcome.duration_secs = Some(result.duration_secs);
+            outcome.recording = Some(result.recording);
         }
         advance(&job.repo, &job.new, &outcomes);
     }
@@ -418,75 +422,186 @@ fn sync_tree(repo: &Path, sprite: &str, new: &str) -> Result<(), String> {
 /// on.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// Run one check in the Sprite's [`WORKDIR`], logging a `PASS`/`FAIL` line and
-/// echoing the output on failure. Returns its outcome; a check that exceeds
+/// The fixed size a check's recorded terminal session runs at. Nothing
+/// interactive ever attaches to it, so this only shapes the recording, not
+/// anyone's actual terminal.
+const CHECK_PTY_SIZE: PtySize = PtySize {
+    rows: 24,
+    cols: 80,
+    pixel_width: 0,
+    pixel_height: 0,
+};
+
+/// A finished check run: its outcome, wall-clock duration, and full terminal
+/// session as an asciicast v2 recording.
+struct RunResult {
+    status: Status,
+    duration_secs: u64,
+    recording: String,
+}
+
+/// Run one check in the Sprite's [`WORKDIR`], recording its terminal session —
+/// a real pty (`sprite exec --tty`), not a pipe, so the recording plays back
+/// exactly what a developer running the check by hand would see — and logging
+/// a `PASS`/`FAIL` line. Returns its outcome; a check that exceeds
 /// [`CHECK_TIMEOUT`] or cannot be captured is [`Status::Error`].
-fn run_one(sprite: &str, check: &Check) -> Status {
-    let child = Command::new("sprite")
-        .args([
-            "exec",
-            "-s",
-            sprite,
-            "--dir",
-            WORKDIR,
-            "--",
-            "sh",
-            "-c",
-            &check.command,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let child = match child {
+fn run_one(sprite: &str, check: &Check) -> RunResult {
+    let start = Instant::now();
+    let pair = match native_pty_system().openpty(CHECK_PTY_SIZE) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!(
+                "checks: ERROR {} (could not allocate a pty: {e})",
+                check.name
+            );
+            return finish(Status::Error, start, &[]);
+        }
+    };
+    let mut cmd = CommandBuilder::new("sprite");
+    cmd.args([
+        "exec",
+        "--tty",
+        "-s",
+        sprite,
+        "--dir",
+        WORKDIR,
+        "--",
+        "sh",
+        "-c",
+        &check.command,
+    ]);
+    let mut child = match pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(e) => {
             eprintln!("checks: ERROR {} (could not run: {e})", check.name);
-            return Status::Error;
+            return finish(Status::Error, start, &[]);
         }
     };
-    let Some(output) = wait_bounded(child, CHECK_TIMEOUT) else {
-        eprintln!(
-            "checks: ERROR {} (timed out after {:?} or could not be captured)",
-            check.name, CHECK_TIMEOUT
-        );
-        return Status::Error;
+    // The child holds the slave now; drop ours so the master sees EOF when the
+    // check process actually exits rather than when this scope happens to end.
+    drop(pair.slave);
+
+    let master = pair.master;
+    let Ok(mut reader) = master.try_clone_reader() else {
+        eprintln!("checks: ERROR {} (could not read the pty)", check.name);
+        let _killed = child.kill();
+        return finish(Status::Error, start, &[]);
     };
-    if output.status.success() {
+
+    // The pty's `Read` is blocking, so it gets its own thread; the main thread
+    // times the whole run out against [`CHECK_TIMEOUT`] by bounding how long it
+    // waits on the channel rather than the read itself.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let Some(chunk) = buf.get(..n) else { break };
+                    if tx.send(chunk.to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let mut events: Vec<(f64, String)> = Vec::new();
+    let deadline = start.checked_add(CHECK_TIMEOUT).unwrap_or(start);
+    let timed_out = loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break true;
+        };
+        match rx.recv_timeout(remaining) {
+            Ok(chunk) => events.push((
+                start.elapsed().as_secs_f64(),
+                String::from_utf8_lossy(&chunk).into_owned(),
+            )),
+            Err(RecvTimeoutError::Timeout) => break true,
+            Err(RecvTimeoutError::Disconnected) => break false,
+        }
+    };
+    drop(master);
+
+    if timed_out {
+        eprintln!(
+            "checks: ERROR {} (timed out after {CHECK_TIMEOUT:?})",
+            check.name
+        );
+        let _killed = child.kill();
+        return finish(Status::Error, start, &events);
+    }
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!(
+                "checks: ERROR {} (could not wait on the sprite CLI: {e})",
+                check.name
+            );
+            return finish(Status::Error, start, &events);
+        }
+    };
+
+    if status.success() {
         eprintln!("checks: PASS {}", check.name);
-        Status::Pass
+        finish(Status::Pass, start, &events)
     } else {
         eprintln!("checks: FAIL {} ({})", check.name, check.command);
-        let logs = String::from_utf8_lossy(&output.stderr);
-        let logs = if logs.trim().is_empty() {
-            String::from_utf8_lossy(&output.stdout)
-        } else {
-            logs
-        };
-        for line in logs.lines() {
-            eprintln!("checks:   {line}");
-        }
-        Status::Fail
+        finish(Status::Fail, start, &events)
     }
 }
 
-/// Wait up to `timeout` for `child` to finish, returning its captured output, or
-/// `None` if it timed out or could not be waited on. On timeout the process is
-/// killed by pid — `sprite exec` is a local proxy for the remote command, so
-/// killing it frees the worker even though the in-Sprite command may run on.
-fn wait_bounded(child: std::process::Child, timeout: Duration) -> Option<std::process::Output> {
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _sent = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => Some(output),
-        Ok(Err(_failed)) => None,
-        Err(_timeout) => {
-            let _killed = Command::new("kill").args(["-9", &pid.to_string()]).status();
-            None
+/// Assemble a [`RunResult`] from `events` captured so far — used on every exit
+/// path, including the failure ones, so a check that errors out still keeps
+/// whatever terminal output it produced before that happened.
+fn finish(status: Status, start: Instant, events: &[(f64, String)]) -> RunResult {
+    RunResult {
+        status,
+        duration_secs: start.elapsed().as_secs(),
+        recording: asciicast(events),
+    }
+}
+
+/// Render `events` (elapsed-seconds, output chunk) pairs captured from a
+/// check's pty as an asciicast v2 recording: a header line naming the
+/// terminal's fixed [`CHECK_PTY_SIZE`], then one `[time, "o", data]` output
+/// event per line — the format the Checks tab's `asciinema-player` replay
+/// expects (<https://docs.asciinema.org/manual/asciicast/v2/>).
+fn asciicast(events: &[(f64, String)]) -> String {
+    let mut out = format!(
+        "{{\"version\": 2, \"width\": {}, \"height\": {}}}\n",
+        CHECK_PTY_SIZE.cols, CHECK_PTY_SIZE.rows
+    );
+    for (time, data) in events {
+        out.push('[');
+        out.push_str(&format!("{time:.6}"));
+        out.push_str(", \"o\", ");
+        push_json_string(data, &mut out);
+        out.push_str("]\n");
+    }
+    out
+}
+
+/// Append `value` to `out` as a quoted JSON string. Hand-rolled rather than
+/// taking on a JSON crate for this one call site: escape what JSON requires
+/// (`"`, `\`, and the C0 control codes) and pass the rest — already valid
+/// UTF-8, since it came from `String::from_utf8_lossy` — straight through.
+fn push_json_string(value: &str, out: &mut String) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
         }
     }
+    out.push('"');
 }
 
 #[cfg(test)]

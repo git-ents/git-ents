@@ -117,8 +117,9 @@ struct Outcome {
     status: Status,
     /// How long the check took to run, when known.
     duration_secs: Option<u64>,
-    /// Where to read the check's full log, when the runner published one.
-    log_url: Option<String>,
+    /// The check's terminal session, captured as asciicast v2 (JSONL) text,
+    /// when the runner recorded one.
+    recording: Option<String>,
 }
 
 /// One check's outcome within a [`Run`], assembled from its map key and
@@ -131,8 +132,9 @@ pub struct RunOutcome {
     pub status: Status,
     /// How long the check took to run, when known.
     pub duration_secs: Option<u64>,
-    /// Where to read the check's full log, when the runner published one.
-    pub log_url: Option<String>,
+    /// The check's terminal session, captured as asciicast v2 (JSONL) text,
+    /// when the runner recorded one.
+    pub recording: Option<String>,
 }
 
 /// One recorded execution of the check set against a commit.
@@ -224,7 +226,7 @@ fn outcome_split(outcome: &RunOutcome) -> (String, Outcome) {
         Outcome {
             status: outcome.status,
             duration_secs: outcome.duration_secs,
-            log_url: outcome.log_url.clone(),
+            recording: outcome.recording.clone(),
         },
     )
 }
@@ -235,7 +237,7 @@ fn assemble_outcome(name: String, outcome: Outcome) -> RunOutcome {
         name,
         status: outcome.status,
         duration_secs: outcome.duration_secs,
-        log_url: outcome.log_url,
+        recording: outcome.recording,
     }
 }
 
@@ -322,7 +324,7 @@ mod tests {
     #[test]
     fn loads_the_on_disk_runs_format() {
         // A fixture written as the real `results/<name>/status/<Variant>`
-        // subtree layout, with `duration_secs`/`log_url` omitted, must keep
+        // subtree layout, with `duration_secs`/`recording` omitted, must keep
         // loading, with the missing optional fields unset.
         let repo = unique_repo();
         let commit = "0123456789012345678901234567890123456789";
@@ -347,7 +349,7 @@ mod tests {
             name: name.to_owned(),
             status,
             duration_secs: None,
-            log_url: None,
+            recording: None,
         }
     }
 
@@ -402,14 +404,14 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_an_outcomes_duration_and_log_url() {
+    fn round_trips_an_outcomes_duration_and_recording() {
         let repo = unique_repo();
         let commit = "0123456789012345678901234567890123456789";
         let rich = RunOutcome {
             name: "fmt".to_owned(),
             status: Status::Pass,
             duration_secs: Some(12),
-            log_url: Some("https://example.com/log".to_owned()),
+            recording: Some("{\"version\": 2}\n[0.5, \"o\", \"hi\\r\\n\"]\n".to_owned()),
         };
         record(&repo, commit, std::slice::from_ref(&rich)).unwrap();
         let commits = runs(&repo).unwrap();

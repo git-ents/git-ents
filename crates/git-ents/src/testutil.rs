@@ -315,7 +315,7 @@ pub(crate) fn write_checks_doc(repo: &Path, checks: &[(&str, &str)]) {
 /// Lay a `results/<name>` run-outcomes document out at `refname` as the real
 /// on-disk format: a `results/<name>/status/<Variant>` subtree per outcome
 /// (the `Status` enum's unit variant resolving to an empty tree, exactly like
-/// `Member`'s `provenance`), with `duration_secs`/`log_url` omitted entirely —
+/// `Member`'s `provenance`), with `duration_secs`/`recording` omitted entirely —
 /// asserting the loader fills a record's missing optional fields as unset,
 /// independent of the writer. `variant` is the `Status` variant's name
 /// (`"Pass"`, `"Fail"`, …).

@@ -1,7 +1,10 @@
 [files]
 
 extend-exclude = [
-  "CHANGELOG.md"
+  "CHANGELOG.md",
+  # Vendored third-party assets: minified identifiers aren't prose, and
+  # rewriting them (typos --write-changes) corrupts the bundle.
+  "crates/git-ents-server/src/web/asciinema-player.min.js",
 ]
 
 # Enable checking of hidden files, dot files, and respect no ignore files

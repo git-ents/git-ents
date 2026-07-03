@@ -1,6 +1,7 @@
 //! The per-tab page renderers and their view helpers. Each top-level tab is its
-//! own server-rendered route; with no client JavaScript, expanding a folder or
-//! opening a file is a plain link back into these handlers.
+//! own server-rendered route; with no client JavaScript beyond the
+//! check-recording replay page, expanding a folder or opening a file is a
+//! plain link back into these handlers.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -17,6 +18,7 @@ use gix_object::bstr::ByteSlice;
 use gix_object::tree::Entry;
 use maud::{Markup, PreEscaped, html};
 
+use super::assets::{ASCIINEMA_PLAYER_CSS, ASCIINEMA_PLAYER_JS};
 use super::git::{
     browse_path, git_output, git_output_bytes, git_output_capped, languages, latest_release,
     list_tree, parse_iso, releases, root_tree,
@@ -847,11 +849,24 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 
 /// The Checks tab. The check set lives on `refs/meta/checks` (managed with
 /// `git ents checks`); each push queues them and a worker runs them in a Sprite.
-/// The Configuration card reflects the live set; Recent runs reflects the run
-/// log on `refs/meta/runs`, including in-flight `queued`/`running` runs.
+/// "Checks on HEAD" mirrors a GitHub PR checks list — one row per configured
+/// check, its latest status against the current commit, linked to its recorded
+/// terminal session when it has one; Recent runs and Configuration below it are
+/// the full history and the raw set, as before.
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
+    let rel = &meta.rel;
     let checks = load_checks(repo).await;
     let runs = load_runs(repo).await;
+    let head = git_output(repo, &["rev-parse", "HEAD"])
+        .await
+        .map(|out| out.trim().to_owned())
+        .filter(|head| !head.is_empty());
+    let head_run = head.as_deref().and_then(|head| {
+        runs.as_ref()
+            .ok()
+            .and_then(|commits| commits.iter().find(|commit| commit.commit == head))
+            .and_then(|commit| commit.runs.first())
+    });
     repo_shell(
         meta,
         Tab::Checks,
@@ -862,6 +877,27 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                 "Checks are configured on " code { "refs/meta/checks" }
                 " (" code { "git ents checks list" } ") and run in a Sprite after each push; "
                 "each run is recorded under " code { "refs/meta/runs/<commit>" } "."
+            }
+            div.card {
+                div.card-header { "Checks on HEAD" }
+                @match &checks {
+                    Err(err) => div.card-row.muted { "Could not read checks: " (err) }
+                    Ok(checks) if checks.is_empty() => {
+                        div.card-row.muted {
+                            "No checks configured on " code { "refs/meta/checks" } "."
+                        }
+                    }
+                    Ok(checks) => {
+                        @match head.as_deref() {
+                            None => div.card-row.muted { "HEAD has no commits yet." }
+                            Some(head) => {
+                                @for check in checks {
+                                    (head_check_row(rel, head, check, head_run))
+                                }
+                            }
+                        }
+                    }
+                }
             }
             div.checks-grid {
                 div.card {
@@ -903,6 +939,79 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
             }
         },
     )
+}
+
+/// One check's row on the "Checks on HEAD" card: its name and its latest status
+/// against `head`, linked to its recorded terminal session when `head_run`
+/// carries one for it. A check with no outcome yet on `head` (just added, or
+/// its run has not landed) reads "no run yet" rather than a stale result.
+fn head_check_row(
+    rel: &str,
+    head: &str,
+    check: &git_ents::checks::Check,
+    head_run: Option<&git_ents::checks::Run>,
+) -> Markup {
+    let outcome =
+        head_run.and_then(|run| run.results.iter().find(|result| result.name == check.name));
+    html! {
+        div.card-row.signer-row {
+            code.key { (check.name) }
+            @match outcome {
+                None => span.muted { "no run yet" }
+                Some(outcome) if outcome.recording.is_some() => {
+                    a href={ "/" (rel) "/checks/" (head) "/" (check.name) } { (outcome.status.to_string()) }
+                }
+                Some(outcome) => span.muted { (outcome.status.to_string()) }
+            }
+        }
+    }
+}
+
+/// One check's recorded terminal session on `commit`, replayed with
+/// `asciinema-player` — reached by clicking a linked status on the "Checks on
+/// HEAD" card. 404s when `commit` has no run recorded, `name` is not among its
+/// results, or that outcome carries no recording (an older run, from before
+/// recording landed, or a check that errored before a pty was allocated).
+pub(super) async fn check_recording_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    commit: &str,
+    name: &str,
+) -> Response {
+    let runs = load_runs(repo).await;
+    let recording = runs.ok().and_then(|commits| {
+        commits
+            .into_iter()
+            .find(|commit_runs| commit_runs.commit == commit)
+            .and_then(|commit_runs| commit_runs.runs.into_iter().next())
+            .and_then(|run| run.results.into_iter().find(|result| result.name == name))
+            .and_then(|outcome| outcome.recording)
+    });
+    let Some(recording) = recording else {
+        return not_found().into_response();
+    };
+    repo_shell(
+        meta,
+        Tab::Checks,
+        &format!("{name} @ {}", commit.get(..8).unwrap_or(commit)),
+        html! {
+            style { (PreEscaped(ASCIINEMA_PLAYER_CSS)) }
+            div.page-header {
+                h1.page-title { (name) " on " code { (commit.get(..8).unwrap_or(commit)) } }
+            }
+            div #player {}
+            pre #cast-data hidden { (recording) }
+            script { (PreEscaped(ASCIINEMA_PLAYER_JS)) }
+            script {
+                (PreEscaped(
+                    "const cast = document.getElementById('cast-data').textContent;\n\
+                     const url = URL.createObjectURL(new Blob([cast], {type: 'text/plain'}));\n\
+                     AsciinemaPlayer.create(url, document.getElementById('player'));"
+                ))
+            }
+        },
+    )
+    .into_response()
 }
 
 /// Load the configured check set off the async runtime, since `checks::load`

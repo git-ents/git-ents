@@ -398,6 +398,9 @@ async fn route(
         Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
+        Some((&"checks", &[commit, name])) => {
+            pages::check_recording_page(repo, &meta, commit, name).await
+        }
         Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
         Some((&"settings", &[])) => {
             let auth = resolve_auth(repo, session).await;
