@@ -79,6 +79,13 @@ pub struct Member {
     /// entry, so a member ref written before this field existed keeps
     /// loading unchanged.
     pub account: Option<String>,
+    /// The member's role, matched against `refs/meta/config`'s
+    /// [`crate::config::Config::roles`] to gate which refs they may push to.
+    /// `None` (or a role absent from that map) permits every ref — role
+    /// rules are opt-in gating layered on top of the default-allow-all rule.
+    /// Plain `Option`, so a member ref written before this field existed
+    /// keeps loading unchanged.
+    pub role: Option<String>,
 }
 
 /// Whether a member was admin-registered or self-attested via web onboarding.
@@ -154,6 +161,7 @@ impl Member {
             trust: Trust::Keys(keys),
             provenance: Provenance::AdminRegistered,
             account: None,
+            role: None,
         }
     }
 
@@ -168,6 +176,7 @@ impl Member {
             trust: Trust::CertAuthority(ca),
             provenance: Provenance::AdminRegistered,
             account: None,
+            role: None,
         }
     }
 
@@ -182,6 +191,7 @@ impl Member {
             trust: Trust::WebAuthn(keys),
             provenance: Provenance::SelfAttestedWeb,
             account: None,
+            role: None,
         }
     }
 

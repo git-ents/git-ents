@@ -8,6 +8,7 @@
 //! cannot rewrite the repository's metadata, and the metadata carries its own
 //! independent history.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
@@ -25,6 +26,70 @@ pub struct Config {
     /// The repository's topics, members-gated metadata rather than worktree
     /// content.
     pub topics: Vec<String>,
+    /// Ref-push rules keyed by role name, matched against a pushing
+    /// [`crate::members::Member`]'s `role`. A role absent here — or a member
+    /// with no role at all — permits every ref: role rules are opt-in gating
+    /// layered on top of that default-allow-all rule.
+    pub roles: BTreeMap<String, RoleRules>,
+}
+
+/// The ref-push rules for one role: glob patterns (`*` matches any run of
+/// characters) matched against the full ref name (e.g. `refs/heads/*`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Facet)]
+pub struct RoleRules {
+    /// Refs this role may push to. Empty means "every ref not denied" —
+    /// otherwise a ref must match at least one pattern here.
+    pub allow: Vec<String>,
+    /// Refs this role may never push to, checked before `allow`.
+    pub deny: Vec<String>,
+}
+
+/// Whether `role`'s rules in `config` permit pushing to `ref_name`. `role`
+/// being `None`, or naming a role absent from `config.roles`, permits every
+/// ref — see [`Config::roles`].
+#[must_use]
+pub fn ref_allowed(config: &Config, role: Option<&str>, ref_name: &str) -> bool {
+    let Some(role) = role else {
+        return true;
+    };
+    let Some(rules) = config.roles.get(role) else {
+        return true;
+    };
+    if rules
+        .deny
+        .iter()
+        .any(|pattern| glob_match(pattern, ref_name))
+    {
+        return false;
+    }
+    rules.allow.is_empty()
+        || rules
+            .allow
+            .iter()
+            .any(|pattern| glob_match(pattern, ref_name))
+}
+
+/// Whether `text` matches `pattern`, where `*` in `pattern` matches any run of
+/// characters (including none, and including `/`).
+#[must_use]
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    fn go(pattern: &[u8], text: &[u8]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some((b'*', rest)) => {
+                go(rest, text)
+                    || match text.split_first() {
+                        Some((_, t_rest)) => go(pattern, t_rest),
+                        None => false,
+                    }
+            }
+            Some((c, rest)) => match text.split_first() {
+                Some((t, t_rest)) if t == c => go(rest, t_rest),
+                _ => false,
+            },
+        }
+    }
+    go(pattern.as_bytes(), text.as_bytes())
 }
 
 /// Load the configuration recorded at [`CONFIG_REF`] from an already-open
@@ -74,6 +139,7 @@ mod tests {
             description: "A repository".to_owned(),
             homepage: "https://example.com".to_owned(),
             topics: vec!["rust".to_owned(), "git".to_owned()],
+            roles: BTreeMap::new(),
         }
     }
 
@@ -117,5 +183,54 @@ mod tests {
         let repo = unique_repo();
         assert_eq!(load(&repo).unwrap(), Config::default());
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn glob_match_supports_a_trailing_star() {
+        assert!(glob_match("refs/heads/*", "refs/heads/main"));
+        assert!(glob_match("refs/heads/*", "refs/heads/"));
+        assert!(!glob_match("refs/heads/*", "refs/tags/v1"));
+        assert!(glob_match("*", "anything"));
+    }
+
+    #[test]
+    fn ref_allowed_defaults_to_true_with_no_role_or_unlisted_role() {
+        let mut config = Config::default();
+        config.roles.insert(
+            "readonly".to_owned(),
+            RoleRules {
+                allow: vec![],
+                deny: vec!["refs/heads/*".to_owned()],
+            },
+        );
+        assert!(ref_allowed(&config, None, "refs/heads/main"));
+        assert!(ref_allowed(&config, Some("nonexistent"), "refs/heads/main"));
+    }
+
+    #[test]
+    fn ref_allowed_checks_deny_before_allow() {
+        let mut config = Config::default();
+        config.roles.insert(
+            "release-manager".to_owned(),
+            RoleRules {
+                allow: vec!["refs/heads/release-*".to_owned()],
+                deny: vec!["refs/heads/release-locked".to_owned()],
+            },
+        );
+        assert!(ref_allowed(
+            &config,
+            Some("release-manager"),
+            "refs/heads/release-1.0"
+        ));
+        assert!(!ref_allowed(
+            &config,
+            Some("release-manager"),
+            "refs/heads/release-locked"
+        ));
+        assert!(!ref_allowed(
+            &config,
+            Some("release-manager"),
+            "refs/heads/main"
+        ));
     }
 }

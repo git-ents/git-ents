@@ -114,6 +114,11 @@ enum Action {
         /// account create` prints one).
         #[facet(args::named, args::label = "GENESIS_HASH")]
         account: Option<String>,
+        /// Role to gate this member's pushes by, matched against
+        /// `refs/meta/config`'s role rules. Omit for no role (every ref
+        /// allowed).
+        #[facet(args::named)]
+        role: Option<String>,
     },
     /// Remove a member, deleting its ref on a remote and pushing the update.
     Remove {
@@ -305,6 +310,7 @@ fn run_members(action: Action, remote: &str) -> Result<(), String> {
             valid_after,
             valid_before,
             account,
+            role,
         } => members_add(
             username,
             remote,
@@ -313,6 +319,7 @@ fn run_members(action: Action, remote: &str) -> Result<(), String> {
             valid_after,
             valid_before,
             account,
+            role,
         ),
         Action::Remove { username } => members_remove(&username, remote),
         Action::Revoke {
@@ -1005,6 +1012,10 @@ fn resolve_trust(
 
 /// Authorize a key (or pin a CA) for the member `username` on `remote`, trusting
 /// the member within the given validity window, and push the updated member ref.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent, optional member field set from its own CLI flag"
+)]
 fn members_add(
     username: Option<String>,
     remote: &str,
@@ -1013,6 +1024,7 @@ fn members_add(
     valid_after: Option<String>,
     valid_before: Option<String>,
     account: Option<String>,
+    role: Option<String>,
 ) -> Result<(), String> {
     let username = interactive::text_or(username, "Username")?;
     let (key, cert_authority) = resolve_trust(key, cert_authority)?;
@@ -1041,6 +1053,9 @@ fn members_add(
     }
     if account.is_some() {
         member.account = account;
+    }
+    if role.is_some() {
+        member.role = role;
     }
 
     // Pinning a CA replaces the member's trust wholesale — a member is either

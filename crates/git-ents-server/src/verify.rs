@@ -10,10 +10,11 @@
 //! subtracted from the trust set before the check so a revoked key fails the
 //! moment it is listed, faster than its window would expire.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use git_ents::config;
 use git_ents::members::{self, Member};
 use git_ents::revocations;
 
@@ -35,6 +36,7 @@ pub fn pre_receive() -> Result<(), String> {
     let revoked = revocations::fingerprints_with(&store)
         .map_err(|e| format!("could not read revocations: {e}"))?;
     let authorized = members::without_revoked(members, &revoked);
+    let ref_updates = read_ref_updates()?;
 
     let cert_oid = env("GIT_PUSH_CERT")
         .filter(|oid| !oid.is_empty())
@@ -46,7 +48,47 @@ pub fn pre_receive() -> Result<(), String> {
     }
 
     let certificate = cat_blob(&repo, &cert_oid)?;
-    verify_certificate(&authorized, &certificate)
+    verify_certificate(&authorized, &certificate)?;
+
+    let signer = identify_signer(&authorized, &certificate);
+    if let Some(member) = signer {
+        let config =
+            config::load_with(&store).map_err(|e| format!("could not read configuration: {e}"))?;
+        for ref_name in &ref_updates {
+            if !config::ref_allowed(&config, member.role.as_deref(), ref_name) {
+                return Err(format!(
+                    "{} (role {:?}) is not permitted to push to {ref_name:?}",
+                    member.principal, member.role
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The ref names git is about to update, read from the hook's own stdin
+/// (`<old-oid> <new-oid> <refname>` per line) — distinct from the certificate
+/// payload, which is written to a separate `ssh-keygen` child process below.
+fn read_ref_updates() -> Result<Vec<String>, String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| format!("could not read ref updates: {e}"))?;
+    Ok(input
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(2))
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Which of `authorized` signed `certificate`, by re-checking the signature
+/// against each member's own key set individually. `verify_certificate`
+/// already established the signature matches *someone* in `authorized`; this
+/// narrows it to a specific member so their `role` can gate the ref update.
+fn identify_signer<'a>(authorized: &'a [Member], certificate: &str) -> Option<&'a Member> {
+    authorized
+        .iter()
+        .find(|member| verify_certificate(std::slice::from_ref(member), certificate).is_ok())
 }
 
 /// Split the certificate into its signed payload and SSH signature, then accept
