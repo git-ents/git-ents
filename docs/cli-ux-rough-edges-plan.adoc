@@ -1,0 +1,74 @@
+= CLI UX rough edges: fix plan
+:doctype: article
+:toc:
+:toclevels: 2
+
+Found by exercising `git-ents` end to end (account, members, checks, comment,
+login) against a local bare "remote" with no server running. Each item below
+is independent and can be fixed and committed separately.
+
+== 1. `account create` always prints "created account X"
+
+Even when updating an existing account (same username, changed
+`display_name`/`bio`, or even a username change), `account_create`
+(`crates/git-ents/src/main.rs:1076`) unconditionally prints `created account
+{username}`. It already loads `existing` to preserve `created_at` — reuse that
+to print `updated account {username}` when `existing.is_some()`.
+
+== 2. `members revoke <fingerprint>` doesn't validate its argument
+
+`members_revoke` (`crates/git-ents/src/main.rs:887`) accepts any string and
+pushes it straight into the deny list. A typo'd fingerprint (e.g. `members
+revoke notafingerprint`) succeeds silently and prints `revoked
+notafingerprint`, giving false confidence that a key was denied when the
+deny-list entry will never match a real fingerprint. Validate the argument
+looks like a key fingerprint (the `xx:xx:...` colon-hex form `members list`
+prints) before storing it, or at least warn when it doesn't match any known
+member's key.
+
+== 3. Inverted `--lines` ranges produce a misleading error
+
+`comment add file --lines 4:2` (end before start, well within the file) and
+`comment add file --lines 0:2` (out of bounds) both produce the same
+`Error::LinesOutOfRange` message: `lines {start}..={end} do not fit {path}
+({len} lines)` (`crates/git-anchor/src/lib.rs:52`, raised via the
+single-slice-lookup validation in `lines_of`, `crates/git-anchor/src/lib.rs:168`).
+Users can't tell "your range is inverted" from "your file is shorter than you
+think." Add an explicit `start > end` check in `parse_lines`
+(`crates/git-ents/src/main.rs:513`) or in `lines_of`, with its own message
+distinguishing an inverted range from an out-of-bounds one.
+
+== 4. Bad-remote errors mix raw git output with the app's own error line
+
+`members add x totallybogus` (or any command against a nonexistent remote)
+prints git's own `fatal: ...` lines from `git ls-remote` followed by the
+app's `error: git ls-remote failed` — two different error "voices" stacked in
+one message, with no attempt to explain what went wrong in the CLI's own
+words. Catch the `ls-remote` failure and surface a single message like
+`remote '{remote}' not found` (falling back to the raw git output only when
+it doesn't look like a plain "not found").
+
+== 5. `checks add <name> ""` accepts a blank command silently
+
+`add_check` (`crates/git-ents/src/main.rs:682`) calls `interactive::text_or`
+for both `name` and `command`. The storage layer rejects an empty *name*
+(it's a git-tree map key, so `""` fails `facet-git-tree`'s key validation
+with `is not a valid collection key`), but `command` is stored as a plain
+blob value with no such check, so `checks add empty ""` silently creates a
+check with a blank command — `checks list` shows it as `empty` with nothing
+after it, and nothing fails until (if ever) the check tries to run.
+
+Root cause: `interactive::text_or` (`crates/git-ents/src/interactive.rs:18`)
+only distinguishes `Some`/`None`, unlike `optional_text_or`
+(`crates/git-ents/src/interactive.rs:35`) which treats an empty reply as
+`None`. Fix in one place: make `text_or` reject (or trim-and-reject) an
+empty string the same way it rejects `None` in non-interactive mode, and
+re-prompt or error accordingly when interactive. This also covers
+`account create`'s username and any other `text_or` call site that could be
+passed an explicit empty string.
+
+== Not fixing
+
+* Positional-arg ordering (`account create [USERNAME] [REMOTE]`) is correct
+  and well-documented in `--help`; the only "issue" was tester error during
+  manual exploration, not a CLI defect.
