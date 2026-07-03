@@ -14,19 +14,28 @@ pub fn available() -> bool {
 
 /// `existing`, or a required text prompt for `message` when interactive; an
 /// error naming `message` when not, so a script never hangs on a missing
-/// argument.
+/// argument. An empty string — whether passed explicitly or typed at the
+/// prompt — is rejected the same as a missing value.
 pub fn text_or(existing: Option<String>, message: &str) -> Result<String, String> {
     if let Some(value) = existing {
-        return Ok(value);
+        return if value.is_empty() {
+            Err(format!("{message} must not be empty"))
+        } else {
+            Ok(value)
+        };
     }
     if !available() {
         return Err(format!(
             "{message} is required (not an interactive terminal)"
         ));
     }
-    inquire::Text::new(message)
+    let value = inquire::Text::new(message)
         .prompt()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    if value.is_empty() {
+        return Err(format!("{message} must not be empty"));
+    }
+    Ok(value)
 }
 
 /// `existing`, or an optional text prompt for `message` when interactive —
