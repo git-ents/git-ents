@@ -187,8 +187,16 @@ enum ChecksAction {
     Add {
         /// Name to record the check under (`checks/<name>`).
         name: Option<String>,
-        /// Command the check runs (e.g. `cargo fmt --check`).
+        /// Command the check runs (e.g. `cargo fmt --check`); omit for a
+        /// composite check that only aggregates its dependencies.
         command: Option<String>,
+        /// Sandbox image the command runs in (reserved: the Sprite sandbox
+        /// does not honor an image yet, so setting one is rejected).
+        #[arg(long)]
+        image: Option<String>,
+        /// Check that must pass before this one runs (repeatable).
+        #[arg(long = "depends", value_name = "CHECK")]
+        depends: Vec<String>,
         /// Remote whose `refs/meta/checks` to update.
         #[arg(default_value = "origin")]
         remote: String,
@@ -342,8 +350,10 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
         ChecksAction::Add {
             name,
             command,
+            image,
+            depends,
             remote,
-        } => add_check(name, command, &remote),
+        } => add_check(name, command, image, depends, &remote),
         ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
         ChecksAction::Debug { remote } => checks_debug(&remote),
         ChecksAction::Runs { remote } => checks_runs(&remote),
@@ -627,7 +637,17 @@ impl Set for Checks {
     }
 
     fn value(item: &Check) -> String {
-        item.command.clone()
+        let mut value = item
+            .command
+            .clone()
+            .unwrap_or_else(|| "(composite)".to_owned());
+        if let Some(image) = &item.image {
+            value.push_str(&format!("  [image: {image}]"));
+        }
+        if !item.depends.is_empty() {
+            value.push_str(&format!("  [needs: {}]", item.depends.join(", ")));
+        }
+        value
     }
 }
 
@@ -684,11 +704,27 @@ fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
 }
 
 /// Add `name` running `command` to `remote`'s set, replacing any check already
-/// recorded under that name, and push the update. Prompts for either field
-/// left `None` when run at an interactive terminal.
-fn add_check(name: Option<String>, command: Option<String>, remote: &str) -> Result<(), String> {
+/// recorded under that name, and push the update. Prompts for any field left
+/// unset when run at an interactive terminal. The whole set is validated as a
+/// dependency graph (`checks::order`) before it is stored, so a cycle or a
+/// dangling dependency never lands on the remote.
+fn add_check(
+    name: Option<String>,
+    command: Option<String>,
+    image: Option<String>,
+    depends: Vec<String>,
+    remote: &str,
+) -> Result<(), String> {
     let name = interactive::text_or(name, "Check name")?;
-    let command = interactive::text_or(command, "Command")?;
+    let command = interactive::optional_text_or(command, "Command (empty for a composite)")?;
+    let depends = if depends.is_empty() {
+        parse_depends(interactive::optional_text_or(
+            None,
+            "Depends on (comma-separated, empty for none)",
+        )?)
+    } else {
+        depends
+    };
     let repo = repo()?;
     let expected = sync(remote, CHECKS_REF)?;
     let mut checks = checks::load(&repo).map_err(|error| error.to_string())?;
@@ -696,11 +732,28 @@ fn add_check(name: Option<String>, command: Option<String>, remote: &str) -> Res
     checks.push(Check {
         name: name.clone(),
         command,
+        image,
+        depends,
     });
+    let _ordered = checks::order(&checks)?;
     checks::store(&repo, &checks).map_err(|error| error.to_string())?;
     push_signed(remote, CHECKS_REF, expected.as_deref())?;
     println!("recorded check {name}");
     Ok(())
+}
+
+/// Split an interactive comma-separated dependency reply into names, dropping
+/// empty segments; `None` (no reply) is no dependencies.
+fn parse_depends(reply: Option<String>) -> Vec<String> {
+    reply
+        .map(|value| {
+            value
+                .split(',')
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Set this machine up to produce the signed pushes the server requires:

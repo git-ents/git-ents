@@ -186,10 +186,14 @@ fn drain_repo(jobs: &[(PathBuf, Job)]) {
 
 /// Run the checks for one queued push in its repository's Sprite, advancing the
 /// recorded run as it goes: `running` while the Sprite is prepared, then each
-/// check flipped to its result as it finishes. An infra failure (an unreachable
-/// Sprite, a tree that will not sync) finalizes the run as `error` rather than
-/// leaving it stuck at `running`, then returns `Err`. Returns `Ok` even when a
-/// check fails — a failing check is a recorded result, not an error.
+/// check flipped to its result as it finishes. Checks settle in the dependency
+/// order `checks::order` fixed at write time: a check whose dependency did not
+/// pass is recorded `skipped` without touching the Sprite, and a composite (no
+/// command) derives its status from its dependencies alone. An infra failure
+/// (an unreachable Sprite, a tree that will not sync, a check set that fails
+/// re-validation) finalizes the run as `error` rather than leaving it stuck at
+/// `running`, then returns `Err`. Returns `Ok` even when a check fails — a
+/// failing check is a recorded result, not an error.
 fn process_job(job: &Job) -> Result<(), String> {
     let runnable = checks::load(&job.repo).map_err(|e| format!("could not read checks: {e}"))?;
     if runnable.is_empty() {
@@ -197,6 +201,19 @@ fn process_job(job: &Job) -> Result<(), String> {
     }
 
     let mut outcomes = statuses(&runnable, Status::Running);
+    // Re-validate defensively: the CLI rejects an invalid graph before it is
+    // pushed, but a hand-crafted push could still land one. Indices into
+    // `runnable`/`outcomes` rather than borrows, so outcomes stay mutable.
+    let ordered: Vec<usize> = match checks::order(&runnable) {
+        Ok(ordered) => ordered
+            .iter()
+            .filter_map(|check| runnable.iter().position(|c| c.name == check.name))
+            .collect(),
+        Err(e) => {
+            finalize_error(&job.repo, job.new, &mut outcomes);
+            return Err(format!("invalid check set: {e}"));
+        }
+    };
     let sprite = sprite_name(&job.repo);
     if let Err(e) = ensure_auth().and_then(|()| ensure_sprite(&sprite)) {
         finalize_error(&job.repo, job.new, &mut outcomes);
@@ -214,16 +231,68 @@ fn process_job(job: &Job) -> Result<(), String> {
         return Err(e);
     }
 
-    for (index, check) in runnable.iter().enumerate() {
-        let result = run_one(&sprite, check);
-        if let Some(outcome) = outcomes.get_mut(index) {
-            outcome.status = result.status;
-            outcome.duration_secs = Some(result.duration_secs);
-            outcome.recording = Some(result.recording);
+    for index in ordered {
+        let Some(check) = runnable.get(index) else {
+            continue;
+        };
+        // Topological order guarantees every dependency settled already.
+        let deps: Vec<Status> = check
+            .depends
+            .iter()
+            .filter_map(|dep| {
+                outcomes
+                    .iter()
+                    .find(|outcome| outcome.name == *dep)
+                    .map(|outcome| outcome.status)
+            })
+            .collect();
+        let all_pass = deps.iter().all(|status| *status == Status::Pass);
+        match &check.command {
+            Some(command) if all_pass => {
+                let result = run_one(&sprite, &check.name, command);
+                if let Some(outcome) = outcomes.get_mut(index) {
+                    outcome.status = result.status;
+                    outcome.duration_secs = Some(result.duration_secs);
+                    outcome.recording = Some(result.recording);
+                }
+            }
+            Some(_) => {
+                eprintln!("checks: SKIP {} (a dependency did not pass)", check.name);
+                if let Some(outcome) = outcomes.get_mut(index) {
+                    outcome.status = Status::Skipped;
+                }
+            }
+            None => {
+                let status = derive_composite(&deps);
+                eprintln!(
+                    "checks: {} {} (composite)",
+                    status.to_string().to_uppercase(),
+                    check.name
+                );
+                if let Some(outcome) = outcomes.get_mut(index) {
+                    outcome.status = status;
+                }
+            }
         }
         advance(&job.repo, job.new, &outcomes);
     }
     Ok(())
+}
+
+/// A composite check's status, derived from its dependencies' settled
+/// statuses: `pass` when everything passed, `fail` when anything failed or
+/// errored, `skipped` when nothing failed but something was skipped.
+fn derive_composite(deps: &[Status]) -> Status {
+    if deps.iter().all(|status| *status == Status::Pass) {
+        Status::Pass
+    } else if deps
+        .iter()
+        .any(|status| matches!(status, Status::Fail | Status::Error))
+    {
+        Status::Fail
+    } else {
+        Status::Skipped
+    }
 }
 
 /// Advance the recorded run for `new` to `outcomes`; a recording hiccup is
@@ -444,35 +513,23 @@ struct RunResult {
 /// exactly what a developer running the check by hand would see — and logging
 /// a `PASS`/`FAIL` line. Returns its outcome; a check that exceeds
 /// [`CHECK_TIMEOUT`] or cannot be captured is [`Status::Error`].
-fn run_one(sprite: &str, check: &Check) -> RunResult {
+fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
     let start = Instant::now();
     let pair = match native_pty_system().openpty(CHECK_PTY_SIZE) {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!(
-                "checks: ERROR {} (could not allocate a pty: {e})",
-                check.name
-            );
+            eprintln!("checks: ERROR {name} (could not allocate a pty: {e})");
             return finish(Status::Error, start, &[]);
         }
     };
     let mut cmd = CommandBuilder::new("sprite");
     cmd.args([
-        "exec",
-        "--tty",
-        "-s",
-        sprite,
-        "--dir",
-        WORKDIR,
-        "--",
-        "sh",
-        "-c",
-        &check.command,
+        "exec", "--tty", "-s", sprite, "--dir", WORKDIR, "--", "sh", "-c", command,
     ]);
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("checks: ERROR {} (could not run: {e})", check.name);
+            eprintln!("checks: ERROR {name} (could not run: {e})");
             return finish(Status::Error, start, &[]);
         }
     };
@@ -482,7 +539,7 @@ fn run_one(sprite: &str, check: &Check) -> RunResult {
 
     let master = pair.master;
     let Ok(mut reader) = master.try_clone_reader() else {
-        eprintln!("checks: ERROR {} (could not read the pty)", check.name);
+        eprintln!("checks: ERROR {name} (could not read the pty)");
         let _killed = child.kill();
         return finish(Status::Error, start, &[]);
     };
@@ -524,10 +581,7 @@ fn run_one(sprite: &str, check: &Check) -> RunResult {
     drop(master);
 
     if timed_out {
-        eprintln!(
-            "checks: ERROR {} (timed out after {CHECK_TIMEOUT:?})",
-            check.name
-        );
+        eprintln!("checks: ERROR {name} (timed out after {CHECK_TIMEOUT:?})");
         let _killed = child.kill();
         return finish(Status::Error, start, &events);
     }
@@ -535,19 +589,16 @@ fn run_one(sprite: &str, check: &Check) -> RunResult {
     let status = match child.wait() {
         Ok(status) => status,
         Err(e) => {
-            eprintln!(
-                "checks: ERROR {} (could not wait on the sprite CLI: {e})",
-                check.name
-            );
+            eprintln!("checks: ERROR {name} (could not wait on the sprite CLI: {e})");
             return finish(Status::Error, start, &events);
         }
     };
 
     if status.success() {
-        eprintln!("checks: PASS {}", check.name);
+        eprintln!("checks: PASS {name}");
         finish(Status::Pass, start, &events)
     } else {
-        eprintln!("checks: FAIL {} ({})", check.name, check.command);
+        eprintln!("checks: FAIL {name} ({command})");
         finish(Status::Fail, start, &events)
     }
 }
@@ -622,6 +673,29 @@ mod tests {
         let updates = parse_updates(&input);
         let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
         assert_eq!(refs, vec!["refs/heads/main", "refs/heads/feature"]);
+    }
+
+    #[test]
+    fn composite_status_derives_from_its_dependencies() {
+        assert_eq!(
+            derive_composite(&[Status::Pass, Status::Pass]),
+            Status::Pass
+        );
+        assert_eq!(
+            derive_composite(&[Status::Pass, Status::Fail]),
+            Status::Fail
+        );
+        assert_eq!(
+            derive_composite(&[Status::Error, Status::Skipped]),
+            Status::Fail
+        );
+        assert_eq!(
+            derive_composite(&[Status::Pass, Status::Skipped]),
+            Status::Skipped
+        );
+        // Vacuously all-pass: a composite with no dependencies never validates,
+        // but the derivation itself is total.
+        assert_eq!(derive_composite(&[]), Status::Pass);
     }
 
     #[test]

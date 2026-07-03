@@ -14,9 +14,12 @@
 //! `checks/<name>` and `results/<name>` moved from bare blobs to subtrees
 //! (`CheckBody`/[`Outcome`]) so a run's outcome can carry more than one field
 //! (a duration, a log URL), and a run's [`Status`] moved from a bare string to
-//! a closed enum. Each is an incompatible format change: data written in a
-//! prior layout no longer loads and must be re-recorded. Acceptable pre-1.0
-//! (see the format compatibility rules in `git_store`'s module docs).
+//! a closed enum. [`CheckBody::command`] then moved from a required blob to an
+//! `Option` subtree when checks gained `image` and `depends`, so a composite
+//! check can exist without a command. Each is an incompatible format change:
+//! data written in a prior layout no longer loads and must be re-recorded.
+//! Acceptable pre-1.0 (see the format compatibility rules in `git_store`'s
+//! module docs).
 
 use std::path::Path;
 
@@ -30,8 +33,14 @@ pub const CHECKS_REF: &str = "refs/meta/checks";
 /// identity, so it is not duplicated inside the body.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct CheckBody {
-    /// The shell command run for the check (e.g. `cargo fmt --check`).
-    command: String,
+    /// The shell command run for the check (e.g. `cargo fmt --check`), or
+    /// `None` for a composite check that only aggregates its `depends`.
+    command: Option<String>,
+    /// The sandbox image the command runs in; `None` uses the default.
+    image: Option<String>,
+    /// Names of sibling checks that must pass before this one runs. Stored as
+    /// `None` when empty so an independent check stays a minimal tree.
+    depends: Option<Vec<String>>,
 }
 
 /// One configured check, assembled from its map key and [`CheckBody`] at load.
@@ -39,8 +48,13 @@ struct CheckBody {
 pub struct Check {
     /// The name it is stored under.
     pub name: String,
-    /// The shell command run for the check (e.g. `cargo fmt --check`).
-    pub command: String,
+    /// The shell command run for the check (e.g. `cargo fmt --check`), or
+    /// `None` for a composite check that only aggregates its dependencies.
+    pub command: Option<String>,
+    /// The sandbox image the command runs in; `None` uses the default.
+    pub image: Option<String>,
+    /// Names of sibling checks that must pass before this one runs.
+    pub depends: Vec<String>,
 }
 
 /// Load the configured checks recorded at [`CHECKS_REF`] in `repo`.
@@ -52,6 +66,8 @@ pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
     git_store::Store::open(repo)?.load_map(CHECKS_REF, |name, body: CheckBody| Check {
         name,
         command: body.command,
+        image: body.image,
+        depends: body.depends.unwrap_or_default(),
     })
 }
 
@@ -66,11 +82,96 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
                 check.name.clone(),
                 CheckBody {
                     command: check.command.clone(),
+                    image: check.image.clone(),
+                    depends: if check.depends.is_empty() {
+                        None
+                    } else {
+                        Some(check.depends.clone())
+                    },
                 },
             )
         },
         "Update checks",
     )
+}
+
+/// Validate `checks` as a static dependency graph and return them in an order
+/// that runs every check after its dependencies — Kahn's topological sort,
+/// with ties broken by name so the order is deterministic.
+///
+/// Rejected here, at write time, so the worker only ever walks a fixed order:
+/// a `depends` entry naming no configured check, a duplicate or self edge, a
+/// check with neither a command nor dependencies, and any dependency cycle
+/// (reported with its member names). A check that sets an `image` is also
+/// rejected until the Sprite sandbox can honor one — the field exists in the
+/// format now so supporting it later is not a data migration.
+pub fn order(checks: &[Check]) -> Result<Vec<&Check>, String> {
+    let mut by_name: std::collections::BTreeMap<&str, &Check> = std::collections::BTreeMap::new();
+    for check in checks {
+        if by_name.insert(check.name.as_str(), check).is_some() {
+            return Err(format!("check {} is defined twice", check.name));
+        }
+    }
+    let mut blocking: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for check in checks {
+        if check.command.is_none() && check.depends.is_empty() {
+            return Err(format!(
+                "check {} has neither a command nor dependencies",
+                check.name
+            ));
+        }
+        if check.image.is_some() {
+            return Err(format!(
+                "check {} sets an image, which the checks sandbox does not support yet",
+                check.name
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for dep in &check.depends {
+            if !by_name.contains_key(dep.as_str()) {
+                return Err(format!(
+                    "check {} depends on unknown check {dep}",
+                    check.name
+                ));
+            }
+            if dep == &check.name {
+                return Err(format!("check {} depends on itself", check.name));
+            }
+            if !seen.insert(dep.as_str()) {
+                return Err(format!("check {} lists dependency {dep} twice", check.name));
+            }
+        }
+        blocking.insert(check.name.as_str(), check.depends.len());
+    }
+
+    let mut ordered = Vec::with_capacity(checks.len());
+    while ordered.len() < checks.len() {
+        let ready: Vec<&str> = blocking
+            .iter()
+            .filter_map(|(name, blockers)| (*blockers == 0).then_some(*name))
+            .collect();
+        if ready.is_empty() {
+            let cycle: Vec<&str> = blocking.keys().copied().collect();
+            return Err(format!(
+                "check dependencies form a cycle: {}",
+                cycle.join(", ")
+            ));
+        }
+        for name in ready {
+            let _ready = blocking.remove(name);
+            if let Some(check) = by_name.get(name) {
+                ordered.push(*check);
+            }
+            for (blocked, blockers) in blocking.iter_mut() {
+                if let Some(check) = by_name.get(blocked)
+                    && check.depends.iter().any(|dep| dep == name)
+                {
+                    *blockers = blockers.saturating_sub(1);
+                }
+            }
+        }
+    }
+    Ok(ordered)
 }
 
 /// The namespace under which a commit's check runs are recorded: one ref,
@@ -95,6 +196,8 @@ pub enum Status {
     /// An infrastructure failure (an unreachable sandbox, a timeout) kept the
     /// check from completing.
     Error,
+    /// The check never ran because a dependency did not pass.
+    Skipped,
 }
 
 impl std::fmt::Display for Status {
@@ -105,6 +208,7 @@ impl std::fmt::Display for Status {
             Self::Pass => "pass",
             Self::Fail => "fail",
             Self::Error => "error",
+            Self::Skipped => "skipped",
         })
     }
 }
@@ -270,7 +374,25 @@ mod tests {
     fn check(name: &str, command: &str) -> Check {
         Check {
             name: name.to_owned(),
-            command: command.to_owned(),
+            command: Some(command.to_owned()),
+            image: None,
+            depends: Vec::new(),
+        }
+    }
+
+    fn composite(name: &str, depends: &[&str]) -> Check {
+        Check {
+            name: name.to_owned(),
+            command: None,
+            image: None,
+            depends: depends.iter().map(|dep| (*dep).to_owned()).collect(),
+        }
+    }
+
+    fn dependent(name: &str, command: &str, depends: &[&str]) -> Check {
+        Check {
+            depends: depends.iter().map(|dep| (*dep).to_owned()).collect(),
+            ..check(name, command)
         }
     }
 
@@ -310,10 +432,11 @@ mod tests {
 
     #[test]
     fn loads_the_on_disk_checks_format() {
-        // A fixture written as the real `checks/<name>/command` subtree layout
-        // (a struct value, not a bare blob) must keep loading, guarding the
-        // checks document's shape against an incompatible change to data
-        // already on a ref.
+        // A fixture written as the real `checks/<name>/command/some` subtree
+        // layout (the `Option`-wrapped command, with `image`/`depends` omitted
+        // entirely) must keep loading, with the missing optional fields unset —
+        // guarding the checks document's shape against an incompatible change
+        // to data already on a ref.
         let repo = unique_repo();
         write_checks_doc(
             &repo,
@@ -449,5 +572,81 @@ mod tests {
     fn displays_lowercase_status_words() {
         assert_eq!(Status::Queued.to_string(), "queued");
         assert_eq!(Status::Pass.to_string(), "pass");
+        assert_eq!(Status::Skipped.to_string(), "skipped");
+    }
+
+    #[test]
+    fn store_then_load_round_trips_image_and_depends() {
+        let repo = unique_repo();
+        let written = vec![
+            Check {
+                image: Some("rust:1.88".to_owned()),
+                ..check("fmt", "cargo fmt --check")
+            },
+            dependent("test", "cargo nextest run", &["fmt"]),
+            composite("ci", &["fmt", "test"]),
+        ];
+        store(&repo, &written).unwrap();
+        let mut loaded = load(&repo).unwrap();
+        loaded.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut expected = written;
+        expected.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(loaded, expected);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn order_runs_dependencies_first() {
+        let checks = vec![
+            composite("ci", &["test", "fmt"]),
+            dependent("test", "cargo nextest run", &["fmt"]),
+            check("fmt", "cargo fmt --check"),
+        ];
+        let names: Vec<&str> = order(&checks)
+            .unwrap()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["fmt", "test", "ci"]);
+    }
+
+    #[test]
+    fn order_rejects_a_cycle() {
+        let checks = vec![
+            dependent("a", "true", &["b"]),
+            dependent("b", "true", &["a"]),
+            check("fmt", "cargo fmt --check"),
+        ];
+        let err = order(&checks).unwrap_err();
+        assert!(err.contains("cycle"), "unexpected error: {err}");
+        assert!(err.contains('a') && err.contains('b'));
+    }
+
+    #[test]
+    fn order_rejects_an_unknown_dependency() {
+        let checks = vec![dependent("test", "cargo nextest run", &["fmt"])];
+        let err = order(&checks).unwrap_err();
+        assert!(err.contains("unknown check fmt"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn order_rejects_self_and_duplicate_edges() {
+        let selfish = vec![dependent("a", "true", &["a"])];
+        assert!(order(&selfish).unwrap_err().contains("itself"));
+        let doubled = vec![
+            check("fmt", "true"),
+            dependent("a", "true", &["fmt", "fmt"]),
+        ];
+        assert!(order(&doubled).unwrap_err().contains("twice"));
+    }
+
+    #[test]
+    fn order_rejects_an_empty_check() {
+        let checks = vec![composite("hollow", &[])];
+        let err = order(&checks).unwrap_err();
+        assert!(
+            err.contains("neither a command nor dependencies"),
+            "unexpected error: {err}"
+        );
     }
 }

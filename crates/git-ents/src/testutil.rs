@@ -286,18 +286,24 @@ pub(crate) fn write_issue_doc(
 
 /// Lay the checks document out at [`crate::checks::CHECKS_REF`] as the real
 /// on-disk format: a bare scalar-keyed map at the ref's tree root, one
-/// `<name>/command` blob per configured check (the map value is a `CheckBody`
-/// subtree, not a bare blob, and the map itself is the whole document — no
-/// wrapper struct). Asserts the loader still reads the format independent of
-/// the writer.
+/// `<name>/command/some` blob per configured check (the map value is a
+/// `CheckBody` subtree whose `command` is the `Option` tree encoding, and the
+/// map itself is the whole document — no wrapper struct), with the optional
+/// `image`/`depends` fields omitted entirely — asserting the loader fills a
+/// check's missing optional fields as unset, independent of the writer.
 pub(crate) fn write_checks_doc(repo: &Path, checks: &[(&str, &str)]) {
     let mut entries = String::new();
     for (name, command) in checks {
         let command_blob = git_with_stdin(repo, &["hash-object", "-w", "--stdin"], command);
+        let some_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!("100644 blob {command_blob}\tsome\n"),
+        );
         let check_tree = git_with_stdin(
             repo,
             &["mktree"],
-            &format!("100644 blob {command_blob}\tcommand\n"),
+            &format!("040000 tree {some_tree}\tcommand\n"),
         );
         entries.push_str(&format!("040000 tree {check_tree}\t{name}\n"));
     }

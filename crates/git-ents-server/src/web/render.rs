@@ -26,8 +26,25 @@ pub(super) trait Render: for<'a> Facet<'a> {
     }
 }
 
-/// A check renders structurally: its name is the key, its command the value.
-impl Render for Check {}
+/// A check's name is the key and its command the value — `(composite)` for a
+/// check with none — with its image and dependencies appended as ` · `-joined
+/// annotations rather than the raw `Option`/`Vec` the structural walk would
+/// print.
+impl Render for Check {
+    fn render(&self) -> Markup {
+        let mut value = self
+            .command
+            .clone()
+            .unwrap_or_else(|| "(composite)".to_owned());
+        if let Some(image) = &self.image {
+            value.push_str(&format!(" · image {image}"));
+        }
+        if !self.depends.is_empty() {
+            value.push_str(&format!(" · needs {}", self.depends.join(", ")));
+        }
+        row(&self.name, &value)
+    }
+}
 
 /// Config renders structurally: each field becomes a keyed row.
 impl Render for Config {}
