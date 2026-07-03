@@ -100,9 +100,22 @@ fn resolve_repo<'a>(
         }
         let relative: PathBuf = repo_segs.iter().collect();
         let repo = data_dir.join(&relative);
-        if !is_bare_repo(&repo) {
+        // Bare repos are stored on disk as `<name>.git`, matching what
+        // `git http-backend` expects, but the friendly web/CLI paths never
+        // include the suffix — so try it on the last segment before giving up.
+        let repo = if is_bare_repo(&repo) {
+            repo
+        } else if let Some((last, init)) = repo_segs.split_last() {
+            let mut with_suffix = data_dir.join(init.iter().collect::<PathBuf>());
+            with_suffix.push(format!("{last}.git"));
+            if is_bare_repo(&with_suffix) {
+                with_suffix
+            } else {
+                continue;
+            }
+        } else {
             continue;
-        }
+        };
         let rel = repo_segs.join("/");
         let rest = segments.get(depth..).unwrap_or_default();
         return Some((repo, rel, rest));
