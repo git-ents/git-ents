@@ -355,13 +355,22 @@ impl Store {
 
     /// The documents on `refname`'s commit chain as `(committer date, value)`
     /// pairs, newest first — one entry per commit, following first parents.
+    ///
+    /// Stops (without erroring) at the first commit that predates an
+    /// incompatible format change to `T`: such a commit is unreadable forever,
+    /// not transiently, so returning the readable prefix beats letting one
+    /// stale commit blank out every newer entry that parses fine. A real I/O
+    /// or repository-corruption error still propagates.
     pub fn history<T: for<'a> Facet<'a>>(&self, refname: &str) -> Result<Vec<(u64, T)>, Error> {
         let mut out = Vec::new();
         let mut cursor = self.ref_commit(refname)?;
         while let Some(oid) = cursor {
             let commit = self.read_commit(&oid)?;
-            let value = facet_git_tree::deserialize(&commit.tree, &self.odb)?;
-            out.push((commit.seconds, value));
+            match facet_git_tree::deserialize(&commit.tree, &self.odb) {
+                Ok(value) => out.push((commit.seconds, value)),
+                Err(facet_git_tree::Error::Message(_)) => break,
+                Err(error) => return Err(error.into()),
+            }
             cursor = commit.parents.into_iter().next();
         }
         Ok(out)

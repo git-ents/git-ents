@@ -123,6 +123,14 @@ async fn backend(
 
     let content_type = header_value(headers, "Content-Type");
     let content_length = header_value(headers, "Content-Length");
+    // `Content-Type`/`Content-Length` are CGI-special-cased env vars with no
+    // `HTTP_` prefix; every other header (including `Content-Encoding`) maps to
+    // `HTTP_<NAME>`. Without it, a gzip'd request body — which git's client
+    // sends once a negotiation grows past its size threshold, e.g. `fetch`ing
+    // many refs at once — reaches `git-upload-pack` still compressed, which it
+    // reads as raw (garbled) pkt-lines: "protocol error: bad line length
+    // character".
+    let content_encoding = header_value(headers, "Content-Encoding");
 
     let mut cmd = Command::new("git");
     cmd.arg("http-backend")
@@ -145,6 +153,9 @@ async fn backend(
     }
     if let Some(value) = &content_length {
         cmd.env("CONTENT_LENGTH", value);
+    }
+    if let Some(value) = &content_encoding {
+        cmd.env("HTTP_CONTENT_ENCODING", value);
     }
 
     // Push these through `GIT_CONFIG_*` rather than `git -c` so they reach the

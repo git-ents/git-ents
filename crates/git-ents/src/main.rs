@@ -209,6 +209,13 @@ enum ChecksAction {
         #[arg(default_value = "origin")]
         remote: String,
     },
+    /// Show recorded check runs (queued/running/pass/fail/error) from
+    /// `refs/meta/runs/*` on a remote, newest first.
+    Runs {
+        /// Remote to read `refs/meta/runs/*` from.
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -339,7 +346,33 @@ fn run_checks(action: ChecksAction) -> Result<(), String> {
         } => add_check(name, command, &remote),
         ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
         ChecksAction::Debug { remote } => checks_debug(&remote),
+        ChecksAction::Runs { remote } => checks_runs(&remote),
     }
+}
+
+/// Print every recorded check run on `remote`, newest commit first and
+/// (within a commit) newest run first, as `<commit>  <when>  <check>=<status> …`.
+fn checks_runs(remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, checks::RUNS_NS)?;
+    let commits = checks::runs(&repo).map_err(|error| error.to_string())?;
+    if commits.is_empty() {
+        println!("no check runs on {remote}");
+        return Ok(());
+    }
+    for commit_runs in commits {
+        for run in &commit_runs.runs {
+            let when = ago(run.at);
+            let results = run
+                .results
+                .iter()
+                .map(|outcome| format!("{}={}", outcome.name, outcome.status))
+                .collect::<Vec<_>>()
+                .join("  ");
+            println!("{}  {when}  {results}", short_id(&commit_runs.commit));
+        }
+    }
+    Ok(())
 }
 
 fn run_comment(action: CommentAction) -> Result<(), String> {
@@ -1262,6 +1295,23 @@ fn now_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// `at` (seconds since the Unix epoch) as a relative "N units ago" string.
+fn ago(at: u64) -> String {
+    let secs = now_seconds().saturating_sub(at);
+    let mins = secs / 60;
+    let hours = mins / 60;
+    let days = hours / 24;
+    if mins == 0 {
+        "just now".to_owned()
+    } else if hours == 0 {
+        format!("{mins}m ago")
+    } else if days == 0 {
+        format!("{hours}h ago")
+    } else {
+        format!("{days}d ago")
+    }
 }
 
 /// Fail-fast check, ahead of any network sync, that `value` is a well-formed
