@@ -474,7 +474,7 @@ fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
     println!(
         "anchor  {} @ {}",
         location(&comment.anchor.path, comment.anchor.lines),
-        short_id(&comment.anchor.commit)
+        short_id(&comment.anchor.commit.to_string())
     );
     println!("on {rev}: {}", describe_projection(&repo, &comment, rev));
     if let Some(issue) = &comment.issue {

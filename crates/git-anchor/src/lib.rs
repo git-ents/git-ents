@@ -25,6 +25,41 @@ use gix::bstr::ByteSlice as _;
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
 use gix::diff::tree_with_rewrites::Change;
 
+/// A content-addressed object id, stored on disk as its 40-character hex text
+/// (identical to a bare `String` field, via `facet_git_tree`'s
+/// transparent-newtype support) and used everywhere else as gitoxide's own
+/// [`ObjectId`] — so an [`Anchor`] never carries a hex string a caller could
+/// mistake for an arbitrary revision.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[facet(transparent)]
+pub struct Oid(String);
+
+impl std::fmt::Display for Oid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<ObjectId> for Oid {
+    fn from(id: ObjectId) -> Self {
+        Self(id.to_string())
+    }
+}
+
+impl From<&str> for Oid {
+    fn from(hex: &str) -> Self {
+        Self(hex.to_owned())
+    }
+}
+
+impl TryFrom<&Oid> for ObjectId {
+    type Error = gix::hash::decode::Error;
+
+    fn try_from(oid: &Oid) -> Result<Self, Self::Error> {
+        ObjectId::from_hex(oid.0.as_bytes())
+    }
+}
+
 /// A failure opening the repository or resolving the objects an anchor names.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -44,7 +79,7 @@ pub enum Error {
     #[error("no file at {path:?} in {commit}")]
     MissingPath {
         /// The commit the path was looked up in.
-        commit: String,
+        commit: ObjectId,
         /// The path that is not a file there.
         path: String,
     },
@@ -76,13 +111,13 @@ pub struct LineRange {
 /// read-time view derived from this record.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Anchor {
-    /// The commit the anchor was created against, as a hex object id.
-    pub commit: String,
+    /// The commit the anchor was created against.
+    pub commit: Oid,
     /// The repository-relative path of the anchored file at that commit.
     pub path: String,
-    /// The object id of the anchored file's blob, as hex — an integrity check
-    /// and the fast path for "has this file changed at all".
-    pub blob: String,
+    /// The object id of the anchored file's blob — an integrity check and the
+    /// fast path for "has this file changed at all".
+    pub blob: Oid,
     /// The anchored lines, or `None` for a whole-file anchor.
     pub lines: Option<LineRange>,
 }
@@ -124,7 +159,7 @@ pub fn capture(
 ) -> Result<Anchor, Error> {
     let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
     let commit = resolve_commit(&repo, revision)?;
-    let commit_id = commit.id().to_string();
+    let commit_id = commit.id().detach();
     let tree = commit
         .tree()
         .map_err(|error| Error::Object(error.to_string()))?;
@@ -133,7 +168,7 @@ pub fn capture(
         .map_err(|error| Error::Object(error.to_string()))?
         .filter(|entry| entry.mode().is_blob())
         .ok_or_else(|| Error::MissingPath {
-            commit: commit_id.clone(),
+            commit: commit_id,
             path: path.to_owned(),
         })?;
     let blob = entry.object_id();
@@ -142,9 +177,9 @@ pub fn capture(
         lines_of(&data, path, range)?;
     }
     Ok(Anchor {
-        commit: commit_id,
+        commit: commit_id.into(),
         path: path.to_owned(),
-        blob: blob.to_string(),
+        blob: blob.into(),
         lines,
     })
 }
@@ -154,8 +189,8 @@ pub fn capture(
 /// names, so it can never disagree with what was anchored.
 pub fn snippet(repo: &Path, anchor: &Anchor) -> Result<String, Error> {
     let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
-    let blob = ObjectId::from_hex(anchor.blob.as_bytes())
-        .map_err(|_error| Error::Resolve(anchor.blob.clone()))?;
+    let blob = ObjectId::try_from(&anchor.blob)
+        .map_err(|_error| Error::Resolve(anchor.blob.to_string()))?;
     let data = read_blob(&repo, blob)?;
     match anchor.lines {
         None => Ok(String::from_utf8_lossy(&data).into_owned()),
@@ -192,8 +227,10 @@ fn lines_of(data: &[u8], path: &str, range: LineRange) -> Result<String, Error> 
 /// land entirely outside it, [`Projection::Outdated`] when an edit touches it.
 pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection, Error> {
     let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
-    let anchor_blob = ObjectId::from_hex(anchor.blob.as_bytes())
-        .map_err(|_error| Error::Resolve(anchor.blob.clone()))?;
+    let anchor_blob = ObjectId::try_from(&anchor.blob)
+        .map_err(|_error| Error::Resolve(anchor.blob.to_string()))?;
+    let anchor_commit_id = ObjectId::try_from(&anchor.commit)
+        .map_err(|_error| Error::Resolve(anchor.commit.to_string()))?;
     let target_commit = resolve_commit(&repo, target)?;
     let target_tree = target_commit
         .tree()
@@ -208,7 +245,7 @@ pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection,
         return Ok(Projection::Current);
     }
 
-    let anchor_commit = resolve_commit(&repo, &anchor.commit)?;
+    let anchor_commit = commit_at(&repo, anchor_commit_id)?;
     let anchor_tree = anchor_commit
         .tree()
         .map_err(|error| Error::Object(error.to_string()))?;
@@ -260,7 +297,7 @@ pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection,
         // the anchor's blob is not what its own commit holds there, so the
         // anchor itself is broken.
         return Err(Error::MissingPath {
-            commit: anchor.commit.clone(),
+            commit: anchor_commit_id,
             path: anchor.path.clone(),
         });
     };
@@ -298,6 +335,19 @@ fn resolve_commit<'repo>(
     repo.rev_parse_single(revision)
         .map_err(|_error| resolve())?
         .object()
+        .map_err(|_error| resolve())?
+        .peel_to_kind(gix::object::Kind::Commit)
+        .map_err(|_error| resolve())?
+        .try_into_commit()
+        .map_err(|_error| resolve())
+}
+
+/// Look up the commit `id` names directly, with no revision parsing — for an
+/// [`Anchor`]'s own `commit`, which already names a concrete object rather
+/// than an arbitrary revision.
+fn commit_at(repo: &gix::Repository, id: ObjectId) -> Result<gix::Commit<'_>, Error> {
+    let resolve = || Error::Resolve(id.to_string());
+    repo.find_object(id)
         .map_err(|_error| resolve())?
         .peel_to_kind(gix::object::Kind::Commit)
         .map_err(|_error| resolve())?
@@ -383,10 +433,10 @@ mod tests {
         commit_all(dir.path(), "one");
 
         let anchor = capture(dir.path(), "HEAD", "file.txt", range(3, 4)).unwrap();
-        assert_eq!(anchor.commit, head(dir.path()));
+        assert_eq!(anchor.commit.to_string(), head(dir.path()));
         assert_eq!(anchor.path, "file.txt");
         assert_eq!(anchor.lines, range(3, 4));
-        assert!(!anchor.blob.is_empty());
+        assert!(!anchor.blob.to_string().is_empty());
         assert_eq!(snippet(dir.path(), &anchor).unwrap(), "line 3\nline 4\n");
     }
 

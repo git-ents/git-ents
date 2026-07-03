@@ -118,9 +118,9 @@ mod tests {
         Comment {
             body: body.to_owned(),
             anchor: Anchor {
-                commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
                 path: "src/lib.rs".to_owned(),
-                blob: "89abcdef0123456789abcdef0123456789abcdef".to_owned(),
+                blob: "89abcdef0123456789abcdef0123456789abcdef".into(),
                 lines: Some(LineRange { start: 3, end: 4 }),
             },
             issue: issue.map(str::to_owned),
@@ -258,9 +258,9 @@ mod tests {
                  100644 blob {}\tpath\n\
                  100644 blob {}\tblob\n\
                  040000 tree {lines_tree}\tlines\n",
-                blob(&expected.anchor.commit),
+                blob(&expected.anchor.commit.to_string()),
                 blob(&expected.anchor.path),
-                blob(&expected.anchor.blob),
+                blob(&expected.anchor.blob.to_string()),
             ),
         );
         let issue_tree = git_with_stdin(

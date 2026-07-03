@@ -73,6 +73,13 @@ tokio = { version = "1", features = [
 ] }
 uuid = { version = "1", features = ["v4"] }
 
+# Pending a push of the local facet-git-tree fix that adds transparent-newtype
+# support (`#[facet(transparent)]` wrappers now unwrap through
+# `Peek::innermost_peek`/`Partial::begin_inner` instead of encoding as a
+# one-field struct tree), needed to store `gix::ObjectId` newtypes directly.
+[patch."https://github.com/git-ents/facet-git-tree"]
+facet-git-tree = { path = "../facet-git-tree/crates/facet-git-tree" }
+
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/
 [workspace.lints.clippy]
