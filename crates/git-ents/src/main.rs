@@ -1073,6 +1073,7 @@ fn account_create(
     let repo = repo()?;
     let expected = sync(remote, account::ACCOUNT_REF)?;
     let existing = account::load(&repo).map_err(|error| error.to_string())?;
+    let is_update = existing.is_some();
     let account = Account {
         username: username.clone(),
         display_name: display_name.unwrap_or_else(|| username.clone()),
@@ -1083,7 +1084,11 @@ fn account_create(
     account::store(&repo, &account).map_err(|error| error.to_string())?;
     push_signed(remote, account::ACCOUNT_REF, expected.as_deref())?;
     let genesis = account::genesis(&repo).map_err(|error| error.to_string())?;
-    println!("created account {username}");
+    if is_update {
+        println!("updated account {username}");
+    } else {
+        println!("created account {username}");
+    }
     if let Some(genesis) = genesis {
         println!("genesis: {genesis} (pass to `members add --account` to link a member)");
     }
