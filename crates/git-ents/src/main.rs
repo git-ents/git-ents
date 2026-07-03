@@ -889,6 +889,12 @@ fn members_list(remote: &str) -> Result<(), String> {
 /// Add `fingerprint` to `remote`'s `refs/meta/revoked` deny list and push the
 /// update, so the key is refused before its window would expire.
 fn members_revoke(fingerprint: &str, remote: &str, reason: String) -> Result<(), String> {
+    if !looks_like_fingerprint(fingerprint) {
+        return Err(format!(
+            "{fingerprint:?} does not look like a key fingerprint \
+             (expected colon-hex form, e.g. aa:bb:cc:..., as `members list` prints)"
+        ));
+    }
     let repo = repo()?;
     // Revoking your own key fails closed against you too: if it is the last key
     // that authorizes your pushes, you cannot even push the un-revoke. Warn
@@ -1504,6 +1510,17 @@ fn fingerprint(public_key: &str) -> Result<String, String> {
         .nth(1)
         .ok_or("ssh-keygen returned an unexpected fingerprint line")?;
     Ok(field.strip_prefix("MD5:").unwrap_or(field).to_owned())
+}
+
+/// Whether `text` looks like an MD5 key fingerprint (`aa:bb:...`): only
+/// colon-separated two-digit hex groups, matching what `members list` prints
+/// and [`fingerprint`] produces.
+fn looks_like_fingerprint(text: &str) -> bool {
+    let groups: Vec<&str> = text.split(':').collect();
+    groups.len() > 1
+        && groups
+            .iter()
+            .all(|group| group.len() == 2 && group.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Whether two OpenSSH public keys share a type and body, ignoring the comment.
