@@ -1544,6 +1544,7 @@ version = "0.0.0"
 dependencies = [
  "crossterm",
  "facet",
+ "facet-pretty",
  "figue",
  "form_urlencoded",
  "futures-util",

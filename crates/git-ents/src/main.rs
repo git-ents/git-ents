@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use facet::Facet;
+use facet_pretty::FacetPretty;
 use figue::{self as args, FigueBuiltins};
 use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
@@ -348,8 +349,8 @@ fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
     }
 }
 
-/// Print every recorded check run on `remote`, newest commit first and
-/// (within a commit) newest run first, as `<commit>  <when>  <check>=<status> …`.
+/// Print the latest recorded status of every checked commit on `remote`,
+/// newest commit first, as `<commit>  <when>  <check>=<status> …`.
 fn checks_runs(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, checks::RUNS_NS)?;
@@ -359,19 +360,20 @@ fn checks_runs(remote: &str) -> Result<(), String> {
         return Ok(());
     }
     for commit_runs in commits {
-        for run in &commit_runs.runs {
-            let when = ago(run.at);
-            let results = run
-                .results
-                .iter()
-                .map(|outcome| format!("{}={}", outcome.name, outcome.status))
-                .collect::<Vec<_>>()
-                .join("  ");
-            println!(
-                "{}  {when}  {results}",
-                short_id(&commit_runs.commit.to_string())
-            );
-        }
+        let Some(run) = commit_runs.runs.first() else {
+            continue;
+        };
+        let when = ago(run.at);
+        let results = run
+            .results
+            .iter()
+            .map(|outcome| format!("{}={}", outcome.name, outcome.status))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!(
+            "{}  {when}  {results}",
+            short_id(&commit_runs.commit.to_string())
+        );
     }
     Ok(())
 }
@@ -624,17 +626,7 @@ impl Set for Checks {
     }
 
     fn value(item: &Check) -> String {
-        let mut value = item
-            .command
-            .clone()
-            .unwrap_or_else(|| "(composite)".to_owned());
-        if let Some(image) = &item.image {
-            value.push_str(&format!("  [image: {image}]"));
-        }
-        if !item.depends.is_empty() {
-            value.push_str(&format!("  [needs: {}]", item.depends.join(", ")));
-        }
-        value
+        item.pretty().to_string()
     }
 }
 
