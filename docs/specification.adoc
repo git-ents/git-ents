@@ -497,9 +497,21 @@ An absent ref MUST yield the default (all empty / zero).
 .Check Set Definition
 --
 The configured checks for a repository MUST be stored at `refs/meta/checks` as
-a map from check name to shell command.
+a map from check name to a check body holding an optional shell command, an
+optional sandbox image, and an optional list of dependencies (names of sibling
+checks that must pass first).
+A check with no command is a composite: it runs nothing itself and derives its
+outcome from its dependencies alone.
 A check's definition living on a meta ref means a branch under check cannot
 rewrite the check set that gates it.
+
+The dependency graph is fully static — no conditional edges, no runtime
+expansion — and MUST be validated when the set is written: a dependency naming
+no configured check, a duplicate or self edge, a check with neither a command
+nor dependencies, and any dependency cycle MUST each be rejected before the
+set is stored. A check that sets an image MUST be rejected until the sandbox
+can honor one, rather than the image being silently ignored; the field is
+reserved in the format so honoring it later is not a data migration.
 --
 
 [role="requirement", id="checks.post-receive"]
@@ -524,6 +536,15 @@ Jobs MUST be grouped by repository; each repository's jobs MUST be processed
 serially to prevent concurrent runs from colliding in its sandbox.
 Separate repositories MUST be processed concurrently, so a slow repository's
 backlog does not block others.
+
+Within a job the checks MUST settle in topological dependency order, so every
+dependency's outcome is terminal before its dependents are reached.
+A check whose dependency did not pass MUST be recorded `skipped` without
+running; a composite's outcome is derived from its dependencies — `pass` when
+all passed, `fail` when any failed or errored, `skipped` otherwise.
+The worker MUST re-validate the dependency graph before running (a hand-crafted
+push can land a set the CLI would have rejected) and finalize the run as
+`error` when it is invalid.
 --
 
 [role="requirement", id="checks.sandbox"]
@@ -544,7 +565,8 @@ Run outcomes MUST be stored at `refs/meta/runs/<commit>`, one ref per checked
 commit.
 Each ref's commit chain is the run history; each commit's date is the run time,
 so no timestamp is duplicated in the document tree.
-Outcome values progress: `queued` → `running` → `pass` / `fail` / `error`.
+Outcome values progress: `queued` → `running` → `pass` / `fail` / `error` /
+`skipped` (a check whose dependency did not pass, per <<checks.worker>>).
 A run that cannot complete due to an infrastructure error (unreachable Sprite,
 failed sync) MUST be finalized as `error` rather than left stuck at `running`.
 A single check that exceeds a 30-minute timeout MUST be recorded `error` rather
@@ -986,9 +1008,9 @@ renames, or removes a requirement or its implementation.
 |`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
 |`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
 |`config.ref` |`git-ents/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
-|`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`) |`checks::store_then_load_round_trips_the_check_set`
+|`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`, `order`) |`checks::store_then_load_round_trips_the_check_set`, `store_then_load_round_trips_image_and_depends`, `order_runs_dependencies_first`, `order_rejects_a_cycle`, `order_rejects_an_unknown_dependency`, `order_rejects_self_and_duplicate_edges`, `order_rejects_an_empty_check`
 |`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
-|`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`
+|`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-ents`)_
 |`checks.sandbox` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
 |`checks.outcomes` |`git-ents/src/checks.rs` (`Status`, `record`/`update_run`); `git-ents-server/src/checks.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`checks::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_log_url`
 |`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`checks debug`) | _(requires a live Sprite; manually verified)_
