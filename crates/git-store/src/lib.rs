@@ -598,6 +598,15 @@ pub mod test_support {
             .status()
             .unwrap();
         assert!(status.success());
+        for (key, value) in [("user.email", "test@example.com"), ("user.name", "test")] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["config", key, value])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
         dir
     }
 
