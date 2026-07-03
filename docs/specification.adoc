@@ -3,10 +3,11 @@ Joey Carpinelli <joseph.carpinelli@icloud.com>
 
 [abstract]
 `git-ents` is a Git forge: a self-hosted, membership-gated Git server with a
-browser UI, a CLI, asynchronous CI checks, and an issue tracker, all stored as
-typed documents on git meta-refs.
-Every piece of state — members, configuration, checks, runs, issues — lives in
-the repository itself, versioned and auditable, with no external database.
+browser UI, a CLI, asynchronous CI checks, an issue tracker, and anchored
+code comments, all stored as typed documents on git meta-refs.
+Every piece of state — members, configuration, checks, runs, issues, comments
+— lives in the repository itself, versioned and auditable, with no external
+database.
 
 [CAUTION]
 This specification is not yet stable and will grow as the project develops.
@@ -27,7 +28,8 @@ unused name and is never deleted by the server.
 .Meta-Ref Documents
 --
 All structured server-side state (members, configuration, checks, run results,
-issues, account profiles) MUST be stored as typed documents on dedicated
+issues, comments, account profiles) MUST be stored as typed documents on
+dedicated
 `refs/meta/*` refs, one ref per document or per entity, using the
 `facet-git-tree` serialization: each document becomes a git tree, wrapped in a
 commit parented on the ref's prior tip, so every write is a fast-forward and
@@ -74,8 +76,19 @@ Key strategy::
   on a single ref (`checks/<name>`, `revoked/<fingerprint>`,
   `runs/<commit>/results/<name>`) — `Store::load_item`/`store_item`,
   `load_map`/`store_map`. A *content-addressed* collection is keyed by the
-  hash of its own content (`issues/<genesis-hash>`) via `content_hash`, so
-  filing an item never contends a counter.
+  hash of its own content (`issues/<genesis-hash>`,
+  `comments/<genesis-hash>`) via the shared `git_store::new_id`
+  (origin-or-content-hash), so filing an item never contends a counter and
+  the identity rule cannot drift between collections.
+
+Authored collections::
+  A collection whose documents treat the commit as the record
+  (`comments/<genesis-hash>`) writes through `Store::store_item_authored`,
+  which stamps the acting human on the ref's commit, and reads authorship
+  back through `Store::provenance`/`item_provenance`: the genesis commit's
+  author created the document, the tip commit's author last updated it.
+  Neither an author nor a timestamp field is duplicated into the document
+  tree.
 
 Collection-key safety::
   `git_store::ref_segment_ok` is the one place a collection key (a username, a
@@ -143,6 +156,8 @@ Requests are routed by inspecting the path and query:
 * Browser tree/blob/commit browse paths (`/tree/`, `/blob/`, `/commit/`)
   MUST be served by the web UI, even when a file path within them resembles a
   dumb-HTTP git path (e.g. a file named `HEAD` or a directory named `objects`).
+* Reserved top-level paths (`/login`, `/_debug`, `/healthz`) are served by
+  the web UI and shadow a repository of the same name.
 * All other GET requests MUST be served by the web UI.
 * POST requests to the git smart-HTTP RPC paths
   (`/git-upload-pack`, `/git-receive-pack`) MUST be forwarded to
@@ -223,10 +238,19 @@ WebAuthn::
 Every member MUST carry a `provenance` recording whether they were
 admin-registered or self-attested via web onboarding. A member ref written
 before this field existed MUST load as admin-registered. A self-attested
-member MUST be granted limited trust: the web service MUST refuse their writes
-outside an allowed set defined by whatever member-writable surfaces exist
-(currently none — see <<web.auth.edit>>), and they MUST NOT be trusted for
-signed git push, until an admin promotes them.
+member MUST be granted limited trust: the web service MUST refuse their
+writes outside the allowed set — issues and comments (<<web.comments>>) —
+and they MUST NOT be trusted for signed git push, until an admin promotes
+them.
+--
+
+[role="requirement", id="members.account"]
+.Account Link
+--
+A member MAY carry an optional `account` field `@`-mentioning their account
+repository by its genesis identity (<<account.genesis>>), so the link
+survives the account repository moving or being renamed.
+An absent field means no account is linked.
 --
 
 [role="requirement", id="members.window"]
@@ -336,8 +360,17 @@ remote (defaulting to `origin`) into the local clone, load the typed document,
 apply the change, store it, and push the updated ref back — signed per the
 client's git config, through the same `pre-receive` gate a content push
 traverses.
-A read-only command (`members list`, `members check`, `checks list`) MUST only
-fetch, never push.
+A read-only command (`members list`, `members check`, `checks list`,
+`comment list`/`show`) MUST only fetch, never push.
+--
+
+[role="requirement", id="cli.interactive"]
+.Interactive Prompting
+--
+A mutating command run at an interactive terminal MUST prompt for any
+required field left unset rather than fail.
+The same invocation without a TTY MUST fail with an error naming the missing
+field; it MUST NOT hang waiting for input.
 --
 
 [role="requirement", id="cli.compare-and-swap"]
@@ -374,9 +407,40 @@ before proceeding, since it can lock the operator out of the remote.
 .Account and Check Commands
 --
 `git ents account create` MUST write or update `refs/meta/account`
-(<<account.ref>>).
+(<<account.ref>>) and print the account's genesis identity
+(<<account.genesis>>).
 `git ents checks` MUST provide `list`, `add`, and `remove` over the
 `refs/meta/checks` set (<<checks.definition>>).
+--
+
+[role="requirement", id="cli.comments"]
+.Comment Commands
+--
+The CLI MUST provide, under `git ents comment`:
+
+* `add` — anchor a comment to a path, an optional 1-based inclusive line
+  range, and a revision (defaulting to `HEAD`), optionally attached to an
+  issue by its genesis id, and push it.
+* `list` / `show` — project each comment's anchor onto a chosen revision and
+  report its projection state (<<comments.projection>>); `show` MUST print
+  the anchored text derived from the blob, and both MUST report the author
+  recovered from the ref's commits (<<comments.authorship>>).
+* `remove` — delete the comment's ref.
+
+Comment commands MUST follow the same remote-administration flow as member
+commands (<<cli.remote-admin>>, <<cli.compare-and-swap>>).
+--
+
+[role="requirement", id="cli.login"]
+.CLI Sign-In
+--
+`git ents login` MUST complete the same challenge–response sign-in the
+browser uses (<<web.auth.challenge>>) with no manual copy-and-paste: the CLI
+fetches a challenge from the remote, signs it with the client's configured
+signing key, submits the proof, and receives the same session a browser
+sign-in yields.
+The server MUST expose the challenge and verify steps as plain-text
+endpoints suitable for non-browser clients.
 --
 
 [role="requirement", id="cli.key-resolution"]
@@ -402,6 +466,17 @@ The `Account` document at that ref MUST hold: `username`, `display_name`,
 `bio`, and `created_at` (seconds since the Unix epoch).
 The username is authoritative in the document; the repository path is
 convention, not trust.
+--
+
+[role="requirement", id="account.genesis"]
+.Account Identity
+--
+An account's stable, path-independent identity MUST be the content hash of
+the first `Account` document ever recorded on its ref — fixed at creation,
+so later profile edits never change it and a reference to the account
+(<<members.account>>) survives the account repository moving.
+The identity MUST be derived from the ref's history, never stored as a
+field.
 --
 
 === Repository Configuration
@@ -481,6 +556,20 @@ A check/outcome name is the map key and MUST NOT be stored redundantly inside
 the record.
 --
 
+[role="requirement", id="checks.debug"]
+.Sprite Debug Shell
+--
+A signed-in member MUST be able to open an interactive, read-write shell in
+a repository's checks Sprite (`git ents checks debug`), brokered by the
+server over a WebSocket at the reserved path `/_debug/<repo>`.
+The server holds the only Fly credential (`SPRITES_TOKEN`); a member MUST
+NOT need one of their own.
+The broker MUST refuse the connection without a signed-in session.
+Local terminal resizes MUST be forwarded to the remote pseudo-terminal as
+control frames distinct from the byte stream, so the remote shell tracks the
+member's window size.
+--
+
 === Issues
 
 [role="requirement", id="issues.ref"]
@@ -507,6 +596,59 @@ Only promotion advances the number counter, so filing an issue never
 contends it.
 Any future cross-referencing feature (comments, reviews, and the like) MUST
 key off the stable content-hash identifier, not the friendly number.
+--
+
+=== Comments
+
+[role="requirement", id="comments.ref"]
+.Comment Documents
+--
+Each code comment MUST be stored at `refs/meta/comments/<id>` as a `Comment`
+document with fields: `body`, `anchor` (<<comments.anchor>>), and an
+optional `issue` cross-referencing an issue by its genesis id
+(<<issues.id>>); an absent `issue` means a free-standing comment.
+The identifier MUST follow the same genesis-key rule as an issue: the object
+id of the originating object, or of the comment's own initial content, and
+it is never renamed.
+One ref per comment keeps comments independently loadable and separately
+historied; the ref's commit chain is the comment's edit history.
+--
+
+[role="requirement", id="comments.authorship"]
+.Authorship From the Commit Chain
+--
+A comment's author and timestamps MUST NOT be stored in the document tree.
+The creator is the author of the ref's first commit and the last editor is
+the author of its tip commit; both MUST be recovered from the commit chain
+at read time.
+--
+
+[role="requirement", id="comments.anchor"]
+.Anchors
+--
+A comment MUST be anchored to the exact content it was written against: the
+commit, the repository-relative file path, the file's blob object id, and an
+optional 1-based inclusive line range (absent for a whole-file comment).
+An anchor is authoritative at creation and MUST NEVER be mutated afterwards.
+Creating an anchor MUST validate the path and line range against the
+revision's actual content.
+The anchored text is fully derivable from the blob and the line range and
+MUST be derived at read time, never stored redundantly.
+--
+
+[role="requirement", id="comments.projection"]
+.Anchor Projection
+--
+Displaying a comment against any revision other than its own MUST be a
+read-time projection of its anchor, reporting one of four outcomes:
+*current* (the exact blob still sits at the anchored path), *relocated* (the
+file moved and/or the range shifted past edits outside it, reported with the
+new path and range), *outdated* (an edit touched the anchored region, or the
+entry is no longer a regular file), or *deleted* (the file is gone).
+Projection MUST follow renames and MUST work between any two commits —
+forwards, backwards, or across unrelated history.
+An outdated or deleted projection MUST NOT lose the comment: the original
+anchor remains displayable.
 --
 
 === Web UI
@@ -561,8 +703,27 @@ Settings::
 Blob views MUST syntax-highlight source files using a compile-time language
 registry.
 AsciiDoc and Markdown files MUST be rendered to HTML.
+A blob rendered as a formatted document MUST offer a toggle between the
+rendered document and its syntax-highlighted source.
+Blob gutter line numbers MUST be self-linking anchors (`#L<n>`).
 Files larger than 2 MiB MUST be truncated rather than loaded in full, to bound
 memory cost per request.
+--
+
+[role="requirement", id="web.comments"]
+.Comments in the Browser
+--
+A file's anchored comments MUST be listed under its blob view, projected
+onto the revision being viewed (<<comments.projection>>), linking their line
+range into the blob's gutter and flagged when the projection reports them
+outdated.
+A signed-in member MUST be able to add a comment from the file view; the
+comment anchors to the viewed tip and MUST land as a signed push through the
+same `pre-receive` gate a settings edit traverses (<<web.auth.edit>>), with
+the signed-in human as author.
+Commenting MUST NOT require admin-registered provenance: issues and comments
+are exactly the writable surface allowed to a self-attested member
+(<<members.provenance>>).
 --
 
 === Web Authentication
@@ -572,7 +733,7 @@ memory cost per request.
 --
 Browser sign-in MUST NOT require a private key to be transmitted.
 The server MUST issue a one-time nonce (challenge); the member MUST sign the
-nonce locally with their web key using SSHSIG under the `git-ents-login`
+nonce locally with their web key using SSHSIG under the `git.ents.cloud`
 namespace (distinct from the git push namespace) and paste back the public key
 and signature.
 The server MUST verify the pasted signature against the pasted key, and the key
@@ -580,6 +741,9 @@ against the live member list for the repository being edited, before opening a
 session.
 A challenge MUST expire after 600 seconds and MUST be consumed on first use so
 it cannot be replayed.
+The sign-in page MUST point at `git ents login` (<<cli.login>>) as the
+preferred flow, keeping the manual signing instructions as the fallback for
+a browser without the CLI installed.
 --
 
 [role="requirement", id="web.auth.session"]
@@ -801,7 +965,8 @@ renames, or removes a requirement or its implementation.
 |`namespace.auto-create` |`git-ents-server/src/http.rs` (`backend` init lock, `reconcile_head`) |`server::rejects_colliding_pushes`
 |`members.ref` |`git-ents/src/members.rs` (`MEMBER_NS`, `load_all`/`store`) |`members::load_all_unions_every_member_ref`
 |`members.trust` |`git-ents/src/members.rs` (`Trust`) |`members::store_then_load_round_trips_a_{member,ca_member,webauthn_member}`
-|`members.provenance` |`git-ents/src/members.rs` (`Provenance`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`
+|`members.provenance` |`git-ents/src/members.rs` (`Provenance`); `git-ents-server/src/web/write.rs` (`require_admin_registered`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`, `web_edit::a_self_attested_member_is_refused_a_settings_edit`
+|`members.account` |`git-ents/src/members.rs` (`Member.account`) |`members::store_then_load_round_trips_a_member`
 |`members.window` |`git-ents/src/members.rs` (`Member::validate`, `valid_timestamp`) |`members::validate_rejects_*`, `store_rejects_a_member_with_an_inverted_window`
 |`members.allowed-signers` |`git-ents/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
 |`revocations.ref` |`git-ents/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
@@ -813,21 +978,31 @@ renames, or removes a requirement or its implementation.
 |`cli.remote-admin` |`git-ents/src/main.rs` (`sync`, `push_signed`) | _(manual/CLI UX, no automated test)_
 |`cli.compare-and-swap` |`git-ents/src/main.rs` (`push_signed`, `push_delete`, `--force-with-lease`) | _(manual/CLI UX, no automated test)_
 |`cli.members` |`git-ents/src/main.rs` (`Action`, `run_members`) | _(manual/CLI UX, no automated test)_
+|`cli.interactive` |`git-ents/src/interactive.rs` | _(manual/CLI UX, no automated test)_
 |`cli.account-checks` |`git-ents/src/main.rs` (`AccountAction`, `ChecksAction`) | _(manual/CLI UX, no automated test)_
+|`cli.comments` |`git-ents/src/main.rs` (`CommentAction`, `run_comment`) | _(manual/CLI UX, no automated test)_
+|`cli.login` |`git-ents/src/main.rs` (`login`); `git-ents-server/src/main.rs` (`/login/cli` routes) | _(manual/CLI UX, no automated test)_
 |`cli.key-resolution` |`git-ents/src/main.rs` (`fingerprint`, MD5 colon form) | _(manual/CLI UX, no automated test)_
 |`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
+|`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
 |`config.ref` |`git-ents/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
 |`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`) |`checks::store_then_load_round_trips_the_check_set`
 |`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
 |`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`
 |`checks.sandbox` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
 |`checks.outcomes` |`git-ents/src/checks.rs` (`Status`, `record`/`update_run`); `git-ents-server/src/checks.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`checks::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_log_url`
+|`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`checks debug`) | _(requires a live Sprite; manually verified)_
 |`issues.ref` |`git-ents/src/issues.rs` (`Issue`, `State`) |`issues::store_then_load_round_trips_an_issue`
 |`issues.id` |`git-ents/src/issues.rs` (`new_id`, `promote`) |`issues::new_id_hashes_its_own_content_with_no_origin`, `promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref`
+|`comments.ref` |`git-comment/src/lib.rs` (`Comment`, `COMMENTS_NS`, `new_id`) |`git-comment::store_then_load_round_trips_a_comment`, `loads_the_on_disk_comment_format`, `new_id_hashes_its_own_content_with_no_origin`
+|`comments.authorship` |`git-store/src/lib.rs` (`store_item_authored`, `provenance`); `git-comment/src/lib.rs` (`provenance`) |`git-store::provenance_recovers_the_creating_and_updating_authors`, `git-comment::provenance_comes_from_the_commits_not_the_document`
+|`comments.anchor` |`git-anchor/src/lib.rs` (`Anchor`, `capture`, `snippet`) |`git-anchor::capture_records_the_commit_and_blob_and_snippet_derives_the_text`, `capture_rejects_a_missing_path_and_an_oversized_range`
+|`comments.projection` |`git-anchor/src/lib.rs` (`project`, `Projection`) |`git-anchor::unchanged_file_projects_as_current`, `a_pure_rename_relocates_with_the_same_lines`, `an_edit_inside_the_range_is_outdated`, `a_deleted_file_projects_as_deleted`, `projection_works_backwards_onto_an_ancestor`
 |`web.server-rendered` |`git-ents-server/src/web/*.rs` (Askama/maud templates, no client JS required) | _(manual UI verification)_
 |`web.index` |`git-ents-server/src/web/mod.rs` (`index`) | _(manual UI verification)_
 |`web.tabs` |`git-ents-server/src/web/pages.rs`, `templates/issues.html` | _(manual UI verification)_
-|`web.syntax-highlight` |`git-ents-server/src/web/git.rs` (`capped_read`, 2 MiB cap) |`web::git::tests::capped_read_flags_oversized_output`
+|`web.syntax-highlight` |`git-ents-server/src/web/git.rs` (`capped_read`, 2 MiB cap); `pages.rs` (rendered/source toggle, `#L<n>` anchors) |`web::git::tests::capped_read_flags_oversized_output`
+|`web.comments` |`git-ents-server/src/web/pages.rs` (comment listing/form); `write.rs` (`add_comment`) | _(manual UI verification)_
 |`web.auth.challenge` |`git-ents-server/src/web/write.rs` (`issue_challenge`, `take_challenge`) |`write::tests::a_consumed_challenge_does_not_verify_twice`
 |`web.auth.session` |`git-ents-server/src/web/write.rs` (`Session`, `csrf_ok`, `logout`) |`web_edit::an_edit_without_a_valid_csrf_token_is_refused`
 |`web.auth.edit` |`git-ents-server/src/web/write.rs` (`edit_config`, `signed_edit`, `require_admin_registered`) |`web_edit::a_member_edits_settings_through_the_browser`, `a_self_attested_member_is_refused_a_settings_edit`
