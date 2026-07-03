@@ -1198,6 +1198,7 @@ dependencies = [
 [[package]]
 name = "facet-git-tree"
 version = "0.1.0"
+source = "git+https://github.com/git-ents/facet-git-tree#a910057093055a61b25436e3a81e50407f767dbc"
 dependencies = [
  "facet",
  "gix-hash",
