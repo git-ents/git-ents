@@ -6,9 +6,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-clap = { workspace = true }
 crossterm = "0.29.0"
 facet = { workspace = true }
+figue = { workspace = true }
 form_urlencoded.workspace = true
 futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
 git-anchor = { workspace = true }

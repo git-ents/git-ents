@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use clap::{Parser, Subcommand};
+use facet::Facet;
+use figue::{self as args, FigueBuiltins};
 use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
 use git_ents::account::{self, Account};
@@ -24,270 +25,264 @@ use git_ents::checks::{self, CHECKS_REF, Check};
 use git_ents::members::{self, MEMBER_NS, Member, Trust, member_ref};
 use git_ents::revocations::{self, REVOKED_REF, Revocation};
 
-#[derive(Parser)]
-#[command(name = "git-ents", about = "Helpful guardians of your git trees.")]
+/// Helpful guardians of your git trees.
+#[derive(Facet)]
 struct Cli {
-    #[command(subcommand)]
+    /// Remote whose refs to operate on.
+    #[facet(args::named, args::short = 'r', default = "origin")]
+    remote: String,
+    #[facet(args::subcommand)]
     command: Top,
+    #[facet(flatten)]
+    builtins: FigueBuiltins,
 }
 
-#[derive(Subcommand)]
+#[derive(Facet)]
+#[repr(u8)]
 enum Top {
     /// Manage the repository members at `refs/meta/member/<username>`.
     Members {
-        #[command(subcommand)]
+        #[facet(args::subcommand)]
         action: Action,
     },
     /// Manage this repository's account identity at `refs/meta/account`.
     Account {
-        #[command(subcommand)]
+        #[facet(args::subcommand)]
         action: AccountAction,
     },
     /// Manage the configured checks at `refs/meta/checks`.
     Checks {
-        #[command(subcommand)]
+        #[facet(args::subcommand)]
         action: ChecksAction,
     },
     /// Comment on code: one comment per ref at `refs/meta/comments/<id>`,
     /// anchored to a blob (and optionally lines) at a commit.
     Comment {
-        #[command(subcommand)]
+        #[facet(args::subcommand)]
         action: CommentAction,
     },
     /// Sign in to a remote's server the same way the web UI does — sign a
     /// server-issued challenge with your key — so this machine can also open a
     /// debug session (`checks debug`).
     Login {
-        /// Remote whose server to sign in to.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Key to sign in with; defaults to `user.signingkey`.
-        #[arg(long)]
+        #[facet(args::named)]
         key: Option<PathBuf>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Facet)]
+#[repr(u8)]
 enum Action {
     /// Set this machine up to sign the pushes the server requires.
     Setup {
         /// Key to sign with; defaults to `user.signingkey`, else a new or
         /// existing `~/.ssh/id_ed25519`.
-        #[arg(long)]
+        #[facet(args::named)]
         key: Option<PathBuf>,
         /// Write to this repository's config instead of your global config.
-        #[arg(long)]
+        #[facet(args::named, default)]
         local: bool,
     },
     /// List the members on a remote.
-    List {
-        /// Remote to read the `refs/meta/member/*` refs from.
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
+    List,
     /// Authorize a key for a member on a remote and push the update. Prompts
     /// for any field left unset when run at an interactive terminal.
     Add {
         /// Member (username) to authorize the key under — its
         /// `refs/meta/member/<username>` ref.
+        #[facet(args::positional, default)]
         username: Option<String>,
-        /// Remote whose member refs to update.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Key to authorize; defaults to `user.signingkey`.
-        #[arg(long)]
+        #[facet(args::named)]
         key: Option<PathBuf>,
         /// Pin a certificate authority public key instead of leaf keys: trust
-        /// any certificate it issues for the member, within the cert's validity.
-        #[arg(long, value_name = "CA_PUBKEY", conflicts_with = "key")]
+        /// any certificate it issues for the member, within the cert's
+        /// validity. Conflicts with `--key`.
+        #[facet(args::named, args::label = "CA_PUBKEY")]
         cert_authority: Option<PathBuf>,
         /// Trust the member only at or after this OpenSSH timestamp
         /// (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`; append `Z` for UTC).
-        #[arg(long, value_name = "TIMESTAMP")]
+        #[facet(args::named, args::label = "TIMESTAMP")]
         valid_after: Option<String>,
         /// Stop trusting the member after this OpenSSH timestamp; omit for trust
         /// that never lapses on its own.
-        #[arg(long, value_name = "TIMESTAMP")]
+        #[facet(args::named, args::label = "TIMESTAMP")]
         valid_before: Option<String>,
         /// Link this member to an account by its genesis hash (`git ents
         /// account create` prints one).
-        #[arg(long, value_name = "GENESIS_HASH")]
+        #[facet(args::named, args::label = "GENESIS_HASH")]
         account: Option<String>,
     },
     /// Remove a member, deleting its ref on a remote and pushing the update.
     Remove {
         /// Member (username) to remove — its `refs/meta/member/<username>` ref.
+        #[facet(args::positional)]
         username: String,
-        /// Remote whose member ref to delete.
-        #[arg(default_value = "origin")]
-        remote: String,
     },
     /// Revoke a key fast: add its fingerprint to the `refs/meta/revoked` deny
     /// list so it is refused before its window expires, and push the update.
     Revoke {
         /// Fingerprint of the key to deny (as shown by `members list`).
+        #[facet(args::positional)]
         fingerprint: String,
-        /// Remote whose `refs/meta/revoked` to update.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Free-text reason recorded alongside the revocation.
-        #[arg(long, default_value = "")]
+        #[facet(args::named, default = "")]
         reason: String,
     },
     /// Lift a revocation, removing a fingerprint from the `refs/meta/revoked`
     /// deny list and pushing the update.
     Unrevoke {
         /// Fingerprint to stop denying.
+        #[facet(args::positional)]
         fingerprint: String,
-        /// Remote whose `refs/meta/revoked` to update.
-        #[arg(default_value = "origin")]
-        remote: String,
     },
     /// Report whether a key is a member and the client is configured.
     Check {
-        /// Remote to read the `refs/meta/member/*` refs from.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Key to look for; defaults to `user.signingkey`.
-        #[arg(long)]
+        #[facet(args::named)]
         key: Option<PathBuf>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Facet)]
+#[repr(u8)]
 enum AccountAction {
     /// Create or update this repository's account identity and push it. The
     /// presence of `refs/meta/account` is what marks the repo as an account.
     /// Prompts for any field left unset when run at an interactive terminal.
     Create {
         /// The account username — by convention the `user/<username>` repo name.
+        #[facet(args::positional, default)]
         username: Option<String>,
-        /// Remote whose `refs/meta/account` to update.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Human-facing display name; defaults to the username.
-        #[arg(long)]
+        #[facet(args::named)]
         display_name: Option<String>,
         /// Short free-text bio.
-        #[arg(long)]
+        #[facet(args::named)]
         bio: Option<String>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Facet)]
+#[repr(u8)]
 enum ChecksAction {
     /// List the checks configured on a remote.
-    List {
-        /// Remote to read `refs/meta/checks` from.
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
+    List,
     /// Add (or replace) a check on a remote's set and push the update.
     /// Prompts for any field left unset when run at an interactive terminal.
     Add {
         /// Name to record the check under (`checks/<name>`).
+        #[facet(args::positional, default)]
         name: Option<String>,
         /// Command the check runs (e.g. `cargo fmt --check`); omit for a
         /// composite check that only aggregates its dependencies.
+        #[facet(args::positional, default)]
         command: Option<String>,
         /// Sandbox image the command runs in (reserved: the Sprite sandbox
         /// does not honor an image yet, so setting one is rejected).
-        #[arg(long)]
+        #[facet(args::named)]
         image: Option<String>,
         /// Check that must pass before this one runs (repeatable).
-        #[arg(long = "depends", value_name = "CHECK")]
+        #[facet(args::named, args::label = "CHECK", default)]
         depends: Vec<String>,
-        /// Remote whose `refs/meta/checks` to update.
-        #[arg(default_value = "origin")]
-        remote: String,
     },
     /// Remove a check from a remote's set and push the update.
     Remove {
         /// Name (`checks/<name>`) to drop.
+        #[facet(args::positional)]
         name: String,
-        /// Remote whose `refs/meta/checks` to update.
-        #[arg(default_value = "origin")]
-        remote: String,
     },
     /// Open an interactive, read-write shell in `remote`'s persistent checks
     /// Sprite — the same sandbox its check runs execute in. Requires
     /// `git ents login <remote>` first.
-    Debug {
-        /// Remote whose checks Sprite to open a shell in.
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
+    Debug,
     /// Show recorded check runs (queued/running/pass/fail/error) from
     /// `refs/meta/runs/*` on a remote, newest first.
-    Runs {
-        /// Remote to read `refs/meta/runs/*` from.
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
+    Runs,
 }
 
-#[derive(Subcommand)]
+#[derive(Facet)]
+#[repr(u8)]
 enum CommentAction {
     /// Anchor a comment to a file at a revision and push it. Prompts for the
     /// path and body when left unset at an interactive terminal.
     Add {
         /// Repository-relative path of the file the comment anchors to.
+        #[facet(args::positional, default)]
         path: Option<String>,
-        /// Remote whose comment refs to update.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// The comment's body text.
-        #[arg(long)]
+        #[facet(args::named)]
         body: Option<String>,
         /// Lines to anchor, as `<start>[:<end>]` (1-based, inclusive); omit
         /// for a whole-file comment.
-        #[arg(long)]
+        #[facet(args::named)]
         lines: Option<String>,
         /// Revision to anchor against.
-        #[arg(long, default_value = "HEAD")]
+        #[facet(args::named, default = "HEAD")]
         rev: String,
         /// Genesis id of the issue the comment belongs to.
-        #[arg(long)]
+        #[facet(args::named)]
         issue: Option<String>,
     },
     /// List the comments on a remote, each projected onto a revision.
     List {
-        /// Remote to read the `refs/meta/comments/*` refs from.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Revision to project each comment's anchor onto.
-        #[arg(long, default_value = "HEAD")]
+        #[facet(args::named, default = "HEAD")]
         rev: String,
     },
     /// Show one comment: author, anchor, projection, anchored text, and body.
     Show {
         /// The comment's id (or a unique prefix of it).
+        #[facet(args::positional)]
         id: String,
-        /// Remote to read the `refs/meta/comments/*` refs from.
-        #[arg(default_value = "origin")]
-        remote: String,
         /// Revision to project the comment's anchor onto.
-        #[arg(long, default_value = "HEAD")]
+        #[facet(args::named, default = "HEAD")]
         rev: String,
     },
     /// Remove a comment, deleting its ref on a remote.
     Remove {
         /// The comment's id (or a unique prefix of it).
+        #[facet(args::positional)]
         id: String,
-        /// Remote whose comment ref to delete.
-        #[arg(default_value = "origin")]
-        remote: String,
     },
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let config = match figue::builder::<Cli>() {
+        Ok(builder) => builder,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    .cli(|cli| cli.args(std::env::args().skip(1)))
+    .help(|help| {
+        help.program_name("git-ents")
+            .version(env!("CARGO_PKG_VERSION"))
+    })
+    .build();
+    let cli: Cli = match figue::Driver::new(config).run().into_result() {
+        Ok(output) => output.get(),
+        Err(figue::DriverError::Help {
+            text,
+            suggestion: suggestion @ Some(_),
+        }) => {
+            println!("{text}");
+            if let Some(s) = suggestion {
+                println!("{}", s.render_pretty());
+            }
+            return ExitCode::FAILURE;
+        }
+        Err(error) => figue::DriverOutcome::<Cli>::err(error).unwrap(),
+    };
+    let remote = cli.remote;
     let result = match cli.command {
-        Top::Members { action } => run_members(action),
-        Top::Account { action } => run_account(action),
-        Top::Checks { action } => run_checks(action),
-        Top::Comment { action } => run_comment(action),
-        Top::Login { remote, key } => login(&remote, key.as_deref()),
+        Top::Members { action } => run_members(action, &remote),
+        Top::Account { action } => run_account(action, &remote),
+        Top::Checks { action } => run_checks(action, &remote),
+        Top::Comment { action } => run_comment(action, &remote),
+        Top::Login { key } => login(&remote, key.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -298,13 +293,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_members(action: Action) -> Result<(), String> {
+fn run_members(action: Action, remote: &str) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
-        Action::List { remote } => members_list(&remote),
+        Action::List => members_list(remote),
         Action::Add {
             username,
-            remote,
             key,
             cert_authority,
             valid_after,
@@ -312,51 +306,45 @@ fn run_members(action: Action) -> Result<(), String> {
             account,
         } => members_add(
             username,
-            &remote,
+            remote,
             key,
             cert_authority,
             valid_after,
             valid_before,
             account,
         ),
-        Action::Remove { username, remote } => members_remove(&username, &remote),
+        Action::Remove { username } => members_remove(&username, remote),
         Action::Revoke {
             fingerprint,
-            remote,
             reason,
-        } => members_revoke(&fingerprint, &remote, reason),
-        Action::Unrevoke {
-            fingerprint,
-            remote,
-        } => members_unrevoke(&fingerprint, &remote),
-        Action::Check { remote, key } => check(&remote, key.as_deref()),
+        } => members_revoke(&fingerprint, remote, reason),
+        Action::Unrevoke { fingerprint } => members_unrevoke(&fingerprint, remote),
+        Action::Check { key } => check(remote, key.as_deref()),
     }
 }
 
-fn run_account(action: AccountAction) -> Result<(), String> {
+fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
     match action {
         AccountAction::Create {
             username,
-            remote,
             display_name,
             bio,
-        } => account_create(username, &remote, display_name, bio),
+        } => account_create(username, remote, display_name, bio),
     }
 }
 
-fn run_checks(action: ChecksAction) -> Result<(), String> {
+fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
     match action {
-        ChecksAction::List { remote } => list::<Checks>(&remote),
+        ChecksAction::List => list::<Checks>(remote),
         ChecksAction::Add {
             name,
             command,
             image,
             depends,
-            remote,
-        } => add_check(name, command, image, depends, &remote),
-        ChecksAction::Remove { name, remote } => remove::<Checks>(&name, &remote),
-        ChecksAction::Debug { remote } => checks_debug(&remote),
-        ChecksAction::Runs { remote } => checks_runs(&remote),
+        } => add_check(name, command, image, depends, remote),
+        ChecksAction::Remove { name } => remove::<Checks>(&name, remote),
+        ChecksAction::Debug => checks_debug(remote),
+        ChecksAction::Runs => checks_runs(remote),
     }
 }
 
@@ -388,19 +376,18 @@ fn checks_runs(remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_comment(action: CommentAction) -> Result<(), String> {
+fn run_comment(action: CommentAction, remote: &str) -> Result<(), String> {
     match action {
         CommentAction::Add {
             path,
-            remote,
             body,
             lines,
             rev,
             issue,
-        } => comment_add(path, body, lines.as_deref(), &rev, issue, &remote),
-        CommentAction::List { remote, rev } => comment_list(&remote, &rev),
-        CommentAction::Show { id, remote, rev } => comment_show(&id, &remote, &rev),
-        CommentAction::Remove { id, remote } => comment_remove(&id, &remote),
+        } => comment_add(path, body, lines.as_deref(), &rev, issue, remote),
+        CommentAction::List { rev } => comment_list(remote, &rev),
+        CommentAction::Show { id, rev } => comment_show(&id, remote, &rev),
+        CommentAction::Remove { id } => comment_remove(&id, remote),
     }
 }
 
@@ -1007,6 +994,9 @@ fn resolve_trust(
     key: Option<PathBuf>,
     cert_authority: Option<PathBuf>,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
+    if key.is_some() && cert_authority.is_some() {
+        return Err("--key conflicts with --cert-authority".to_string());
+    }
     if key.is_some() || cert_authority.is_some() || !interactive::available() {
         return Ok((key, cert_authority));
     }

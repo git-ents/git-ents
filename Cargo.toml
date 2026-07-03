@@ -44,6 +44,7 @@ askama = "0.16"
 axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
+figue = "5.0.0-rc.5"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 getrandom = "0.4"
 facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
