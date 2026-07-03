@@ -31,6 +31,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use git_ents::checks::{self, Check, RunOutcome, Status};
+use gix_hash::ObjectId;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
 
@@ -198,7 +199,7 @@ fn process_job(job: &Job) -> Result<(), String> {
     let mut outcomes = statuses(&runnable, Status::Running);
     let sprite = sprite_name(&job.repo);
     if let Err(e) = ensure_auth().and_then(|()| ensure_sprite(&sprite)) {
-        finalize_error(&job.repo, &job.new, &mut outcomes);
+        finalize_error(&job.repo, job.new, &mut outcomes);
         return Err(e);
     }
 
@@ -207,9 +208,9 @@ fn process_job(job: &Job) -> Result<(), String> {
         runnable.len(),
         job.ref_name
     );
-    advance(&job.repo, &job.new, &outcomes);
-    if let Err(e) = sync_tree(&job.repo, &sprite, &job.new) {
-        finalize_error(&job.repo, &job.new, &mut outcomes);
+    advance(&job.repo, job.new, &outcomes);
+    if let Err(e) = sync_tree(&job.repo, &sprite, job.new) {
+        finalize_error(&job.repo, job.new, &mut outcomes);
         return Err(e);
     }
 
@@ -220,14 +221,14 @@ fn process_job(job: &Job) -> Result<(), String> {
             outcome.duration_secs = Some(result.duration_secs);
             outcome.recording = Some(result.recording);
         }
-        advance(&job.repo, &job.new, &outcomes);
+        advance(&job.repo, job.new, &outcomes);
     }
     Ok(())
 }
 
 /// Advance the recorded run for `new` to `outcomes`; a recording hiccup is
 /// logged but never derails the worker.
-fn advance(repo: &Path, new: &str, outcomes: &[RunOutcome]) {
+fn advance(repo: &Path, new: ObjectId, outcomes: &[RunOutcome]) {
     if let Err(e) = checks::update_run(repo, new, outcomes) {
         eprintln!("checks: could not record run for {new}: {e}");
     }
@@ -235,7 +236,7 @@ fn advance(repo: &Path, new: &str, outcomes: &[RunOutcome]) {
 
 /// Mark every check in `outcomes` `error` and record it — the terminal state for
 /// a run the worker could not carry out.
-fn finalize_error(repo: &Path, new: &str, outcomes: &mut [RunOutcome]) {
+fn finalize_error(repo: &Path, new: ObjectId, outcomes: &mut [RunOutcome]) {
     for outcome in outcomes.iter_mut() {
         outcome.status = Status::Error;
     }
@@ -246,7 +247,7 @@ fn finalize_error(repo: &Path, new: &str, outcomes: &mut [RunOutcome]) {
 /// it updated (carried only for logging).
 struct Job {
     repo: PathBuf,
-    new: String,
+    new: ObjectId,
     ref_name: String,
 }
 
@@ -277,11 +278,8 @@ fn read_job(path: &Path) -> Option<Job> {
     let contents = std::fs::read_to_string(path).ok()?;
     let mut lines = contents.lines();
     let repo = PathBuf::from(lines.next()?);
-    let new = lines.next()?.to_owned();
+    let new = ObjectId::from_hex(lines.next()?.as_bytes()).ok()?;
     let ref_name = lines.next()?.to_owned();
-    if new.is_empty() {
-        return None;
-    }
     Some(Job {
         repo,
         new,
@@ -291,7 +289,7 @@ fn read_job(path: &Path) -> Option<Job> {
 
 /// One ref git reported as updated by the push.
 struct Update<'a> {
-    new: &'a str,
+    new: ObjectId,
     ref_name: &'a str,
 }
 
@@ -307,7 +305,8 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
             let _old = fields.next()?;
             let new = fields.next()?;
             let ref_name = fields.next()?;
-            if new == git_ents::ZERO_OID || ref_name.starts_with("refs/meta/") {
+            let new = ObjectId::from_hex(new.as_bytes()).ok()?;
+            if new.is_null() || ref_name.starts_with("refs/meta/") {
                 None
             } else {
                 Some(Update { new, ref_name })
@@ -382,11 +381,11 @@ pub(crate) fn ensure_sprite(sprite: &str) -> Result<(), String> {
 /// previous contents while leaving the rest of the persistent filesystem (build
 /// caches and the like) intact. `git archive` emits the tree as a tar that the
 /// Sprite unpacks over stdin.
-fn sync_tree(repo: &Path, sprite: &str, new: &str) -> Result<(), String> {
+fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
     let archive = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", new])
+        .args(["archive", "--format=tar", &new.to_string()])
         .output()
         .map_err(|e| format!("could not run git archive: {e}"))?;
     if !archive.status.success() {
@@ -631,11 +630,18 @@ mod tests {
         let write = |name: &str, body: &str| {
             std::fs::write(queue.path().join(name), body).unwrap();
         };
-        write("a.job", "/repos/one\naaa\nrefs/heads/main\n");
-        write("b.job", "/repos/one\nbbb\nrefs/heads/dev\n");
-        write("c.job", "/repos/two\nccc\nrefs/heads/main\n");
+        let oid_a = "a".repeat(40);
+        let oid_b = "b".repeat(40);
+        let oid_c = "c".repeat(40);
+        let oid_d = "d".repeat(40);
+        write("a.job", &format!("/repos/one\n{oid_a}\nrefs/heads/main\n"));
+        write("b.job", &format!("/repos/one\n{oid_b}\nrefs/heads/dev\n"));
+        write("c.job", &format!("/repos/two\n{oid_c}\nrefs/heads/main\n"));
         write("d.job", "garbage\n");
-        write("ignored.tmp", "/repos/one\nddd\nrefs/heads/main\n");
+        write(
+            "ignored.tmp",
+            &format!("/repos/one\n{oid_d}\nrefs/heads/main\n"),
+        );
 
         let groups = pending_jobs(queue.path());
         assert_eq!(groups.len(), 2);

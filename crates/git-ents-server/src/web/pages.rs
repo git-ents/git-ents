@@ -860,10 +860,13 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
         .await
         .map(|out| out.trim().to_owned())
         .filter(|head| !head.is_empty());
-    let head_run = head.as_deref().and_then(|head| {
+    let head_oid = head
+        .as_deref()
+        .and_then(|head| ObjectId::from_hex(head.as_bytes()).ok());
+    let head_run = head_oid.and_then(|head_oid| {
         runs.as_ref()
             .ok()
-            .and_then(|commits| commits.iter().find(|commit| commit.commit == head))
+            .and_then(|commits| commits.iter().find(|commit| commit.commit == head_oid))
             .and_then(|commit| commit.runs.first())
     });
     repo_shell(
@@ -908,7 +911,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                             @for commit in commits.iter().take(25) {
                                 @for run in &commit.runs {
                                     div.card-row.signer-row {
-                                        code.key { (commit.commit.get(..8).unwrap_or(&commit.commit)) }
+                                        code.key { (short_oid(&commit.commit)) }
                                         (run.render())
                                     }
                                 }
@@ -977,11 +980,14 @@ pub(super) async fn check_recording_page(
     commit: &str,
     name: &str,
 ) -> Response {
+    let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
+        return not_found().into_response();
+    };
     let runs = load_runs(repo).await;
     let recording = runs.ok().and_then(|commits| {
         commits
             .into_iter()
-            .find(|commit_runs| commit_runs.commit == commit)
+            .find(|commit_runs| commit_runs.commit == commit_oid)
             .and_then(|commit_runs| commit_runs.runs.into_iter().next())
             .and_then(|run| run.results.into_iter().find(|result| result.name == name))
             .and_then(|outcome| outcome.recording)

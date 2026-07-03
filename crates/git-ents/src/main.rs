@@ -369,7 +369,10 @@ fn checks_runs(remote: &str) -> Result<(), String> {
                 .map(|outcome| format!("{}={}", outcome.name, outcome.status))
                 .collect::<Vec<_>>()
                 .join("  ");
-            println!("{}  {when}  {results}", short_id(&commit_runs.commit));
+            println!(
+                "{}  {when}  {results}",
+                short_id(&commit_runs.commit.to_string())
+            );
         }
     }
     Ok(())

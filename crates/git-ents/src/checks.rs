@@ -21,6 +21,7 @@
 use std::path::Path;
 
 use facet::Facet;
+use gix::ObjectId;
 
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";
@@ -152,7 +153,7 @@ pub struct Run {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRuns {
     /// The checked commit's object id.
-    pub commit: String,
+    pub commit: ObjectId,
     /// Every run against it, newest first.
     pub runs: Vec<Run>,
 }
@@ -160,7 +161,11 @@ pub struct CommitRuns {
 /// Record a run of `outcomes` for `commit` in `repo`, as a new commit on
 /// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
 /// chain is the run history. The commit's date is the run time.
-pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), git_store::Error> {
+pub fn record(
+    repo: &Path,
+    commit: ObjectId,
+    outcomes: &[RunOutcome],
+) -> Result<(), git_store::Error> {
     let store = git_store::Store::open(repo)?;
     store.store_map(
         &format!("{RUNS_NS}/{commit}"),
@@ -180,7 +185,7 @@ pub fn record(repo: &Path, commit: &str, outcomes: &[RunOutcome]) -> Result<(), 
 /// advances a run is self-healing even if the `queued` record never landed.
 pub fn update_run(
     repo: &Path,
-    commit: &str,
+    commit: ObjectId,
     outcomes: &[RunOutcome],
 ) -> Result<(), git_store::Error> {
     let refname = format!("{RUNS_NS}/{commit}");
@@ -192,12 +197,20 @@ pub fn update_run(
 /// List the recorded runs per commit in `repo`, newest commit first. Each
 /// commit's runs are the ref's commit chain, newest first, with the run time
 /// taken from each commit's date.
+///
+/// A ref whose last segment is not a valid hex object id cannot have been
+/// written by [`record`]/[`update_run`], so it is skipped rather than
+/// surfaced as an error — the same tolerance [`runs`] already gives a foreign
+/// ref under [`RUNS_NS`].
 pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
     let store = git_store::Store::open(repo)?;
     let prefix = format!("{RUNS_NS}/");
     let mut commits = Vec::new();
     for refname in store.list(&prefix)? {
-        let Some(commit) = refname.strip_prefix(&prefix) else {
+        let Some(commit) = refname
+            .strip_prefix(&prefix)
+            .and_then(|hex| ObjectId::from_hex(hex.as_bytes()).ok())
+        else {
             continue;
         };
         let runs = store
@@ -211,10 +224,7 @@ pub fn runs(repo: &Path) -> Result<Vec<CommitRuns>, git_store::Error> {
                     .collect(),
             })
             .collect();
-        commits.push(CommitRuns {
-            commit: commit.to_owned(),
-            runs,
-        });
+        commits.push(CommitRuns { commit, runs });
     }
     Ok(commits)
 }
@@ -327,7 +337,7 @@ mod tests {
         // subtree layout, with `duration_secs`/`recording` omitted, must keep
         // loading, with the missing optional fields unset.
         let repo = unique_repo();
-        let commit = "0123456789012345678901234567890123456789";
+        let commit = ObjectId::from_hex(b"0123456789012345678901234567890123456789").unwrap();
         write_runs_doc(
             &repo,
             &format!("{RUNS_NS}/{commit}"),
@@ -356,7 +366,7 @@ mod tests {
     #[test]
     fn record_then_runs_round_trips_a_run() {
         let repo = unique_repo();
-        let commit = "0123456789012345678901234567890123456789";
+        let commit = ObjectId::from_hex(b"0123456789012345678901234567890123456789").unwrap();
         record(
             &repo,
             commit,
@@ -378,7 +388,7 @@ mod tests {
     #[test]
     fn recording_a_commit_again_appends_a_run() {
         let repo = unique_repo();
-        let commit = "0123456789012345678901234567890123456789";
+        let commit = ObjectId::from_hex(b"0123456789012345678901234567890123456789").unwrap();
         record(&repo, commit, &[outcome("fmt", Status::Fail)]).unwrap();
         record(&repo, commit, &[outcome("fmt", Status::Pass)]).unwrap();
         let commits = runs(&repo).unwrap();
@@ -406,7 +416,7 @@ mod tests {
     #[test]
     fn round_trips_an_outcomes_duration_and_recording() {
         let repo = unique_repo();
-        let commit = "0123456789012345678901234567890123456789";
+        let commit = ObjectId::from_hex(b"0123456789012345678901234567890123456789").unwrap();
         let rich = RunOutcome {
             name: "fmt".to_owned(),
             status: Status::Pass,
@@ -422,7 +432,7 @@ mod tests {
     #[test]
     fn update_run_advances_in_place_rather_than_appending() {
         let repo = unique_repo();
-        let commit = "0123456789012345678901234567890123456789";
+        let commit = ObjectId::from_hex(b"0123456789012345678901234567890123456789").unwrap();
         record(&repo, commit, &[outcome("fmt", Status::Queued)]).unwrap();
         update_run(&repo, commit, &[outcome("fmt", Status::Running)]).unwrap();
         update_run(&repo, commit, &[outcome("fmt", Status::Pass)]).unwrap();

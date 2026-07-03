@@ -1417,6 +1417,7 @@ dependencies = [
  "git-anchor",
  "git-comment",
  "git-store",
+ "gix",
  "iddqd",
  "inquire",
  "signal-hook 0.3.18",
