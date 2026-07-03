@@ -6,9 +6,9 @@
 //! the *embedded* fragment (no `<!DOCTYPE>`/`<html>` frame) so it can drop
 //! straight into a card body styled by the page's own stylesheet.
 
-use acdc_converters_core::{Converter, Options as ConvertOptions};
+use acdc_converters_core::{Converter, Options as ConvertOptions, inlines_to_string};
 use acdc_converters_html::{Processor, RenderOptions};
-use acdc_parser::{Options as ParseOptions, inlines_to_string};
+use acdc_parser::Options as ParseOptions;
 use maud::html;
 
 /// File extensions that name an AsciiDoc document.
@@ -56,4 +56,35 @@ pub(crate) fn to_html(source: &str) -> Option<String> {
         Some(heading) => heading + &body,
         None => body,
     })
+}
+
+/// CSS for the `.terminal-view` player acdc's HTML converter emits, vendored
+/// here because embedded-fragment output carries no `<head>` to link or inline
+/// it from (see [`to_html`]'s doctitle note for the same embedded-mode gap).
+/// Lifted verbatim from acdc's built-in stylesheet; keep in sync if it drifts.
+pub(crate) const TERMINAL_VIEW_CSS: &str = "\
+.terminal-view{margin:1.25em 0;max-width:100%;overflow:auto;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.18)}
+.terminal-view__screen{margin:0;padding:18px;font:14px/1.45 ui-monospace,SFMono-Regular,\"SF Mono\",Menlo,Consolas,\"Liberation Mono\",monospace;white-space:pre;tab-size:4}
+.terminal-view--light{background-color:#f6f8fa;color:#1f2328}
+.terminal-view--dark{background-color:#0d1117;color:#e6edf3}
+.terminal-view__viewport{overflow:auto;max-width:100%;padding:0 18px 18px}
+.terminal-view__stream{margin:0;padding:0;width:max-content;font-family:ui-monospace,SFMono-Regular,\"SF Mono\",Menlo,Consolas,\"Liberation Mono\",monospace;font-size:14px;line-height:1.2;white-space:normal;tab-size:4}
+.terminal-view__row{white-space:pre;min-height:1.2em}
+";
+
+/// Render an asciicast v2/v3 `recording` as a replayable terminal session via
+/// acdc's `[terminal%replay]` block, or `None` if it cannot be parsed or
+/// converted. Wraps `recording` in a listing block, so a recording containing
+/// a `----` line of its own would break out early; asciicast JSONL never
+/// produces that on its own line.
+pub(crate) fn render_recording(recording: &str) -> Option<String> {
+    let source = format!("[terminal%replay,format=asciicast]\n----\n{recording}\n----\n");
+    let parsed = acdc_parser::parse(&source, &ParseOptions::default()).ok()?;
+    let doc = parsed.document();
+    let processor = Processor::new(ConvertOptions::default(), doc.attributes.clone());
+    let options = RenderOptions {
+        embedded: true,
+        ..RenderOptions::default()
+    };
+    processor.convert_to_string(doc, &options).ok()
 }

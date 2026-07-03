@@ -35,9 +35,11 @@ arborium = { version = "2.18", default-features = false, features = [
     "lang-html",
     "lang-css",
 ] }
-acdc-parser = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
-acdc-converters-core = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
-acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "3452a4a8d745e6279e50e1d465551b2e33160464" }
+acdc-parser = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2e6f0fa4254a3e9ebd1c3d2f6c7caafde" }
+acdc-converters-core = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2e6f0fa4254a3e9ebd1c3d2f6c7caafde" }
+acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2e6f0fa4254a3e9ebd1c3d2f6c7caafde", features = [
+    "terminal",
+] }
 askama = "0.16"
 axum = "0.8"
 clap = { version = "4.5.60", features = ["derive"] }

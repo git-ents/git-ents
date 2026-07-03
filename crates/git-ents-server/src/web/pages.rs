@@ -18,7 +18,6 @@ use gix_object::bstr::ByteSlice;
 use gix_object::tree::Entry;
 use maud::{Markup, PreEscaped, html};
 
-use super::assets::{ASCIINEMA_PLAYER_CSS, ASCIINEMA_PLAYER_JS};
 use super::git::{
     browse_path, git_output, git_output_bytes, git_output_capped, languages, latest_release,
     list_tree, parse_iso, releases, root_tree,
@@ -990,25 +989,19 @@ pub(super) async fn check_recording_page(
     let Some(recording) = recording else {
         return not_found().into_response();
     };
+    let Some(player) = crate::asciidoc::render_recording(&recording) else {
+        return not_found().into_response();
+    };
     repo_shell(
         meta,
         Tab::Checks,
         &format!("{name} @ {}", commit.get(..8).unwrap_or(commit)),
         html! {
-            style { (PreEscaped(ASCIINEMA_PLAYER_CSS)) }
+            style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
             div.page-header {
                 h1.page-title { (name) " on " code { (commit.get(..8).unwrap_or(commit)) } }
             }
-            div #player {}
-            pre #cast-data hidden { (recording) }
-            script { (PreEscaped(ASCIINEMA_PLAYER_JS)) }
-            script {
-                (PreEscaped(
-                    "const cast = document.getElementById('cast-data').textContent;\n\
-                     const url = URL.createObjectURL(new Blob([cast], {type: 'text/plain'}));\n\
-                     AsciinemaPlayer.create(url, document.getElementById('player'));"
-                ))
-            }
+            (PreEscaped(player))
         },
     )
     .into_response()

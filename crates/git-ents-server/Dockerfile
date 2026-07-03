@@ -6,6 +6,11 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+# acdc's terminal-replay rendering pulls in libghostty-vt-sys, whose build
+# script shells out to `zig build` and pins an exact toolchain version.
+RUN curl -fsSL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz \
+    | tar -xJ -C /usr/local \
+    && ln -s /usr/local/zig-x86_64-linux-0.15.2/zig /usr/local/bin/zig
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies - this is the caching Docker layer!
 RUN cargo chef cook --release --recipe-path recipe.json
