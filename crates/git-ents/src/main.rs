@@ -23,6 +23,7 @@ use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
 use git_ents::account::{self, Account};
 use git_ents::checks::{self, CHECKS_REF, Check};
+use git_ents::component::{self, Component, MapDocument};
 use git_ents::members::{self, MEMBER_NS, Member, Trust, member_ref};
 use git_ents::revocations::{self, REVOKED_REF, Revocation};
 
@@ -343,14 +344,14 @@ fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
 
 fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
     match action {
-        ChecksAction::List => list::<Checks>(remote),
+        ChecksAction::List => list::<Check>(remote),
         ChecksAction::Add {
             name,
             command,
             image,
             depends,
         } => add_check(name, command, image, depends, remote),
-        ChecksAction::Remove { name } => remove::<Checks>(&name, remote),
+        ChecksAction::Remove { name } => remove::<Check>(&name, remote),
         ChecksAction::Debug => checks_debug(remote),
         ChecksAction::Runs => checks_runs(remote),
     }
@@ -585,45 +586,38 @@ fn short_id(id: &str) -> &str {
 /// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
 /// and pushed to a remote, holding entries the CLI lists and removes from. The
 /// check set runs through this; the member set is decomposed across
-/// `refs/meta/member/*` and handled on its own. A set differs only in its item
-/// type, what the messages call an entry, and how a row presents; the thin
-/// [`load`](Set::load)/[`store`](Set::store) keep each on its own typed module.
-trait Set {
-    /// The set's item type.
-    type Item;
-    /// The ref the set lives on.
-    const REF: &'static str;
-    /// The singular noun used in messages ("member", "check").
-    const NOUN: &'static str;
-
-    /// The set's items.
-    fn load(repo: &Path) -> Result<Vec<Self::Item>, String>;
-    /// Replace the set with `items`.
-    fn store(repo: &Path, items: &[Self::Item]) -> Result<(), String>;
+/// `refs/meta/member/*` and handled on its own, and the revocation set's CLI
+/// needs more than these four methods (fingerprint validation, a
+/// lock-yourself-out confirmation) so it stays bespoke too. `REF`, `NOUN`,
+/// and the default [`load`](Set::load)/[`store`](Set::store) come from the
+/// item's own [`MapDocument`]/[`Component`] impls, so a `Set` impl needs only
+/// say how an entry lists and what its key is.
+trait Set: MapDocument + Component {
     /// The line printed when the set is empty on `remote`.
     fn empty_listing(remote: &str) -> String;
     /// An item's key — its identity for removal and the left list column.
-    fn key(item: &Self::Item) -> String;
+    fn key(item: &Self) -> String;
     /// The right list column for an item.
-    fn value(item: &Self::Item) -> String;
+    fn value(item: &Self) -> String;
+
+    /// The set's items.
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        component::load_map(&git_store::Store::open(repo).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Replace the set with `items`.
+    fn store(repo: &Path, items: &[Self]) -> Result<(), String> {
+        component::store_map(
+            &git_store::Store::open(repo).map_err(|error| error.to_string())?,
+            items,
+            &format!("Update {}", Self::PLURAL),
+        )
+        .map_err(|error| error.to_string())
+    }
 }
 
-/// The configured check set at `refs/meta/checks`.
-struct Checks;
-
-impl Set for Checks {
-    type Item = Check;
-    const REF: &'static str = CHECKS_REF;
-    const NOUN: &'static str = "check";
-
-    fn load(repo: &Path) -> Result<Vec<Check>, String> {
-        checks::load(repo).map_err(|error| error.to_string())
-    }
-
-    fn store(repo: &Path, items: &[Check]) -> Result<(), String> {
-        checks::store(repo, items).map_err(|error| error.to_string())
-    }
-
+impl Set for Check {
     fn empty_listing(remote: &str) -> String {
         format!("no checks configured on {remote}")
     }
@@ -676,7 +670,7 @@ fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
     let expected = sync(remote, S::REF)?;
     let before = S::load(&repo)?;
     let count = before.len();
-    let after: Vec<S::Item> = before
+    let after: Vec<S> = before
         .into_iter()
         .filter(|item| S::key(item) != key)
         .collect();
