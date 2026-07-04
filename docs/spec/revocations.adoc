@@ -1,0 +1,19 @@
+== Revocations
+
+[role="requirement", id="revocations.ref"]
+.Revocation List
+--
+A single ref, `refs/meta/revoked`, MUST hold the revocation list: a map from
+fingerprint to a free-text reason.
+This is the "faster than expiry" override: the server MUST subtract every
+revoked fingerprint from the trust set before verifying a push, so a
+compromised key is refused the moment it is listed.
+--
+
+[role="requirement", id="revocations.ca"]
+.CA Revocation
+--
+Revoking a certificate authority MUST be done by removing the CA member's ref.
+A CA is named by its ref, not by a fingerprint, so the revocation list operates
+only on leaf-key fingerprints.
+--

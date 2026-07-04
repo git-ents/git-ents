@@ -1,0 +1,12 @@
+specs (
+    {
+        name git-ents
+        include (docs/spec/**/*.adoc)
+        impls (
+            {
+                name rust
+                include (crates/**/*.rs)
+            }
+        )
+    }
+)

@@ -1,0 +1,23 @@
+== Account
+
+[role="requirement", id="account.ref"]
+.Account Profile
+--
+A repository becomes an account repository by carrying a `refs/meta/account`
+ref.
+The `Account` document at that ref MUST hold: `username`, `display_name`,
+`bio`, and `created_at` (seconds since the Unix epoch).
+The username is authoritative in the document; the repository path is
+convention, not trust.
+--
+
+[role="requirement", id="account.genesis"]
+.Account Identity
+--
+An account's stable, path-independent identity MUST be the content hash of
+the first `Account` document ever recorded on its ref — fixed at creation,
+so later profile edits never change it and a reference to the account
+(<<members.account>>) survives the account repository moving.
+The identity MUST be derived from the ref's history, never stored as a
+field.
+--

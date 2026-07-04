@@ -1,0 +1,74 @@
+== Web UI
+
+[role="requirement", id="web.server-rendered"]
+.Server-Rendered HTML
+--
+All browser-facing pages MUST be rendered server-side with no required
+JavaScript on the client.
+Page navigation MUST be ordinary links; folder expansion and file viewing MUST
+be plain GET requests to the server.
+--
+
+[role="requirement", id="web.index"]
+.Repository Index
+--
+The web root (`GET /`) MUST render an index of the repositories discoverable
+under the data directory, each linking to its overview page.
+When no repository exists yet, the index MUST show a blank-slate prompt
+explaining that a push creates one, rather than an error.
+--
+
+[role="requirement", id="web.tabs"]
+.Repository Tabs
+--
+Each repository's web UI MUST provide at minimum the following tabs:
+
+Files::
+  The repository's file tree, browsable to arbitrary depth, with syntax-
+  highlighted blob views and rendered AsciiDoc and Markdown files.
+
+Commits::
+  The commit history with diff views.
+
+Releases::
+  Git tags treated as release milestones, browsable by version.
+
+Checks::
+  The configured check set and every recorded run with per-check outcomes.
+
+Issues::
+  The issue list with open/closed filter and per-issue detail view.
+
+Settings::
+  The repository's `Config` fields (`description`, `homepage`, `topics`),
+  editable in the browser by signed-in members.
+--
+
+[role="requirement", id="web.syntax-highlight"]
+.Syntax Highlighting
+--
+Blob views MUST syntax-highlight source files using a compile-time language
+registry.
+AsciiDoc and Markdown files MUST be rendered to HTML.
+A blob rendered as a formatted document MUST offer a toggle between the
+rendered document and its syntax-highlighted source.
+Blob gutter line numbers MUST be self-linking anchors (`#L<n>`).
+Files larger than 2 MiB MUST be truncated rather than loaded in full, to bound
+memory cost per request.
+--
+
+[role="requirement", id="web.comments"]
+.Comments in the Browser
+--
+A file's anchored comments MUST be listed under its blob view, projected
+onto the revision being viewed (<<comments.projection>>), linking their line
+range into the blob's gutter and flagged when the projection reports them
+outdated.
+A signed-in member MUST be able to add a comment from the file view; the
+comment anchors to the viewed tip and MUST land as a signed push through the
+same `pre-receive` gate a settings edit traverses (<<web.auth.edit>>), with
+the signed-in human as author.
+Commenting MUST NOT require admin-registered provenance: issues and comments
+are exactly the writable surface allowed to a self-attested member
+(<<members.provenance>>).
+--

@@ -1,0 +1,100 @@
+== Checks
+
+[role="requirement", id="checks.definition"]
+.Check Set Definition
+--
+The configured checks for a repository MUST be stored at `refs/meta/checks` as
+a map from check name to a check body holding an optional shell command, an
+optional sandbox image, and an optional list of dependencies (names of sibling
+checks that must pass first).
+A check with no command is a composite: it runs nothing itself and derives its
+outcome from its dependencies alone.
+A check's definition living on a meta ref means a branch under check cannot
+rewrite the check set that gates it.
+
+The dependency graph is fully static — no conditional edges, no runtime
+expansion — and MUST be validated when the set is written: a dependency naming
+no configured check, a duplicate or self edge, a check with neither a command
+nor dependencies, and any dependency cycle MUST each be rejected before the
+set is stored. A check that sets an image MUST be rejected until the sandbox
+can honor one, rather than the image being silently ignored; the field is
+reserved in the format so honoring it later is not a data migration.
+--
+
+[role="requirement", id="checks.post-receive"]
+.Asynchronous Queuing
+--
+After a successful push is accepted by `pre-receive`, a `post-receive` hook
+MUST enqueue a check job for each updated branch whose new tip is non-zero and
+is not a `refs/meta/*` ref.
+The hook MUST record an initial run status of `queued` for each check
+immediately, so the UI reflects the job before the worker picks it up.
+The hook MUST NOT run checks itself; it MUST return as soon as jobs are
+enqueued, so the push is never blocked on check execution.
+Job files MUST be written to a tmp path and renamed into place so the worker
+never observes a partial file.
+--
+
+[role="requirement", id="checks.worker"]
+.Check Worker
+--
+A persistent server-side worker MUST drain the job queue.
+Jobs MUST be grouped by repository; each repository's jobs MUST be processed
+serially to prevent concurrent runs from colliding in its sandbox.
+Separate repositories MUST be processed concurrently, so a slow repository's
+backlog does not block others.
+
+Within a job the checks MUST settle in topological dependency order, so every
+dependency's outcome is terminal before its dependents are reached.
+A check whose dependency did not pass MUST be recorded `skipped` without
+running; a composite's outcome is derived from its dependencies — `pass` when
+all passed, `fail` when any failed or errored, `skipped` otherwise.
+The worker MUST re-validate the dependency graph before running (a hand-crafted
+push can land a set the CLI would have rejected) and finalize the run as
+`error` when it is invalid.
+--
+
+[role="requirement", id="checks.sandbox"]
+.Sprite Sandbox
+--
+Each check MUST run inside a Fly.io Sprite: a persistent, hardware-isolated
+sandbox, one per repository, so build caches survive between pushes.
+Before running checks the worker MUST sync the pushed tree into the Sprite's
+work directory via `git archive` piped to `tar -x`.
+The worker MUST configure the `sprite` CLI from `SPRITES_TOKEN` before each
+run via `sprite auth setup`, so the credential stays current without restart.
+--
+
+[role="requirement", id="checks.outcomes"]
+.Run Recording
+--
+Run outcomes MUST be stored at `refs/meta/runs/<commit>`, one ref per checked
+commit.
+Each ref's commit chain is the run history; each commit's date is the run time,
+so no timestamp is duplicated in the document tree.
+Outcome values progress: `queued` → `running` → `pass` / `fail` / `error` /
+`skipped` (a check whose dependency did not pass, per <<checks.worker>>).
+A run that cannot complete due to an infrastructure error (unreachable Sprite,
+failed sync) MUST be finalized as `error` rather than left stuck at `running`.
+A single check that exceeds a 30-minute timeout MUST be recorded `error` rather
+than blocking the worker thread indefinitely.
+A check definition and a run outcome MAY each carry additional metadata beyond
+a single command/outcome string (for example a run's duration and log URL).
+Optional fields absent from an older record MUST load as unset.
+A check/outcome name is the map key and MUST NOT be stored redundantly inside
+the record.
+--
+
+[role="requirement", id="checks.debug"]
+.Sprite Debug Shell
+--
+A signed-in member MUST be able to open an interactive, read-write shell in
+a repository's checks Sprite (`git ents checks debug`), brokered by the
+server over a WebSocket at the reserved path `/_debug/<repo>`.
+The server holds the only Fly credential (`SPRITES_TOKEN`); a member MUST
+NOT need one of their own.
+The broker MUST refuse the connection without a signed-in session.
+Local terminal resizes MUST be forwarded to the remote pseudo-terminal as
+control frames distinct from the byte stream, so the remote shell tracks the
+member's window size.
+--

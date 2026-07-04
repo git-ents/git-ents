@@ -1,0 +1,59 @@
+== Nonfunctional
+
+[role="requirement", id="nonfunctional.push-latency"]
+.Push Latency
+--
+A push MUST NOT block on check execution.
+The `post-receive` hook MUST return as soon as job files are written to the
+queue, so the client's `git push` connection is released before any check runs.
+--
+
+[role="requirement", id="nonfunctional.memory-cap"]
+.Per-Request Memory Cap
+--
+No single web request MAY read more than 2 MiB of git object data into memory
+for rendering.
+Blobs, diffs, and other rendered output that exceed this limit MUST be
+truncated and the UI MUST display a notice rather than an error.
+--
+
+[role="requirement", id="nonfunctional.concurrency"]
+.Concurrency Model
+--
+The HTTP server MUST handle concurrent requests without blocking the async
+runtime on synchronous work.
+Check jobs MUST be run on blocking threads (off the async executor) so a
+long-running check cannot starve unrelated HTTP handlers.
+The request body MUST be written to `git http-backend`'s stdin concurrently
+with draining its stdout; a sequential write-then-read would deadlock when
+`receive-pack` streams progress to the client before it has consumed the full
+pack.
+--
+
+[role="requirement", id="nonfunctional.no-panic"]
+.No Panics
+--
+The implementation MUST NOT use `unwrap`, `expect`, unchecked indexing/slicing,
+or other constructs that can panic in production code paths.
+Any suppression of a panic-prevention lint MUST be accompanied by a documented
+reason (`#[expect(..., reason = "...")]`); silent `#[allow(...)]` attributes are
+forbidden.
+--
+
+[role="requirement", id="nonfunctional.no-unsafe"]
+.No Unsafe Code
+--
+The implementation MUST NOT contain any `unsafe` code blocks.
+--
+
+[role="requirement", id="nonfunctional.object-store"]
+.Durable Object Store Reads
+--
+Meta-ref documents MUST be read and written against the repository's common
+object directory rather than any quarantine overlay.
+Inside a `pre-receive` or `post-receive` hook, git points the per-object-path
+environment variables at a receive-pack quarantine that holds only the incoming
+pack; the durable store, where meta-refs live, is the common directory.
+All meta-ref access MUST open the object database at the common directory
+explicitly so it is not accidentally limited to the quarantine.
+--

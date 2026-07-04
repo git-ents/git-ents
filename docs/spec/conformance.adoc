@@ -1,0 +1,79 @@
+= Conformance
+
+A map from each requirement to the module or function implementing it and the
+test guarding it, so a requirement with no entry (or an entry marked
+_Planned_) is immediately visible as unimplemented rather than discovered by
+reading every module. Update this table in the same change that adds,
+renames, or removes a requirement or its implementation.
+
+[cols="1,2,2", options="header"]
+|===
+|Requirement |Implementation |Guarding test
+
+|`storage.bare` |`git-ents-server/src/http.rs` (`backend`, repo auto-init) |`server::push_then_clone_round_trip`
+|`storage.meta-ref` |`git-store/src/lib.rs` (`Store::load`/`store`) |per-document `loads_the_on_disk_*_format` fixture tests
+|`storage.concurrency` |`git-store/src/merge.rs` (`three_way_merge`), `Store::store_impl`/`amend` |`git-store::tests::merge_*`, `amend_fails_closed_on_a_race_instead_of_merging`
+|`protocol.git` |`git-ents-server/src/http.rs` (`backend`) |`server::push_then_clone_round_trip`
+|`protocol.routing` |`git-ents-server/src/http.rs` (`get_request`/`post_request`, `detects_pushes`) |`http::tests::detects_pushes`, `routes_browser_gets`
+|`namespace.url` |`README.adoc`/deployment config | _(documentation only)_
+|`namespace.path` |`git-ents-server/src/http.rs` (segment validation) |`http::tests::validates_segments`, `extracts_repo_path`
+|`namespace.auto-create` |`git-ents-server/src/http.rs` (`backend` init lock, `reconcile_head`) |`server::rejects_colliding_pushes`
+|`members.ref` |`git-ents/src/members.rs` (`MEMBER_NS`, `load_all`/`store`) |`members::load_all_unions_every_member_ref`
+|`members.trust` |`git-ents/src/members.rs` (`Trust`) |`members::store_then_load_round_trips_a_{member,ca_member,webauthn_member}`
+|`members.provenance` |`git-ents/src/members.rs` (`Provenance`); `git-ents-server/src/web/write.rs` (`require_admin_registered`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`, `web_edit::a_self_attested_member_is_refused_a_settings_edit`
+|`members.account` |`git-ents/src/members.rs` (`Member.account`) |`members::store_then_load_round_trips_a_member`
+|`members.window` |`git-ents/src/members.rs` (`Member::validate`, `valid_timestamp`) |`members::validate_rejects_*`, `store_rejects_a_member_with_an_inverted_window`
+|`members.allowed-signers` |`git-ents/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
+|`revocations.ref` |`git-ents/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
+|`revocations.ca` |`git-ents/src/members.rs` (`without_revoked`, CA branch untouched) |`members::without_revoked_leaves_ca_members_untouched`
+|`auth.bootstrap` |`git-ents-server/src/verify.rs` (`pre_receive`, empty-members early return) |`pre_receive` integration tests (bootstrap case)
+|`auth.signed-push` |`git-ents-server/src/verify.rs` (`verify_certificate`) |`pre_receive::rejects_an_unsigned_push_when_signers_exist`, `rejects_a_push_signed_by_an_unknown_key`
+|`auth.nonce` |`git-ents-server/src/http.rs` (`backend_config_injects_nonce_seed_and_hooks_path`) |`http::tests::backend_config_injects_nonce_seed_and_hooks_path`
+|`auth.client-setup` |`git-ents/src/main.rs` (`setup`, `ensure_key`) | _(manual/CLI UX, no automated test)_
+|`cli.remote-admin` |`git-ents/src/main.rs` (`sync`, `push_signed`) | _(manual/CLI UX, no automated test)_
+|`cli.compare-and-swap` |`git-ents/src/main.rs` (`push_signed`, `push_delete`, `--force-with-lease`) | _(manual/CLI UX, no automated test)_
+|`cli.members` |`git-ents/src/main.rs` (`Action`, `run_members`) | _(manual/CLI UX, no automated test)_
+|`cli.interactive` |`git-ents/src/interactive.rs` | _(manual/CLI UX, no automated test)_
+|`cli.account-checks` |`git-ents/src/main.rs` (`AccountAction`, `ChecksAction`) | _(manual/CLI UX, no automated test)_
+|`cli.comments` |`git-ents/src/main.rs` (`CommentAction`, `run_comment`) | _(manual/CLI UX, no automated test)_
+|`cli.login` |`git-ents/src/main.rs` (`login`); `git-ents-server/src/main.rs` (`/login/cli` routes) | _(manual/CLI UX, no automated test)_
+|`cli.key-resolution` |`git-ents/src/main.rs` (`fingerprint`, MD5 colon form) | _(manual/CLI UX, no automated test)_
+|`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
+|`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
+|`config.ref` |`git-ents/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
+|`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`, `order`) |`checks::store_then_load_round_trips_the_check_set`, `store_then_load_round_trips_image_and_depends`, `order_runs_dependencies_first`, `order_rejects_a_cycle`, `order_rejects_an_unknown_dependency`, `order_rejects_self_and_duplicate_edges`, `order_rejects_an_empty_check`
+|`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
+|`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-ents`)_
+|`checks.sandbox` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
+|`checks.outcomes` |`git-ents/src/checks.rs` (`Status`, `record`/`update_run`); `git-ents-server/src/checks.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`checks::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_log_url`
+|`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`checks debug`) | _(requires a live Sprite; manually verified)_
+|`issues.ref` |`git-ents/src/issues.rs` (`Issue`, `State`) |`issues::store_then_load_round_trips_an_issue`
+|`issues.id` |`git-ents/src/issues.rs` (`new_id`, `promote`) |`issues::new_id_hashes_its_own_content_with_no_origin`, `promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref`
+|`comments.ref` |`git-comment/src/lib.rs` (`Comment`, `COMMENTS_NS`, `new_id`) |`git-comment::store_then_load_round_trips_a_comment`, `loads_the_on_disk_comment_format`, `new_id_hashes_its_own_content_with_no_origin`
+|`comments.authorship` |`git-store/src/lib.rs` (`store_item_authored`, `provenance`); `git-comment/src/lib.rs` (`provenance`) |`git-store::provenance_recovers_the_creating_and_updating_authors`, `git-comment::provenance_comes_from_the_commits_not_the_document`
+|`comments.anchor` |`git-anchor/src/lib.rs` (`Anchor`, `capture`, `snippet`) |`git-anchor::capture_records_the_commit_and_blob_and_snippet_derives_the_text`, `capture_rejects_a_missing_path_and_an_oversized_range`
+|`comments.projection` |`git-anchor/src/lib.rs` (`project`, `Projection`) |`git-anchor::unchanged_file_projects_as_current`, `a_pure_rename_relocates_with_the_same_lines`, `an_edit_inside_the_range_is_outdated`, `a_deleted_file_projects_as_deleted`, `projection_works_backwards_onto_an_ancestor`
+|`web.server-rendered` |`git-ents-server/src/web/*.rs` (Askama/maud templates, no client JS required) | _(manual UI verification)_
+|`web.index` |`git-ents-server/src/web/mod.rs` (`index`) | _(manual UI verification)_
+|`web.tabs` |`git-ents-server/src/web/pages.rs`, `templates/issues.html` | _(manual UI verification)_
+|`web.syntax-highlight` |`git-ents-server/src/web/git.rs` (`capped_read`, 2 MiB cap); `pages.rs` (rendered/source toggle, `#L<n>` anchors) |`web::git::tests::capped_read_flags_oversized_output`
+|`web.comments` |`git-ents-server/src/web/pages.rs` (comment listing/form); `write.rs` (`add_comment`) | _(manual UI verification)_
+|`web.auth.challenge` |`git-ents-server/src/web/write.rs` (`issue_challenge`, `take_challenge`) |`write::tests::a_consumed_challenge_does_not_verify_twice`
+|`web.auth.session` |`git-ents-server/src/web/write.rs` (`Session`, `csrf_ok`, `logout`) |`web_edit::an_edit_without_a_valid_csrf_token_is_refused`
+|`web.auth.edit` |`git-ents-server/src/web/write.rs` (`edit_config`, `signed_edit`, `require_admin_registered`) |`web_edit::a_member_edits_settings_through_the_browser`, `a_self_attested_member_is_refused_a_settings_edit`
+|`web.auth.webauthn-onboarding` | _Planned — see the requirement's note_ | —
+|`nonfunctional.push-latency` |`git-ents-server/src/checks.rs` (`post_receive` returns after `enqueue`) | _(structural; see `checks.post-receive`)_
+|`nonfunctional.memory-cap` |`git-ents-server/src/web/git.rs` (`capped_read`, `capped_read_bytes`) |`web::git::tests::capped_read_*`
+|`nonfunctional.concurrency` |`git-ents-server/src/http.rs` (`backend`, concurrent stdin/stdout); `checks.rs` (`spawn_blocking`) |`server::responds_to_requests`
+|`nonfunctional.no-panic` |workspace-wide clippy lint configuration (`#![forbid(clippy::unwrap_used, ...)]`) |`cargo clippy --workspace --all-targets`
+|`nonfunctional.no-unsafe` |workspace-wide (`#![forbid(unsafe_code)]`) |`cargo clippy --workspace --all-targets`
+|`nonfunctional.object-store` |`git-store/src/lib.rs` (`Store::open`, common-dir odb) | _(see the module's own doc comment; exercised by hook integration tests)_
+|`compat.git` |`git-ents-server/src/http.rs`, `web/git.rs` (subprocess invocations) | _(implicit in all integration tests)_
+|`compat.ssh-keygen` |`git-ents-server/src/verify.rs` (`verify_certificate`), `web/write.rs` (`verify_login_signature`) |`pre_receive::*`, `web_edit::*`
+|`compat.openssh-signed-push` |`git-ents-server/src/verify.rs` (`GIT_PUSH_CERT`, `GIT_PUSH_CERT_NONCE_STATUS`) |`pre_receive::rejects_a_push_signed_by_an_expired_key`
+|`compat.sprite` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`) | _(requires a live Sprite; not covered by unit tests)_
+|`compat.cgi` |`git-ents-server/src/http.rs` (`backend`, CGI env vars) |`server::push_then_clone_round_trip`
+|`compat.edition` |workspace `Cargo.toml` (`edition = "2024"`, `publish = false`) | _(build-time)_
+|`deploy.fly` |`.config/fly.toml` | _(deployment-time)_
+|`deploy.health` |`git-ents-server/src/main.rs` (`/healthz` route) | _(manual/liveness check)_
+|===

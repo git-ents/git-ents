@@ -1,0 +1,52 @@
+== Comments
+
+[role="requirement", id="comments.ref"]
+.Comment Documents
+--
+Each code comment MUST be stored at `refs/meta/comments/<id>` as a `Comment`
+document with fields: `body`, `anchor` (<<comments.anchor>>), and an
+optional `issue` cross-referencing an issue by its genesis id
+(<<issues.id>>); an absent `issue` means a free-standing comment.
+The identifier MUST follow the same genesis-key rule as an issue: the object
+id of the originating object, or of the comment's own initial content, and
+it is never renamed.
+One ref per comment keeps comments independently loadable and separately
+historied; the ref's commit chain is the comment's edit history.
+--
+
+[role="requirement", id="comments.authorship"]
+.Authorship From the Commit Chain
+--
+A comment's author and timestamps MUST NOT be stored in the document tree.
+The creator is the author of the ref's first commit and the last editor is
+the author of its tip commit; both MUST be recovered from the commit chain
+at read time.
+--
+
+[role="requirement", id="comments.anchor"]
+.Anchors
+--
+A comment MUST be anchored to the exact content it was written against: the
+commit, the repository-relative file path, the file's blob object id, and an
+optional 1-based inclusive line range (absent for a whole-file comment).
+An anchor is authoritative at creation and MUST NEVER be mutated afterwards.
+Creating an anchor MUST validate the path and line range against the
+revision's actual content.
+The anchored text is fully derivable from the blob and the line range and
+MUST be derived at read time, never stored redundantly.
+--
+
+[role="requirement", id="comments.projection"]
+.Anchor Projection
+--
+Displaying a comment against any revision other than its own MUST be a
+read-time projection of its anchor, reporting one of four outcomes:
+*current* (the exact blob still sits at the anchored path), *relocated* (the
+file moved and/or the range shifted past edits outside it, reported with the
+new path and range), *outdated* (an edit touched the anchored region, or the
+entry is no longer a regular file), or *deleted* (the file is gone).
+Projection MUST follow renames and MUST work between any two commits —
+forwards, backwards, or across unrelated history.
+An outdated or deleted projection MUST NOT lose the comment: the original
+anchor remains displayable.
+--

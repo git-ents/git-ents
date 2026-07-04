@@ -1,0 +1,50 @@
+== Push Authentication
+
+[role="requirement", id="auth.bootstrap"]
+.Bootstrap Window
+--
+When no `refs/meta/member/*` refs exist the repository MUST accept any push
+without a signature, so the first member can be pushed in.
+Once at least one member ref exists the bootstrap window MUST close and all
+subsequent pushes MUST be signed.
+Revoking every member's keys — leaving the member refs present but all keys
+removed — MUST fail closed, not reopen the bootstrap window.
+--
+
+[role="requirement", id="auth.signed-push"]
+.Signed Push Verification
+--
+Every push to a repository whose member list is non-empty MUST carry a signed
+push certificate (`git push --signed`).
+The server MUST verify the certificate in a `pre-receive` hook before any ref
+is updated:
+
+. The push certificate nonce status (from `GIT_PUSH_CERT_NONCE_STATUS`) MUST
+  be `OK`.
+. The certificate MUST contain an SSH signature (an
+  `-----BEGIN SSH SIGNATURE-----` block).
+. The signature MUST verify against at least one authorized member key via
+  `ssh-keygen -Y verify -n git`.
+. The trust set fed to `ssh-keygen` MUST be the live member set minus any
+  revoked fingerprints.
+
+A push that fails any check MUST be rejected before any ref is updated.
+--
+
+[role="requirement", id="auth.nonce"]
+.Nonce Configuration
+--
+The server MUST configure `receive.certNonceSeed` on every `git http-backend`
+invocation when authentication is active.
+The server MUST configure `receive.certNonceSlop = 60` to tolerate the
+round-trip latency inherent in smart-HTTP, where the nonce is issued and
+verified by two separate `receive-pack` processes.
+--
+
+[role="requirement", id="auth.client-setup"]
+.Client-Side Setup
+--
+A CLI command (`git ents members setup`) MUST configure the client's local or
+global git config to sign pushes with an SSH key, using the key named by
+`user.signingkey` or a default `~/.ssh/id_ed25519`.
+--
