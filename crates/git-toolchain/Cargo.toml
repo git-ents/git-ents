@@ -6,6 +6,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+facet = { workspace = true }
+facet-git-tree = { workspace = true }
 git-store = { workspace = true }
 gix = { workspace = true }
 thiserror = { workspace = true }

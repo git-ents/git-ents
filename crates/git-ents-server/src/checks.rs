@@ -553,10 +553,10 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
 }
 
 /// Resolve and extract every distinct toolchain named across `runnable`,
-/// returning each name's extracted directory inside the Sprite. A failed
-/// resolution (the named ref does not exist) is the one place `checks::order`
-/// could not have caught it, since `refs/meta/toolchains/*` is a different
-/// namespace than the check set itself.
+/// returning each name's extracted `bin` directory inside the Sprite. A
+/// failed resolution (the named ref does not exist) is the one place
+/// `checks::order` could not have caught it, since `refs/meta/toolchains/*`
+/// is a different namespace than the check set itself.
 fn resolve_toolchains(
     repo: &Path,
     sprite: &str,
@@ -571,17 +571,18 @@ fn resolve_toolchains(
 
     let mut dirs = HashMap::new();
     for name in names {
-        let tree = git_toolchain::resolve(repo, name)
+        let toolchain = git_toolchain::resolve(repo, name)
             .map_err(|e| format!("could not resolve toolchain {name}: {e}"))?;
-        sync_toolchain(repo, sprite, tree)?;
-        dirs.insert(name.to_owned(), format!("{TOOLCHAINS_DIR}/{tree}"));
+        let bin = toolchain.bin.oid();
+        sync_toolchain(repo, sprite, bin)?;
+        dirs.insert(name.to_owned(), format!("{TOOLCHAINS_DIR}/{bin}"));
     }
     Ok(dirs)
 }
 
 /// Prefix `command` with a `PATH` export activating `toolchains`' extracted
-/// directories, declared order first (so the first-listed toolchain's `bin`
-/// wins on a name collision); a check with no toolchains is returned
+/// `bin` directories, declared order first (so the first-listed toolchain's
+/// `bin` wins on a name collision); a check with no toolchains is returned
 /// unchanged.
 fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>) -> String {
     if toolchains.is_empty() {
@@ -590,7 +591,7 @@ fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>
     let path = toolchains
         .iter()
         .filter_map(|name| dirs.get(name))
-        .map(|dir| format!("{dir}/bin"))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(":");
     format!("export PATH={path}:$PATH; {command}")
@@ -874,7 +875,7 @@ mod tests {
         let toolchains = vec!["gcc".to_owned(), "cmake".to_owned()];
         assert_eq!(
             activate("make", &toolchains, &dirs),
-            "export PATH=/toolchains/aaa/bin:/toolchains/bbb/bin:$PATH; make"
+            "export PATH=/toolchains/aaa:/toolchains/bbb:$PATH; make"
         );
     }
 

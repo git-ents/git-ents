@@ -235,9 +235,17 @@ enum ToolchainAction {
         /// Name to record the toolchain under (`toolchains/<name>`).
         #[facet(args::positional, default)]
         name: Option<String>,
-        /// Directory to import.
+        /// Directory of executables to import, activated on `PATH` when a
+        /// check requests this toolchain.
         #[facet(args::positional, default)]
-        path: Option<String>,
+        bin: Option<String>,
+        /// Directory of source to import alongside `bin`, if any — kept for
+        /// provenance, never activated on `PATH`.
+        #[facet(args::named)]
+        src: Option<String>,
+        /// License covering `bin` (and `src`, if given).
+        #[facet(args::named, default)]
+        license: Option<String>,
     },
     /// List the toolchains configured on a remote.
     List,
@@ -447,32 +455,49 @@ fn checks_runs(remote: &str) -> Result<(), String> {
 
 fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
     match action {
-        ToolchainAction::Import { name, path } => toolchain_import(name, path, remote),
+        ToolchainAction::Import {
+            name,
+            bin,
+            src,
+            license,
+        } => toolchain_import(name, bin, src, license, remote),
         ToolchainAction::List => toolchain_list(remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
         ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
     }
 }
 
-/// Import `path`'s contents as toolchain `name` on `remote` and push it.
-/// Prompts for any field left unset when run at an interactive terminal.
+/// Import `bin`'s (and, optionally, `src`'s) contents as toolchain `name` on
+/// `remote` and push it. Prompts for any field left unset when run at an
+/// interactive terminal.
 fn toolchain_import(
     name: Option<String>,
-    path: Option<String>,
+    bin: Option<String>,
+    src: Option<String>,
+    license: Option<String>,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Toolchain name")?;
-    let path = interactive::text_or(path, "Directory to import")?;
+    let bin = interactive::text_or(bin, "Directory of executables to import")?;
+    let src = interactive::optional_text_or(src, "Directory of source to import (optional)")?;
+    let license = interactive::text_or(license, "License")?;
     let refname = format!("{TOOLCHAINS_NS}/{name}");
     let expected = sync(remote, &refname)?;
     let repo = repo()?;
-    git_toolchain::import(&repo, &name, Path::new(&path)).map_err(|error| error.to_string())?;
+    git_toolchain::import(
+        &repo,
+        &name,
+        Path::new(&bin),
+        src.as_deref().map(Path::new),
+        &license,
+    )
+    .map_err(|error| error.to_string())?;
     push_signed(remote, &refname, expected.as_deref())?;
     println!("imported toolchain {name}");
     Ok(())
 }
 
-/// Print every toolchain configured on `remote` as `<name>  <tree>`.
+/// Print every toolchain configured on `remote` as `<name>  <bin>  <license>`.
 fn toolchain_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, TOOLCHAINS_NS)?;
@@ -481,8 +506,12 @@ fn toolchain_list(remote: &str) -> Result<(), String> {
         println!("no toolchains configured on {remote}");
         return Ok(());
     }
-    for (name, tree) in toolchains {
-        println!("{name}  {}", short_id(&tree.to_string()));
+    for (name, toolchain) in toolchains {
+        println!(
+            "{name}  {}  {}",
+            short_id(&toolchain.bin.oid().to_string()),
+            toolchain.license
+        );
     }
     Ok(())
 }
@@ -493,8 +522,12 @@ fn toolchain_export(name: &str, dest: &str, remote: &str) -> Result<(), String> 
     let refname = format!("{TOOLCHAINS_NS}/{name}");
     sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
     let repo = repo()?;
-    git_toolchain::export(&repo, name, Path::new(dest)).map_err(|error| error.to_string())?;
-    println!("exported toolchain {name} to {dest}");
+    let toolchain =
+        git_toolchain::export(&repo, name, Path::new(dest)).map_err(|error| error.to_string())?;
+    println!(
+        "exported toolchain {name} to {dest} (license: {})",
+        toolchain.license
+    );
     Ok(())
 }
 
