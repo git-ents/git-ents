@@ -1,0 +1,187 @@
+= Component Abstraction Plan
+:doctype: article
+:toc:
+:toclevels: 2
+
+NOTE: Working plan for consolidating the per-type meta-ref handling into one
+compile-time `Component` abstraction. The goal is minimal, pluggable server
+code: each abstraction (issues, checks, members, config, …) fulfills a small
+set of traits alongside `Facet` — how to store one in git, how to store a
+collection, how to render — and the CLI and server are generic over them.
+Pluggable at compile time only; no runtime registration.
+
+== Where we already are
+
+Three partial versions of this abstraction exist, grown independently:
+
+[cols="1,3",options="header"]
+|===
+| Layer | What exists
+
+| Storage
+| `git-store` is already generic over `Facet` with three layouts in live use:
+  single-document refs (`load`/`store`: config, account), map documents
+  (`load_map`/`store_map`: checks, revocations), and keyed namespaces
+  (`load_item`/`store_keyed`/`list_items` + `HasId`: members, issues).
+
+| Rendering
+| `git-ents-server/src/web/render.rs` has a `Render` trait with impls for
+  `Check`, `Config`, `Issue`, `Member`, `Run`, plus a generic `render_peek`
+  fallback that walks the Facet shape.
+
+| CLI
+| `git-ents/src/main.rs` has a `Set` trait (`REF`, `NOUN`, `load`/`store`,
+  `key`/`value`) used by checks; members are handled bespoke.
+|===
+
+The plan merges these into one definition per type. The measure of success is
+that adding a new meta-ref type is: define the Facet struct, implement the
+component traits, add one line to a route/dispatch table — and it appears in
+the CLI and the web UI.
+
+== Design
+
+Two trait layers, split by crate so `maud` stays out of the core crate:
+
+=== Core: storage layout (`git-ents`, over `git-store`)
+
+Model the three layouts as traits rather than one trait with an enum, since
+their method sets differ:
+
+[source,rust]
+----
+/// A type stored whole on a single meta ref.
+trait Document: for<'a> Facet<'a> {
+    const REF: &'static str;
+}
+
+/// A type stored as one `<key> -> body` map document on a single ref.
+trait MapDocument: Sized {
+    const REF: &'static str;
+    type Body: for<'a> Facet<'a>;
+    fn compose(key: String, body: Self::Body) -> Self;
+    fn decompose(&self) -> (&str, Self::Body);
+}
+
+/// A type stored decomposed, one ref per item, under a namespace.
+trait Collection: for<'a> Facet<'a> + git_store::HasId {
+    const NS: &'static str;
+}
+----
+
+Blanket helpers (`fn load<T: Document>(repo) -> …`, `fn list<T: Collection>`,
+…) delegate to the existing `git-store` methods; the per-module `load`/`store`
+wrappers in `config.rs`, `checks.rs`, `members.rs`, `issues.rs`,
+`account.rs`, `revocations.rs` become one-line impls or disappear.
+
+Every component also carries identity metadata for messages and UI chrome:
+
+[source,rust]
+----
+trait Component {
+    const NOUN: &'static str;          // "check", "member", "issue"
+    const PLURAL: &'static str;        // "checks", …
+}
+----
+
+=== Server: rendering and pages (`git-ents-server`)
+
+`Render` stays where it is and stays per-item. On top of it:
+
+[source,rust]
+----
+trait WebComponent: Component + Render + Send + 'static {
+    const TAB: Tab;
+    const TITLE: &'static str;
+    fn note() -> Markup;                       // the shell-note line
+    fn load(repo: &Path) -> Result<Vec<Self>, String>;  // sync; wrapped once
+}
+----
+
+One generic page function replaces the shared skeleton of the current list
+pages: `spawn_blocking` load, error card, empty card, count badge,
+`repo_shell` wrapping, per-item `render()`. The route table keeps its explicit
+match but each list arm becomes `component_page::<Issue>(…)`.
+
+=== What stays outside the abstraction
+
+Be explicit about this up front — forcing these through the trait is the main
+failure mode:
+
+* *Git-data pages* (`files`, `tree`, `blob`, `commit`, `releases`): not
+  meta-ref components; untouched.
+* *Checks extras*: the HEAD join, the live registry, and the
+  recording/live/download routes stay bespoke routes beside the generic list.
+* *Settings*: a composite projection over config + members with auth and
+  in-place editing; it consumes components' `Render` but is not itself one.
+* *Runs*: namespace keyed by commit with nested run lists; does not fit
+  `Collection` — leave as is.
+* *POST handling* (`web/write.rs`): editing is component-specific and gated;
+  out of scope for the first pass.
+
+== Phases
+
+Each phase compiles, passes `cargo nextest run`, and lands as its own commit.
+
+=== C1 — storage traits in `git-ents`
+
+Add `Document`/`MapDocument`/`Collection` + `Component` and generic
+`load`/`store`/`list` helpers; implement for `Config`, `Account`, `Check`,
+`Revocation`, `Member`, `Issue`. Delete the per-module wrapper bodies these
+replace. *No on-disk format changes* — the fixed-format load tests
+(`loads_the_on_disk_issue_format` and friends) must pass unmodified; per the
+meta-ref fragility rule, any test change here means the phase is wrong.
+
+=== C2 — CLI `Set` on top of the storage traits
+
+Re-derive `Set`'s `load`/`store`/`REF` from C1's traits so a `Set` impl
+shrinks to `NOUN`/`key`/`value`/`empty_listing`. Fold the bespoke member
+list/remove plumbing into it if it fits without widening the trait; if
+members need more than one extra method, leave them bespoke and note why.
+
+=== C3 — generic list page in the server
+
+Add `WebComponent` and `component_page::<T>`; migrate `issues_page` first
+(purest list page), then the configuration card of `checks_page` and the
+members card of `settings_page` if they reduce to the generic shape plus a
+wrapper. The open/closed filter and label chips on issues stay as a
+component-provided header fragment, not new trait methods.
+
+=== C4 — route dispatch
+
+Collapse the meta-ref list arms in `web/mod.rs::route` to the generic page
+calls. Keep the match explicit (a static components table is only worth it if
+it deletes code, which at three components it likely does not).
+
+=== C5 — re-measure
+
+Count deleted lines and re-read the trait. If any trait grew an optional
+method used by one impl, inline it back. Update this doc with the outcome.
+
+== Risks
+
+[cols="1,4",options="header"]
+|===
+| Risk | Mitigation
+
+| Trait bloat
+| The checks live view and settings editing will tempt hooks onto
+  `WebComponent`. Rule: a method used by fewer than two components does not
+  go on the trait.
+
+| Meta-ref format fragility
+| Traits change only *where* load/store code lives, never the tree shape.
+  Fixed-format load tests are the gate; they may not be edited in C1.
+
+| Facet bounds noise
+| `for<'a> Facet<'a> + Send + 'static` bounds spread through generic page
+  fns. Contain them in the two helper layers; page code should not repeat
+  them.
+
+| Net-negative simplification
+| Honest estimate is 300–500 lines of glue deleted across the workspace, not
+  a dramatic shrink — `pages.rs` is mostly bespoke composition that only
+  relocates. The primary win is one extension point instead of three partial
+  abstractions. If C3 migrations produce wrappers longer than the pages they
+  replace, stop and reassess at C5 rather than pushing through.
+|===
