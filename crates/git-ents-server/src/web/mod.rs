@@ -521,9 +521,9 @@ async fn gather_meta(repo: &Path, rel: &str) -> RepoMeta {
 }
 
 /// Load the repository's `refs/meta/config` document off the async runtime.
-async fn load_config(repo: &Path) -> Option<git_ents::config::Config> {
+async fn load_config(repo: &Path) -> Option<git_ents_core::config::Config> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::config::load(&repo))
+    tokio::task::spawn_blocking(move || git_ents_core::config::load(&repo))
         .await
         .ok()?
         .ok()
@@ -532,7 +532,7 @@ async fn load_config(repo: &Path) -> Option<git_ents::config::Config> {
 /// Count the repository's open issues off the async runtime.
 async fn open_issue_count(repo: &Path) -> usize {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::issues::open_count(&repo))
+    tokio::task::spawn_blocking(move || git_ents_core::issues::open_count(&repo))
         .await
         .ok()
         .and_then(Result::ok)

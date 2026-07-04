@@ -1,0 +1,19 @@
+[package]
+name = "git-ents-core"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+git-store = { workspace = true }
+gix = { workspace = true }
+iddqd = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+git-store = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

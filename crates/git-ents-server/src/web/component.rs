@@ -15,13 +15,13 @@
 
 use std::path::Path;
 
-use git_ents::component::Component;
+use git_ents_core::component::Component;
 use maud::{Markup, html};
 
 use super::render::Render;
 
 /// A meta-ref component whose items load off the async runtime. Sync —
-/// `git_ents::*::load`/`list` shell out to git and read the object database
+/// `git_ents_core::*::load`/`list` shell out to git and read the object database
 /// synchronously — so callers wrap it in exactly one [`load`].
 pub(super) trait Loadable: Send + Sized + 'static {
     /// The component's items.
@@ -38,7 +38,7 @@ pub(super) async fn load<T: Loadable>(repo: &Path) -> Result<Vec<T>, String> {
 }
 
 /// A [`Loadable`] component whose items also render as a generic [`card`]:
-/// identity metadata and a [`Render`] impl (both from `git_ents::component`),
+/// identity metadata and a [`Render`] impl (both from `git_ents_core::component`),
 /// plus a title and what the card shows when there are no items yet.
 pub(super) trait WebComponent: Loadable + Component + Render {
     /// The card title.

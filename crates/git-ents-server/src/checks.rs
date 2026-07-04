@@ -30,7 +30,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use git_ents::checks::{self, Check, RunOutcome, Status};
+use git_ents_core::checks::{self, Check, RunOutcome, Status};
 use gix_hash::ObjectId;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
@@ -739,7 +739,7 @@ mod tests {
              {new} {zero} refs/heads/old\n\
              {new} {new} refs/meta/checks\n\
              {new} {new} refs/heads/feature\n",
-            zero = git_ents::ZERO_OID,
+            zero = git_ents_core::ZERO_OID,
         );
         let updates = parse_updates(&input);
         let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();

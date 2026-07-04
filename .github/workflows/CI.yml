@@ -125,44 +125,10 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --all-features
 
-  man:
-    name: man-generation
-    runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache: true
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-      - name: Cache Cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-      - name: Generate man pages
-        run: |
-          mkdir -p target/debug/man
-          cargo run --package git-ents-server -- --generate-man target/debug/man
-
   ci:
     name: CI
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) }}
-    needs: [linux, musllinux, windows, macos, man]
+    needs: [linux, musllinux, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - run: |

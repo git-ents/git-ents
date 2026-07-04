@@ -7,7 +7,7 @@
 //! and the client setup that produces the signed pushes the server
 //! requires. The member commands read and write a remote's set by fetching the
 //! `refs/meta/member/*` refs into the local repository, editing them through
-//! [`git_ents::members`], and pushing them back.
+//! [`git_ents_core::members`], and pushing them back.
 
 mod debug_session;
 mod interactive;
@@ -21,11 +21,11 @@ use facet_pretty::FacetPretty;
 use figue::{self as args, FigueBuiltins};
 use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
-use git_ents::account::{self, Account};
-use git_ents::checks::{self, CHECKS_REF, Check};
-use git_ents::component::{self, Component, MapDocument};
-use git_ents::members::{self, MEMBER_NS, Member, Trust, member_ref};
-use git_ents::revocations::{self, REVOKED_REF, Revocation};
+use git_ents_core::account::{self, Account};
+use git_ents_core::checks::{self, CHECKS_REF, Check};
+use git_ents_core::component::{self, Component, MapDocument};
+use git_ents_core::members::{self, MEMBER_NS, Member, Trust, member_ref};
+use git_ents_core::revocations::{self, REVOKED_REF, Revocation};
 
 /// Helpful guardians of your git trees.
 #[derive(Facet)]
@@ -71,6 +71,10 @@ enum Top {
         #[facet(args::named)]
         key: Option<PathBuf>,
     },
+    /// Run the bundled server: serve HTTP, or (via its own subcommand) run
+    /// the `pre-receive`/`post-receive` hooks. Also shipped as the standalone
+    /// `git-ents-server` binary.
+    Server(git_ents_server::Args),
 }
 
 #[derive(Facet)]
@@ -284,13 +288,19 @@ fn main() -> ExitCode {
         Err(error) => figue::DriverOutcome::<Cli>::err(error).unwrap(),
     };
     let remote = cli.remote;
-    let result = match cli.command {
-        Top::Members { action } => run_members(action, &remote),
-        Top::Account { action } => run_account(action, &remote),
-        Top::Checks { action } => run_checks(action, &remote),
-        Top::Comment { action } => run_comment(action, &remote),
-        Top::Login { key } => login(&remote, key.as_deref()),
-    };
+    match cli.command {
+        Top::Members { action } => exit_code(run_members(action, &remote)),
+        Top::Account { action } => exit_code(run_account(action, &remote)),
+        Top::Checks { action } => exit_code(run_checks(action, &remote)),
+        Top::Comment { action } => exit_code(run_comment(action, &remote)),
+        Top::Login { key } => exit_code(login(&remote, key.as_deref())),
+        Top::Server(args) => git_ents_server::run(args),
+    }
+}
+
+/// Translate a porcelain command's result into a process exit code, printing
+/// an error to stderr on failure.
+fn exit_code(result: Result<(), String>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -1459,7 +1469,7 @@ fn sync_namespace(remote: &str, namespace: &str) -> Result<(), String> {
 fn push_signed(remote: &str, refname: &str, expected: Option<&str>) -> Result<(), String> {
     let lease = format!(
         "--force-with-lease={refname}:{}",
-        expected.unwrap_or(git_ents::ZERO_OID)
+        expected.unwrap_or(git_ents_core::ZERO_OID)
     );
     git_run(&["push", "--force-if-includes", &lease, remote, refname])
 }

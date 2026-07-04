@@ -854,7 +854,7 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 /// the full history and the raw set, as before.
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let rel = &meta.rel;
-    let checks = component::load::<git_ents::checks::Check>(repo).await;
+    let checks = component::load::<git_ents_core::checks::Check>(repo).await;
     let runs = load_runs(repo).await;
     let head = git_output(repo, &["rev-parse", "HEAD"])
         .await
@@ -932,8 +932,8 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
 fn head_check_row(
     rel: &str,
     head: &str,
-    check: &git_ents::checks::Check,
-    head_run: Option<&git_ents::checks::Run>,
+    check: &git_ents_core::checks::Check,
+    head_run: Option<&git_ents_core::checks::Run>,
 ) -> Markup {
     let outcome =
         head_run.and_then(|run| run.results.iter().find(|result| result.name == check.name));
@@ -952,7 +952,7 @@ async fn latest_outcome(
     repo: &Path,
     commit_oid: ObjectId,
     name: &str,
-) -> Option<git_ents::checks::RunOutcome> {
+) -> Option<git_ents_core::checks::RunOutcome> {
     load_runs(repo)
         .await
         .ok()?
@@ -1088,9 +1088,9 @@ fn sanitize_filename(s: &str) -> String {
 }
 
 /// Load the recorded runs off the async runtime, like [`component::load`].
-async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, String> {
+async fn load_runs(repo: &Path) -> Result<Vec<git_ents_core::checks::CommitRuns>, String> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::checks::runs(&repo))
+    tokio::task::spawn_blocking(move || git_ents_core::checks::runs(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
@@ -1101,7 +1101,7 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, Str
 /// derived from the labels that exist. Issue creation is a write path that does
 /// not exist yet, so the "New issue" button stays disabled.
 pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let tpl = match component::load::<git_ents::issues::Issue>(repo).await {
+    let tpl = match component::load::<git_ents_core::issues::Issue>(repo).await {
         Err(err) => IssuesTemplate {
             icons: Icons,
             error: Some(err),
@@ -1111,7 +1111,7 @@ pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
             closed_count: 0,
         },
         Ok(issues) => {
-            let open: Vec<&git_ents::issues::Issue> =
+            let open: Vec<&git_ents_core::issues::Issue> =
                 issues.iter().filter(|issue| issue.is_open()).collect();
             let closed = issues.len().saturating_sub(open.len());
             let mut labels: Vec<String> = issues
@@ -1159,8 +1159,8 @@ pub(super) async fn settings_page(
     auth: Option<&super::Auth>,
     editing: bool,
 ) -> Markup {
-    let members = component::load::<git_ents::members::Member>(repo).await;
-    let checks = component::load::<git_ents::checks::Check>(repo).await;
+    let members = component::load::<git_ents_core::members::Member>(repo).await;
+    let checks = component::load::<git_ents_core::checks::Check>(repo).await;
     let config = load_repo_config(repo).await;
     repo_shell(
         meta,
@@ -1223,9 +1223,9 @@ pub(super) async fn settings_page(
 }
 
 /// Load `refs/meta/config` off the async runtime, like [`component::load`].
-async fn load_repo_config(repo: &Path) -> Result<git_ents::config::Config, String> {
+async fn load_repo_config(repo: &Path) -> Result<git_ents_core::config::Config, String> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::config::load(&repo))
+    tokio::task::spawn_blocking(move || git_ents_core::config::load(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())

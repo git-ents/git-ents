@@ -4,6 +4,7 @@ members = [
     "crates/git-anchor",
     "crates/git-comment",
     "crates/git-ents",
+    "crates/git-ents-core",
     "crates/git-ents-server",
     "crates/git-store",
 ]
@@ -42,8 +43,6 @@ acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2
 ] }
 askama = "0.16"
 axum = "0.8"
-clap = { version = "4.5.60", features = ["derive"] }
-clap_mangen = "0.2.31"
 figue = "5.0.0-rc.5"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 facet-pretty = "0.50.0-rc.5"
@@ -52,6 +51,8 @@ facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
 form_urlencoded = "1"
 git-anchor = { path = "crates/git-anchor" }
 git-comment = { path = "crates/git-comment" }
+git-ents-core = { path = "crates/git-ents-core" }
+git-ents-server = { path = "crates/git-ents-server" }
 git-store = { path = "crates/git-store" }
 gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }

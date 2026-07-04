@@ -1,4 +1,5 @@
-//! Git Ents — helpful guardians of your git trees.
+//! Git Ents core — the shared domain types read and written through
+//! `git_store`, common to the CLI porcelain and the server.
 
 pub mod account;
 pub mod checks;

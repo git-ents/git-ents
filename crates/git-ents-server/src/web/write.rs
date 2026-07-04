@@ -185,8 +185,8 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
 /// self-attested member typically has no push key to gate — so the web write
 /// path is the enforcement point.
 fn require_admin_registered(store: &git_store::Store, username: &str) -> Result<(), String> {
-    use git_ents::members::Provenance;
-    let member = git_ents::members::load_with(store, username)
+    use git_ents_core::members::Provenance;
+    let member = git_ents_core::members::load_with(store, username)
         .map_err(|e| format!("could not read member: {e}"))?
         .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
     match member.provenance {
@@ -223,15 +223,15 @@ pub(super) fn edit_config(
         .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
     require_admin_registered(&store, &username)?;
 
-    let mut config =
-        git_ents::config::load_with(&store).map_err(|e| format!("could not read config: {e}"))?;
+    let mut config = git_ents_core::config::load_with(&store)
+        .map_err(|e| format!("could not read config: {e}"))?;
     config.description = edit.description.clone();
     config.homepage = edit.homepage.clone();
     config.topics = edit.topics.clone();
 
     signed_edit(
         repo,
-        git_ents::config::CONFIG_REF,
+        git_ents_core::config::CONFIG_REF,
         &config,
         "Update configuration",
         &username,
@@ -467,7 +467,7 @@ pub(super) fn member_for_public_key_with(
     public_key: &str,
 ) -> Option<String> {
     let wanted = normalize_key(public_key);
-    let members = git_ents::members::load_all_with(store).ok()?;
+    let members = git_ents_core::members::load_all_with(store).ok()?;
     members.into_iter().find_map(|member| {
         member
             .keys()

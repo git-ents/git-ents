@@ -7,7 +7,7 @@
 )]
 
 //! The Phase 3 CA-pin gate: a certificate the pinned CA issued verifies against
-//! the `allowed_signers` file `git_ents::members` renders, and a certificate
+//! the `allowed_signers` file `git_ents_core::members` renders, and a certificate
 //! from an unpinned CA does not. The cert-embedded signature is produced the way
 //! a real client would — through an `ssh-agent` holding the key and its
 //! certificate — since `ssh-keygen -Y sign` only embeds a certificate when the
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use git_ents::members::{Member, allowed_signers};
+use git_ents_core::members::{Member, allowed_signers};
 
 /// The principal the CA certifies and the verifier checks — the pusher identity.
 const PRINCIPAL: &str = "tester@example.com";
@@ -60,7 +60,7 @@ fn a_cert_from_the_pinned_ca_verifies_and_an_unpinned_one_does_not() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Write the `allowed_signers` file `git_ents::members` renders for a member
+/// Write the `allowed_signers` file `git_ents_core::members` renders for a member
 /// whose trust is the CA `ca`, and return its path.
 fn render_ca_allowed_signers(dir: &Path, name: &str, ca: &Key) -> PathBuf {
     let ca_pubkey = std::fs::read_to_string(&ca.public)

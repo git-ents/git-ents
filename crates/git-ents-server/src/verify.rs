@@ -14,9 +14,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use git_ents::config;
-use git_ents::members::{self, Member};
-use git_ents::revocations;
+use git_ents_core::config;
+use git_ents_core::members::{self, Member};
+use git_ents_core::revocations;
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the

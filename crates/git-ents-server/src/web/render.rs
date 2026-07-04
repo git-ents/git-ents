@@ -13,10 +13,10 @@ use std::path::Path;
 use facet::{Def, Facet, Peek, Type, UserType};
 use maud::{Markup, PreEscaped, html};
 
-use git_ents::checks::{Check, Run, RunOutcome, Status};
-use git_ents::config::{Config, RoleRules};
-use git_ents::issues::Issue;
-use git_ents::members::Member;
+use git_ents_core::checks::{Check, Run, RunOutcome, Status};
+use git_ents_core::config::{Config, RoleRules};
+use git_ents_core::issues::Issue;
+use git_ents_core::members::Member;
 
 use super::component::{Loadable, WebComponent};
 use crate::asciidoc;
@@ -53,7 +53,7 @@ impl Render for Check {
 
 impl Loadable for Check {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents::checks::load(repo).map_err(|err| err.to_string())
+        git_ents_core::checks::load(repo).map_err(|err| err.to_string())
     }
 }
 
@@ -113,7 +113,7 @@ impl Render for Issue {
 
 impl Loadable for Issue {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        Ok(git_ents::issues::list(repo)
+        Ok(git_ents_core::issues::list(repo)
             .map_err(|err| err.to_string())?
             .into_iter()
             .map(|(_id, issue)| issue)
@@ -142,7 +142,7 @@ impl Render for Member {
 
 impl Loadable for Member {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents::members::load_all(repo).map_err(|err| err.to_string())
+        git_ents_core::members::load_all(repo).map_err(|err| err.to_string())
     }
 }
 
