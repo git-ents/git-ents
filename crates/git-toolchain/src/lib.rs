@@ -22,8 +22,10 @@
 //! operational follow-up, not something this crate does.
 
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::str::FromStr as _;
 
 use facet::Facet;
@@ -43,9 +45,11 @@ pub const TOOLCHAINS_NS: &str = "refs/meta/toolchains";
 /// its license, version, and target platform — the document stored at the
 /// tip of `refs/meta/toolchains/<name>`.
 ///
-/// `bin` and `src` are [`RawTree`]: each is captured as a single opaque git
-/// tree by [`import`], not walked field-by-field, since a toolchain's
-/// on-disk layout has no fixed shape for `Facet` to model.
+/// `src` is [`RawTree`]: captured as a single opaque git tree by [`import`],
+/// not walked field-by-field, since a toolchain's on-disk layout has no fixed
+/// shape for `Facet` to model. `bin` is either the same ([`Bin::Embedded`])
+/// or a set of externally-hosted archives fetched fresh at activation or
+/// export time ([`Bin::Downloaded`]) — see [`Bin`].
 ///
 /// `license`, `version`, and `platform` are stored as plain strings — like
 /// `license` before them, `version` and `platform` are validated against a
@@ -56,7 +60,7 @@ pub const TOOLCHAINS_NS: &str = "refs/meta/toolchains";
 pub struct Toolchain {
     /// The toolchain's executables, activated on `PATH` when a check
     /// requests it.
-    pub bin: RawTree,
+    pub bin: Bin,
     /// The toolchain's source, if imported — not activated on `PATH`, kept
     /// only for provenance.
     pub src: Option<RawTree>,
@@ -70,6 +74,36 @@ pub struct Toolchain {
     /// standard platform identifier; there is no SPDX-equivalent registry
     /// for platforms.
     pub platform: String,
+}
+
+/// How a toolchain's `bin` is provisioned.
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(u8)]
+pub enum Bin {
+    /// `bin`'s directory tree, captured whole in the object database by
+    /// [`import`] — the only representation for a toolchain with no stable,
+    /// independently-hosted origin (an in-house build).
+    Embedded(RawTree),
+    /// A set of archives fetched, sha256-verified, and merged onto disk by
+    /// [`export`] (or a Sprite, at check-activation time) instead of stored
+    /// in the object database — spares the repository the toolchain's own
+    /// bytes when a stable, content-hashed origin (a distributor's release
+    /// archives) already exists. Each component is extracted with its outer
+    /// two path segments (`<package>-<version>-<target>/<component>/`)
+    /// stripped, the layout rust-lang's (and most other distributors')
+    /// dist archives use.
+    Downloaded(Vec<Component>),
+}
+
+/// One archive making up a [`Bin::Downloaded`] toolchain: fetched from `url`
+/// and checked against `sha256` before being extracted.
+#[derive(Debug, Clone, PartialEq, Facet)]
+pub struct Component {
+    /// Where to fetch the archive from.
+    pub url: String,
+    /// The archive's expected sha256, hex-encoded — checked before
+    /// extraction; a mismatch is refused rather than extracted anyway.
+    pub sha256: String,
 }
 
 /// A failure importing, resolving, listing, exporting, or removing a
@@ -103,6 +137,17 @@ pub enum Error {
     /// activates nothing on `PATH` is not a toolchain.
     #[error("{0} contains nothing importable; a toolchain's bin directory must not be empty")]
     EmptyBin(PathBuf),
+    /// [`import_downloaded`]'s component list was empty. A toolchain that
+    /// activates nothing on `PATH` is not a toolchain.
+    #[error("a downloaded toolchain must list at least one component")]
+    NoComponents,
+    /// A [`Bin::Downloaded`] component could not be fetched or extracted.
+    #[error("could not fetch {0}: {1}")]
+    Fetch(String, String),
+    /// A [`Bin::Downloaded`] component's fetched content did not match its
+    /// recorded sha256.
+    #[error("{0}: expected sha256 {1}, got {2}")]
+    HashMismatch(String, String, String),
     /// [`import`]'s `license` argument was not a valid SPDX license
     /// expression.
     #[error("{0:?} is not a valid SPDX license expression: {1}")]
@@ -135,26 +180,15 @@ pub fn import(
     if !git_store::ref_segment_ok(name) {
         return Err(Error::InvalidName(name.to_owned()));
     }
-    spdx::Expression::parse(license)
-        .map_err(|error| Error::InvalidLicense(license.to_owned(), error))?;
-    semver::Version::parse(version)
-        .map_err(|error| Error::InvalidVersion(version.to_owned(), error))?;
-    target_lexicon::Triple::from_str(platform)
-        .map_err(|_error| Error::InvalidPlatform(platform.to_owned()))?;
+    validate_metadata(license, version, platform)?;
     let odb = odb_at(repo)?;
 
     let bin_tree = build_tree(&odb, bin_dir)?;
     if bin_tree.entries.is_empty() {
         return Err(Error::EmptyBin(bin_dir.to_owned()));
     }
-    let bin = RawTree::new(write_object(&odb, &bin_tree)?);
-
-    let src = src_dir
-        .map(|dir| -> Result<RawTree, Error> {
-            let tree = build_tree(&odb, dir)?;
-            Ok(RawTree::new(write_object(&odb, &tree)?))
-        })
-        .transpose()?;
+    let bin = Bin::Embedded(RawTree::new(write_object(&odb, &bin_tree)?));
+    let src = import_src(&odb, src_dir)?;
 
     let toolchain = Toolchain {
         bin,
@@ -163,8 +197,79 @@ pub fn import(
         version: version.to_owned(),
         platform: platform.to_owned(),
     };
-    let oid = facet_git_tree::serialize_into(&toolchain, &odb)?;
+    store_toolchain(repo, name, toolchain, &odb)
+}
 
+/// Import a toolchain whose `bin` is a set of externally-hosted archives
+/// (see [`Bin::Downloaded`]) instead of a local directory: no tree is walked
+/// or written for `bin` itself, only the component list and the rest of the
+/// document. `src_dir`, if given, is still captured as a `RawTree` the usual
+/// way — provenance-only content with no natural external origin to point at
+/// instead.
+pub fn import_downloaded(
+    repo: &Path,
+    name: &str,
+    components: Vec<Component>,
+    src_dir: Option<&Path>,
+    license: &str,
+    version: &str,
+    platform: &str,
+) -> Result<ObjectId, Error> {
+    if !git_store::ref_segment_ok(name) {
+        return Err(Error::InvalidName(name.to_owned()));
+    }
+    if components.is_empty() {
+        return Err(Error::NoComponents);
+    }
+    validate_metadata(license, version, platform)?;
+    let odb = odb_at(repo)?;
+    let src = import_src(&odb, src_dir)?;
+
+    let toolchain = Toolchain {
+        bin: Bin::Downloaded(components),
+        src,
+        license: license.to_owned(),
+        version: version.to_owned(),
+        platform: platform.to_owned(),
+    };
+    store_toolchain(repo, name, toolchain, &odb)
+}
+
+/// `license` MUST be a valid SPDX license expression, `version` a valid
+/// semver version, and `platform` a valid target triple — shared by
+/// [`import`] and [`import_downloaded`].
+fn validate_metadata(license: &str, version: &str, platform: &str) -> Result<(), Error> {
+    spdx::Expression::parse(license)
+        .map_err(|error| Error::InvalidLicense(license.to_owned(), error))?;
+    semver::Version::parse(version)
+        .map_err(|error| Error::InvalidVersion(version.to_owned(), error))?;
+    target_lexicon::Triple::from_str(platform)
+        .map_err(|_error| Error::InvalidPlatform(platform.to_owned()))?;
+    Ok(())
+}
+
+/// Write `src_dir`, if given, as a `RawTree` — shared by [`import`] and
+/// [`import_downloaded`], since `src` is captured the same way regardless of
+/// how `bin` is provisioned.
+fn import_src(odb: &gix::odb::Handle, src_dir: Option<&Path>) -> Result<Option<RawTree>, Error> {
+    src_dir
+        .map(|dir| -> Result<RawTree, Error> {
+            let tree = build_tree(odb, dir)?;
+            Ok(RawTree::new(write_object(odb, &tree)?))
+        })
+        .transpose()
+}
+
+/// Serialize `toolchain` and fast-forward `refs/meta/toolchains/<name>` to a
+/// commit over it — the shared final step of [`import`] and
+/// [`import_downloaded`].
+fn store_toolchain(
+    repo: &Path,
+    name: &str,
+    toolchain: Toolchain,
+    odb: &gix::odb::Handle,
+) -> Result<ObjectId, Error> {
+    let oid = facet_git_tree::serialize_into(&toolchain, odb)?;
     let store = Store::open(repo)?;
     store.store_tree(
         &toolchain_ref(name),
@@ -204,14 +309,26 @@ pub fn list(repo: &Path) -> Result<Vec<(String, Toolchain)>, Error> {
 /// under `dest`, restoring the executable bit and symlinks. Refuses to write
 /// into a `dest` that already has contents. Returns the resolved document,
 /// so the caller can report the license alongside the exported files.
+///
+/// [`Bin::Embedded`] writes its (already self-contained: executables plus a
+/// sibling `lib/`) tree straight under `dest/bin`. [`Bin::Downloaded`]'s
+/// components already carry their own `bin/`/`lib/`/... top-level
+/// directories once their outer two path segments are stripped, so they are
+/// extracted directly under `dest` instead, landing at the same `dest/bin/…`
+/// shape by construction.
 pub fn export(repo: &Path, name: &str, dest: &Path) -> Result<Toolchain, Error> {
     let toolchain = resolve(repo, name)?;
     let odb = odb_at(repo)?;
     ensure_empty_dest(dest)?;
 
-    let bin_dest = dest.join("bin");
-    fs::create_dir_all(&bin_dest).map_err(|error| Error::Io(bin_dest.clone(), error))?;
-    write_tree_to_disk(&odb, toolchain.bin.oid(), &bin_dest)?;
+    match &toolchain.bin {
+        Bin::Embedded(tree) => {
+            let bin_dest = dest.join("bin");
+            fs::create_dir_all(&bin_dest).map_err(|error| Error::Io(bin_dest.clone(), error))?;
+            write_tree_to_disk(&odb, tree.oid(), &bin_dest)?;
+        }
+        Bin::Downloaded(components) => download_components(components, dest)?,
+    }
 
     if let Some(src) = &toolchain.src {
         let src_dest = dest.join("src");
@@ -387,9 +504,115 @@ fn write_tree_to_disk(odb: &gix::odb::Handle, tree: ObjectId, dest: &Path) -> Re
     Ok(())
 }
 
+/// Fetch, verify, and extract every component of a [`Bin::Downloaded`]
+/// toolchain into `dest`, in order — later components overlay earlier ones,
+/// matching how rustup itself layers `rustc`/`cargo`/`rust-std` onto one
+/// sysroot.
+fn download_components(components: &[Component], dest: &Path) -> Result<(), Error> {
+    for component in components {
+        let archive = fetch(&component.url)?;
+        let actual = sha256_hex(&archive)?;
+        if actual != component.sha256 {
+            return Err(Error::HashMismatch(
+                component.url.clone(),
+                component.sha256.clone(),
+                actual,
+            ));
+        }
+        extract_stripped(&archive, dest)?;
+    }
+    Ok(())
+}
+
+/// `GET url` via the system `curl`, returning the response body — shells out
+/// rather than adding an HTTP client dependency to this crate.
+fn fetch(url: &str) -> Result<Vec<u8>, Error> {
+    let output = Command::new("curl")
+        .args(["-fsSL", url])
+        .output()
+        .map_err(|error| Error::Fetch(url.to_owned(), error.to_string()))?;
+    if !output.status.success() {
+        return Err(Error::Fetch(
+            url.to_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    Ok(output.stdout)
+}
+
+/// Hex-encoded sha256 of `bytes`, via the system `shasum` (macOS) or
+/// `sha256sum` (Linux) — shells out rather than adding a hashing dependency
+/// to this crate.
+fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
+    let (program, args): (&str, &[&str]) = match std::env::consts::OS {
+        "macos" => ("shasum", &["-a", "256"]),
+        _ => ("sha256sum", &[]),
+    };
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::Fetch(program.to_owned(), "no stdin".to_owned()))?
+        .write_all(bytes)
+        .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
+    if !output.status.success() {
+        return Err(Error::Fetch(
+            program.to_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    let hex = String::from_utf8_lossy(&output.stdout);
+    hex.split_whitespace()
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Fetch(program.to_owned(), "no hash in output".to_owned()))
+}
+
+/// Extract a gzipped tar `archive` into `dest`, stripping the outer two path
+/// segments every rust-lang dist archive (and most other distributors')
+/// wraps its payload in (`<package>-<version>-<target>/<component>/`).
+fn extract_stripped(archive: &[u8], dest: &Path) -> Result<(), Error> {
+    let mut child = Command::new("tar")
+        .args(["-xz", "--strip-components=2", "-C"])
+        .arg(dest)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::Fetch("tar".to_owned(), "no stdin".to_owned()))?
+        .write_all(archive)
+        .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
+    let status = child
+        .wait()
+        .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::Fetch(
+            "tar".to_owned(),
+            "extraction failed".to_owned(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "unit test")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::unreachable,
+        reason = "unit test"
+    )]
 
     use git_store::test_support::repo;
 
@@ -460,9 +683,12 @@ mod tests {
         )
         .unwrap();
         let toolchain = resolve(repo_dir.path(), "gcc").unwrap();
+        let Bin::Embedded(bin) = &toolchain.bin else {
+            unreachable!("import always produces an embedded bin");
+        };
         let odb = odb_at(repo_dir.path()).unwrap();
         let mut buf = Vec::new();
-        let tree = odb.find_tree(&toolchain.bin.oid(), &mut buf).unwrap();
+        let tree = odb.find_tree(&bin.oid(), &mut buf).unwrap();
         assert!(tree.entries.iter().all(|entry| entry.filename != "empty"));
     }
 
@@ -554,6 +780,99 @@ mod tests {
             b"int main() {}\n"
         );
         assert_eq!(fs::read(dest_path.join("bin/README")).unwrap(), b"hello\n");
+    }
+
+    /// Build a `file://` component archive matching real dist tarballs'
+    /// layout (`<pkg>-<version>-<target>/<component>/<payload>`), returning
+    /// its `file://` URL and sha256, ready to hand to [`Component`].
+    fn build_component(staging: &Path, payload: &[(&str, &[u8])]) -> Component {
+        let root = staging.join("pkg-1.0.0-target/component");
+        for (path, contents) in payload {
+            let full = root.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, contents).unwrap();
+        }
+        let archive = staging.join("component.tar.gz");
+        let status = Command::new("tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .args(["-C"])
+            .arg(staging)
+            .arg("pkg-1.0.0-target/component")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let bytes = fs::read(&archive).unwrap();
+        Component {
+            url: format!("file://{}", archive.display()),
+            sha256: sha256_hex(&bytes).unwrap(),
+        }
+    }
+
+    #[test]
+    fn import_downloaded_then_export_extracts_and_strips_components() {
+        let repo_dir = repo();
+        let staging = tempfile::tempdir().unwrap();
+        let component = build_component(staging.path(), &[("bin/tool", b"#!/bin/sh\n")]);
+
+        import_downloaded(
+            repo_dir.path(),
+            "rustup-like",
+            vec![component],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_path = dest.path().join("out");
+        let toolchain = export(repo_dir.path(), "rustup-like", &dest_path).unwrap();
+        assert!(matches!(toolchain.bin, Bin::Downloaded(_)));
+        assert_eq!(
+            fs::read(dest_path.join("bin/tool")).unwrap(),
+            b"#!/bin/sh\n"
+        );
+    }
+
+    #[test]
+    fn import_downloaded_rejects_an_empty_component_list() {
+        let repo_dir = repo();
+        let result = import_downloaded(
+            repo_dir.path(),
+            "rustup-like",
+            vec![],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        );
+        assert!(matches!(result, Err(Error::NoComponents)));
+    }
+
+    #[test]
+    fn export_rejects_a_component_whose_hash_does_not_match() {
+        let repo_dir = repo();
+        let staging = tempfile::tempdir().unwrap();
+        let mut component = build_component(staging.path(), &[("bin/tool", b"#!/bin/sh\n")]);
+        component.sha256 = "0".repeat(64);
+
+        import_downloaded(
+            repo_dir.path(),
+            "rustup-like",
+            vec![component],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_path = dest.path().join("out");
+        let result = export(repo_dir.path(), "rustup-like", &dest_path);
+        assert!(matches!(result, Err(Error::HashMismatch(_, _, _))));
     }
 
     #[test]

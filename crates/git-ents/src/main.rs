@@ -263,6 +263,11 @@ enum ToolchainAction {
         /// name `rustup` itself knows, e.g. `stable`; defaults to `stable`).
         #[facet(args::named)]
         spec: Option<String>,
+        /// With `--from`, import the recipe's actual `bin` bytes instead of
+        /// its default of pointing at the distributor's own hosted archives
+        /// (see `git_toolchain::Bin::Downloaded`).
+        #[facet(args::named, default)]
+        embed: bool,
     },
     /// List the toolchains configured on a remote.
     List,
@@ -481,8 +486,9 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
             platform,
             from,
             spec,
+            embed,
         } => toolchain_import(
-            name, bin, src, license, version, platform, from, spec, remote,
+            name, bin, src, license, version, platform, from, spec, embed, remote,
         ),
         ToolchainAction::List => toolchain_list(remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
@@ -505,17 +511,24 @@ fn toolchain_import(
     platform: Option<String>,
     from: Option<String>,
     spec: Option<String>,
+    embed: bool,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Toolchain name")?;
 
     let recipe = from
-        .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable")))
+        .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable"), embed))
         .transpose()?;
 
-    let bin = match bin.or_else(|| recipe.as_ref().map(|r| r.bin.display().to_string())) {
-        Some(bin) => bin,
-        None => interactive::text_or(None, "Directory of executables to import")?,
+    let bin_plan = match bin {
+        Some(bin) => registry::Bin::Dir(PathBuf::from(bin)),
+        None => match recipe.as_ref().map(|r| r.bin.clone()) {
+            Some(bin) => bin,
+            None => registry::Bin::Dir(PathBuf::from(interactive::text_or(
+                None,
+                "Directory of executables to import",
+            )?)),
+        },
     };
     let src = src.or_else(|| {
         recipe
@@ -543,15 +556,26 @@ fn toolchain_import(
     let refname = format!("{TOOLCHAINS_NS}/{name}");
     let expected = sync(remote, &refname)?;
     let repo = repo()?;
-    git_toolchain::import(
-        &repo,
-        &name,
-        Path::new(&bin),
-        src.as_deref().map(Path::new),
-        &license,
-        &version,
-        &platform,
-    )
+    match bin_plan {
+        registry::Bin::Dir(bin) => git_toolchain::import(
+            &repo,
+            &name,
+            &bin,
+            src.as_deref().map(Path::new),
+            &license,
+            &version,
+            &platform,
+        ),
+        registry::Bin::Components(components) => git_toolchain::import_downloaded(
+            &repo,
+            &name,
+            components,
+            src.as_deref().map(Path::new),
+            &license,
+            &version,
+            &platform,
+        ),
+    }
     .map_err(|error| error.to_string())?;
     push_signed(remote, &refname, expected.as_deref())?;
     println!("imported toolchain {name}");
@@ -569,12 +593,15 @@ fn toolchain_list(remote: &str) -> Result<(), String> {
         return Ok(());
     }
     for (name, toolchain) in toolchains {
+        let bin = match &toolchain.bin {
+            git_toolchain::Bin::Embedded(tree) => short_id(&tree.oid().to_string()).to_owned(),
+            git_toolchain::Bin::Downloaded(components) => {
+                format!("{} components", components.len())
+            }
+        };
         println!(
-            "{name}  {}  {}  {}  {}",
-            short_id(&toolchain.bin.oid().to_string()),
-            toolchain.version,
-            toolchain.platform,
-            toolchain.license
+            "{name}  {bin}  {}  {}  {}",
+            toolchain.version, toolchain.platform, toolchain.license
         );
     }
     Ok(())

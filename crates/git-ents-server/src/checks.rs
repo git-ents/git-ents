@@ -573,11 +573,37 @@ fn resolve_toolchains(
     for name in names {
         let toolchain = git_toolchain::resolve(repo, name)
             .map_err(|e| format!("could not resolve toolchain {name}: {e}"))?;
-        let bin = toolchain.bin.oid();
-        sync_toolchain(repo, sprite, bin)?;
-        dirs.insert(name.to_owned(), format!("{TOOLCHAINS_DIR}/{bin}"));
+        let dir = match &toolchain.bin {
+            git_toolchain::Bin::Embedded(tree) => {
+                let tree = tree.oid();
+                sync_toolchain(repo, sprite, tree)?;
+                format!("{TOOLCHAINS_DIR}/{tree}")
+            }
+            git_toolchain::Bin::Downloaded(components) => {
+                let key = components_key(components);
+                sync_downloaded_toolchain(sprite, &key, components)?;
+                // Unlike an embedded toolchain's tree (already flattened to
+                // put executables at its own top level), each component
+                // archive extracts its own `bin/` alongside `lib/`, so `PATH`
+                // must point one level deeper.
+                format!("{TOOLCHAINS_DIR}/{key}/bin")
+            }
+        };
+        dirs.insert(name.to_owned(), dir);
     }
     Ok(dirs)
+}
+
+/// A stable, filesystem-safe cache key for a [`git_toolchain::Bin::Downloaded`]
+/// toolchain: its components' sha256s, joined in extraction order — there is
+/// no tree oid to key the extraction cache by, since nothing is written to
+/// the object database for a downloaded toolchain's `bin`.
+fn components_key(components: &[git_toolchain::Component]) -> String {
+    components
+        .iter()
+        .map(|component| component.sha256.as_str())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Prefix `command` with a `PATH` export activating `toolchains`' extracted
@@ -650,6 +676,60 @@ fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), Strin
         Ok(())
     } else {
         Err(format!("could not extract toolchain {tree} in the sprite"))
+    }
+}
+
+/// Fetch, sha256-verify, and extract a [`git_toolchain::Bin::Downloaded`]
+/// toolchain's components into the Sprite at `{TOOLCHAINS_DIR}/<key>`, once —
+/// same cache-once discipline as [`sync_toolchain`], keyed by
+/// [`components_key`] since there is no tree oid to key by. Verification and
+/// extraction both happen inside the Sprite via `curl`/`sha256sum`/`tar`,
+/// mirroring `git_toolchain::export`'s local equivalent: downloading through
+/// the server first and streaming the bytes in would defeat the point of not
+/// storing them.
+fn sync_downloaded_toolchain(
+    sprite: &str,
+    key: &str,
+    components: &[git_toolchain::Component],
+) -> Result<(), String> {
+    let dir = format!("{TOOLCHAINS_DIR}/{key}");
+    let cached = Command::new("sprite")
+        .args([
+            "exec",
+            "-s",
+            sprite,
+            "--",
+            "sh",
+            "-c",
+            &format!("[ -d {dir} ]"),
+        ])
+        .status()
+        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
+    if cached.success() {
+        return Ok(());
+    }
+
+    let mut script = format!("mkdir -p {dir}");
+    for component in components {
+        script.push_str(&format!(
+            " && curl -fsSL '{url}' -o /tmp/component.tar.gz \
+               && [ \"$(sha256sum /tmp/component.tar.gz | cut -d' ' -f1)\" = '{sha256}' ] \
+               && tar -xz --strip-components=2 -C {dir} -f /tmp/component.tar.gz \
+               && rm -f /tmp/component.tar.gz",
+            url = component.url,
+            sha256 = component.sha256,
+        ));
+    }
+    let status = Command::new("sprite")
+        .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
+        .status()
+        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "could not fetch and extract downloaded toolchain {key} in the sprite"
+        ))
     }
 }
 

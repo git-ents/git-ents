@@ -65,19 +65,27 @@ Key strategy::
   (origin-or-content-hash), so filing an item never contends a counter and
   the identity rule cannot drift between collections. `toolchains/<name>`
   (`git-toolchain`) is a named collection like `member/<username>`, and its
-  item is a `Facet` document like any other — a `bin` directory tree, an
-  optional `src` directory tree, an SPDX license expression, a semver
-  version, and a target-triple platform — but `bin` and `src` are each
-  captured whole as a `facet_git_tree::RawTree`, a raw-passthrough field
-  wrapping an already-written tree's object id rather than a directory
-  layout `Facet` could model field-by-field. `license`, `version`, and
-  `platform` are plain strings validated against a real parser (`spdx`,
-  `semver`, `target-lexicon`) at import time rather than carried as a parsed
-  type, since nothing downstream needs more than the canonical string back.
+  item is a `Facet` document like any other — a `bin`, an optional `src`
+  directory tree, an SPDX license expression, a semver version, and a
+  target-triple platform. `src` is always captured whole as a
+  `facet_git_tree::RawTree`, a raw-passthrough field wrapping an
+  already-written tree's object id rather than a directory layout `Facet`
+  could model field-by-field. `bin` is a `Bin` enum over two
+  representations: `Bin::Embedded`, the same `RawTree` capture, for a
+  toolchain with no stable independent origin; or `Bin::Downloaded`, a list
+  of `{url, sha256}` components pointing at a distributor's own hosted,
+  hash-pinned archives (rust-lang's dist tarballs, for the `rustup` import
+  recipe's default) instead of storing the toolchain's bytes at all —
+  fetched, sha256-verified, and extracted fresh each time a Sprite activates
+  the toolchain or `git ents toolchain export` runs locally, sparing the
+  repository the bytes entirely. `license`, `version`, and `platform` are
+  plain strings validated against a real parser (`spdx`, `semver`,
+  `target-lexicon`) at import time rather than carried as a parsed type,
+  since nothing downstream needs more than the canonical string back.
   `Store::store_tree`/`ref_tree` write and read the document's root tree
-  directly, since the two directories underneath must be written into the
-  object database before the document that references them can be
-  assembled.
+  directly, since a `src` (or `Bin::Embedded` `bin`) directory underneath
+  must be written into the object database before the document that
+  references it can be assembled.
 
 Authored collections::
   A collection whose documents treat the commit as the record

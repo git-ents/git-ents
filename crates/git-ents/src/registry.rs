@@ -4,23 +4,35 @@
 //! toolchain install a user already has (rustup, ...) instead of requiring
 //! them to hand-supply paths and metadata `git-toolchain` itself has no way
 //! to discover. This module only locates and describes what's already on
-//! disk; it never installs a toolchain.
+//! disk (or, for `bin`, what a distributor already hosts); it never installs
+//! a toolchain.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use git_toolchain::Component;
 use tempfile::TempDir;
 
+/// How a recipe resolved `bin`: either a local directory to import as-is (the
+/// embedded path, `--embed`), or a list of externally-hosted components to
+/// record as a [`git_toolchain::Bin::Downloaded`] manifest instead of
+/// importing local bytes.
+#[derive(Clone)]
+pub enum Bin {
+    Dir(PathBuf),
+    Components(Vec<Component>),
+}
+
 /// What a recipe resolved from a local toolchain install, ready to hand to
-/// `git_toolchain::import`.
+/// `git_toolchain::import`/`import_downloaded`.
 ///
-/// `_staging`, when present, is a temporary directory `bin` (and `src`, if
-/// under it) points into; it is kept alive only so the directory survives
-/// until the caller's `import()` call has read it, and is deleted on drop.
+/// `_staging`, when `bin` is [`Bin::Dir`] pointing into a temporary
+/// directory, is kept alive only so the directory survives until the
+/// caller's `import()` call has read it, and is deleted on drop.
 pub struct Resolved {
-    pub bin: PathBuf,
+    pub bin: Bin,
     pub src: Option<PathBuf>,
     pub license: String,
     pub version: String,
@@ -30,9 +42,14 @@ pub struct Resolved {
 
 /// Resolve `recipe` against `spec` (a recipe-specific selector, e.g. a
 /// rustup toolchain name). The only recipe today is `rustup`.
-pub fn resolve(recipe: &str, spec: &str) -> Result<Resolved, String> {
+///
+/// `embed` forces the old behavior of staging and importing `bin`'s actual
+/// bytes; by default the recipe instead points at its distributor's own
+/// hosted, hash-verified archives (see [`Bin::Components`]), sparing the
+/// repository the toolchain's own bytes.
+pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String> {
     match recipe {
-        "rustup" => rustup(spec),
+        "rustup" => rustup(spec, embed),
         other => Err(format!(
             "unknown toolchain recipe {other:?} (known: rustup)"
         )),
@@ -44,9 +61,19 @@ pub fn resolve(recipe: &str, spec: &str) -> Result<Resolved, String> {
 /// toolchain's own `release` (its version) and `host` (its target platform)
 /// without needing rustup's own metadata format.
 ///
-/// A rustup sysroot's `bin/*` binaries are linked against `lib/*.dylib` (or
-/// `.so`) via an rpath relative to `bin`'s own parent (`@loader_path/../lib`
-/// on macOS, `$ORIGIN/../lib` on Linux) — but `git-toolchain` activates a
+/// By default `bin` is resolved as [`Bin::Components`]: the `rustc`,
+/// `cargo`, and `rust-std` entries of rust-lang's own published channel
+/// manifest for `version` (or the `nightly` channel manifest, which has no
+/// stable per-version name, when `version` is a nightly), each already
+/// hash-pinned by rust-lang. These are real rustup-installer archives: every
+/// one unpacks to `<package>-<version>-<target>/<component>/...`, so
+/// `git_toolchain::export`'s extraction strips exactly that two-segment
+/// prefix rather than needing this recipe to relocate anything.
+///
+/// With `embed`, `bin` is resolved the old way instead: a rustup sysroot's
+/// `bin/*` binaries are linked against `lib/*.dylib` (or `.so`) via an rpath
+/// relative to `bin`'s own parent (`@loader_path/../lib` on macOS,
+/// `$ORIGIN/../lib` on Linux) — but `git-toolchain` activates an embedded
 /// toolchain by extracting `bin` as-is and putting *that* directory straight
 /// on `PATH`, with no sibling `lib` beside it. Passing `sysroot/bin` alone
 /// therefore produces a `rustc` that can neither load its own shared runtime
@@ -56,10 +83,12 @@ pub fn resolve(recipe: &str, spec: &str) -> Result<Resolved, String> {
 /// `sysroot/lib` copied under a `lib/` subdirectory inside it, with each
 /// binary's rpath rewritten from `../lib` to `lib` so it resolves relative
 /// to wherever the toolchain ends up extracted, not relative to `bin`'s
-/// original location. `src` is `<sysroot>/lib/rustlib/src/rust`, unstaged,
-/// when the `rust-src` component is installed, else omitted. Rust's own
+/// original location.
+///
+/// `src` is `<sysroot>/lib/rustlib/src/rust`, unstaged, when the `rust-src`
+/// component is installed, else omitted, regardless of `embed`. Rust's own
 /// toolchain is dual-licensed `MIT OR Apache-2.0`.
-fn rustup(spec: &str) -> Result<Resolved, String> {
+fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
     let toolchain_arg = format!("+{spec}");
     let sysroot = rustc(&toolchain_arg, &["--print", "sysroot"])?;
     let sysroot = PathBuf::from(sysroot.trim());
@@ -70,21 +99,81 @@ fn rustup(spec: &str) -> Result<Resolved, String> {
     let platform = verbose_field(&verbose, "host")
         .ok_or_else(|| format!("rustc +{spec} -vV did not report a host"))?;
 
-    let staging = tempfile::tempdir()
-        .map_err(|error| format!("could not create a staging directory: {error}"))?;
-    stage_bin(&sysroot.join("bin"), &sysroot.join("lib"), staging.path())?;
-
     let src = sysroot.join("lib/rustlib/src/rust");
     let src = src.is_dir().then_some(src);
 
+    let (bin, staging) = if embed {
+        let staging = tempfile::tempdir()
+            .map_err(|error| format!("could not create a staging directory: {error}"))?;
+        stage_bin(&sysroot.join("bin"), &sysroot.join("lib"), staging.path())?;
+        (Bin::Dir(staging.path().to_owned()), Some(staging))
+    } else {
+        (
+            Bin::Components(manifest_components(&version, &platform)?),
+            None,
+        )
+    };
+
     Ok(Resolved {
-        bin: staging.path().to_owned(),
+        bin,
         src,
         license: "MIT OR Apache-2.0".to_owned(),
         version,
         platform,
-        _staging: Some(staging),
+        _staging: staging,
     })
+}
+
+/// The three components of rust-lang's channel manifest that together make
+/// a working toolchain (compiler, cargo, and the target's standard library),
+/// resolved for `target` against the manifest for `version` (or the shared
+/// `nightly` channel, when `version` names one — rust-lang does not publish
+/// a stable per-version manifest name for nightly builds).
+fn manifest_components(version: &str, target: &str) -> Result<Vec<Component>, String> {
+    let channel = if version.contains("nightly") {
+        "nightly".to_owned()
+    } else {
+        version.to_owned()
+    };
+    let url = format!("https://static.rust-lang.org/dist/channel-rust-{channel}.toml");
+    let manifest = crate::http_get(&url)?;
+
+    ["rustc", "cargo", "rust-std"]
+        .into_iter()
+        .map(|package| {
+            let section = format!("pkg.{package}.target.{target}");
+            let component_url = manifest_field(&manifest, &section, "url")
+                .ok_or_else(|| format!("{url} has no [{section}].url"))?;
+            let sha256 = manifest_field(&manifest, &section, "hash")
+                .ok_or_else(|| format!("{url} has no [{section}].hash"))?;
+            Ok(Component {
+                url: component_url,
+                sha256,
+            })
+        })
+        .collect()
+}
+
+/// Extract `<key> = "value"` from `manifest`'s `[section]` table.
+///
+/// A hand-rolled reader for the one shape this recipe needs from rust-lang's
+/// channel manifest TOML (a flat `key = "value"` line under a `[section]`
+/// header), rather than a full TOML parser for a format this is the only
+/// caller of.
+fn manifest_field(manifest: &str, section: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"");
+    let mut in_section = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            in_section = name == section;
+            continue;
+        }
+        if in_section && let Some(rest) = line.strip_prefix(&prefix) {
+            return rest.strip_suffix('"').map(str::to_owned);
+        }
+    }
+    None
 }
 
 /// Copy `bin_src`'s executables flat into `staging`, relink each one's rpath

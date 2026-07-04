@@ -78,13 +78,20 @@ The CLI MUST provide, under `git ents toolchain`:
   `platform` from a local toolchain install instead of supplying them by
   hand, via a named recipe (currently only `rustup`, selected further by
   `--spec <name>`, e.g. `stable`); any of the fields also passed explicitly
-  override the recipe's value.
+  override the recipe's value. By default a recipe capable of pointing at a
+  distributor's own hosted, hash-pinned archives (rust-lang's dist tarballs,
+  for `rustup`) records those as the toolchain's `bin` instead of importing
+  local bytes, sparing the repository the toolchain's own bytes; `--embed`
+  forces the recipe to import the local install's actual `bin` bytes
+  instead, as `import` without `--from` always does.
 * `list` — render every toolchain configured on a remote with its `bin`
-  tree id, version, platform, and license.
+  (a tree id, or a component count when hosted externally), version,
+  platform, and license.
 * `export` — recreate a remote's named toolchain's `bin` (and `src`, if
   present) under a local destination directory, restoring the executable bit
-  and symlinks, and print the version, platform, and license; read-only, per
-  <<cli.remote-admin>>.
+  and symlinks — fetching and sha256-verifying `bin`'s components first when
+  hosted externally rather than embedded — and print the version, platform,
+  and license; read-only, per <<cli.remote-admin>>.
 * `remove` — delete the toolchain's ref on a remote.
 --
 
