@@ -98,10 +98,13 @@ trait WebComponent: Component + Render + Send + 'static {
 }
 ----
 
-One generic page function replaces the shared skeleton of the current list
-pages: `spawn_blocking` load, error card, empty card, count badge,
-`repo_shell` wrapping, per-item `render()`. The route table keeps its explicit
-match but each list arm becomes `component_page::<Issue>(…)`.
+The generic unit is a *card*, not a page: `component_card::<T>` does the
+`spawn_blocking` load, error card, empty card, count badge, and per-item
+`render()`. A page is then either one card in `repo_shell`
+(`component_page::<Issue>`) or a composition of several cards — the Settings
+page composes the config, members, and checks components rather than living
+outside the abstraction. The route table keeps its explicit match but each
+list arm becomes `component_page::<Issue>(…)`.
 
 === What stays outside the abstraction
 
@@ -112,8 +115,11 @@ failure mode:
   meta-ref components; untouched.
 * *Checks extras*: the HEAD join, the live registry, and the
   recording/live/download routes stay bespoke routes beside the generic list.
-* *Settings*: a composite projection over config + members with auth and
-  in-place editing; it consumes components' `Render` but is not itself one.
+* *Settings editing*: the page itself is *inside* the abstraction — a
+  composite that stacks the config, members, and checks component cards. What
+  stays bespoke is the auth/editing overlay on the config card (session
+  resolution, editable fields, the POST path); the composition is generic,
+  the overlay is not.
 * *Runs*: namespace keyed by commit with nested run lists; does not fit
   `Collection` — leave as is.
 * *POST handling* (`web/write.rs`): editing is component-specific and gated;
@@ -141,11 +147,15 @@ members need more than one extra method, leave them bespoke and note why.
 
 === C3 — generic list page in the server
 
-Add `WebComponent` and `component_page::<T>`; migrate `issues_page` first
-(purest list page), then the configuration card of `checks_page` and the
-members card of `settings_page` if they reduce to the generic shape plus a
-wrapper. The open/closed filter and label chips on issues stay as a
-component-provided header fragment, not new trait methods.
+Add `WebComponent`, `component_card::<T>`, and `component_page::<T>`; migrate
+`issues_page` first (purest list page), then rebuild `settings_page` as a
+composition of the config, members, and checks cards — the proof that cards
+compose — and swap the configuration card of `checks_page` to the generic
+card. The open/closed filter and label chips on issues stay as a
+component-provided header fragment, not new trait methods. The settings
+editing overlay wraps the config card from outside; if that requires the card
+to take hooks, the card is cut at the wrong altitude — recut it (e.g. card
+chrome vs. row rendering) rather than adding hook parameters.
 
 === C4 — route dispatch
 
