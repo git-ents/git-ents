@@ -38,6 +38,11 @@ use tokio::sync::Mutex;
 /// Where the pushed tree is unpacked inside the Sprite.
 const WORKDIR: &str = "/work";
 
+/// Where resolved toolchains are extracted inside the Sprite, one directory
+/// per tree hash (`{TOOLCHAINS_DIR}/<hash>`) — unlike [`WORKDIR`], never
+/// cleared: the Sprite's persistent filesystem is the extract-once cache.
+const TOOLCHAINS_DIR: &str = "/toolchains";
+
 /// A currently-running check's growing asciicast v2 recording, keyed by the
 /// repository, the commit being checked, and the check's name.
 pub(crate) type LiveKey = (PathBuf, ObjectId, String);
@@ -282,6 +287,14 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
         return Err(e);
     }
 
+    let toolchain_dirs = match resolve_toolchains(&job.repo, &sprite, &runnable) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            finalize_error(&job.repo, job.new, &mut outcomes);
+            return Err(e);
+        }
+    };
+
     for index in ordered {
         let Some(check) = runnable.get(index) else {
             continue;
@@ -300,9 +313,10 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
         let all_pass = deps.iter().all(|status| *status == Status::Pass);
         match &check.command {
             Some(command) if all_pass => {
+                let command = activate(command, &check.toolchains, &toolchain_dirs);
                 let key: LiveKey = (job.repo.clone(), job.new, check.name.clone());
                 let buffer = live_start(live, key.clone());
-                let result = run_one(&sprite, &check.name, command, &buffer);
+                let result = run_one(&sprite, &check.name, &command, &buffer);
                 live_finish(live, &key);
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = result.status;
@@ -538,6 +552,106 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
     }
 }
 
+/// Resolve and extract every distinct toolchain named across `runnable`,
+/// returning each name's extracted directory inside the Sprite. A failed
+/// resolution (the named ref does not exist) is the one place `checks::order`
+/// could not have caught it, since `refs/meta/toolchains/*` is a different
+/// namespace than the check set itself.
+fn resolve_toolchains(
+    repo: &Path,
+    sprite: &str,
+    runnable: &[Check],
+) -> Result<HashMap<String, String>, String> {
+    let mut names: Vec<&str> = runnable
+        .iter()
+        .flat_map(|check| check.toolchains.iter().map(String::as_str))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut dirs = HashMap::new();
+    for name in names {
+        let tree = git_toolchain::resolve(repo, name)
+            .map_err(|e| format!("could not resolve toolchain {name}: {e}"))?;
+        sync_toolchain(repo, sprite, tree)?;
+        dirs.insert(name.to_owned(), format!("{TOOLCHAINS_DIR}/{tree}"));
+    }
+    Ok(dirs)
+}
+
+/// Prefix `command` with a `PATH` export activating `toolchains`' extracted
+/// directories, declared order first (so the first-listed toolchain's `bin`
+/// wins on a name collision); a check with no toolchains is returned
+/// unchanged.
+fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>) -> String {
+    if toolchains.is_empty() {
+        return command.to_owned();
+    }
+    let path = toolchains
+        .iter()
+        .filter_map(|name| dirs.get(name))
+        .map(|dir| format!("{dir}/bin"))
+        .collect::<Vec<_>>()
+        .join(":");
+    format!("export PATH={path}:$PATH; {command}")
+}
+
+/// Extract the toolchain tree `tree` into the Sprite at
+/// `{TOOLCHAINS_DIR}/<tree>`, once — a directory already there from an
+/// earlier push is left alone rather than re-extracted, since the Sprite's
+/// persistent filesystem is the cache. Checked before running `git archive`
+/// so an already-cached toolchain never streams its (potentially large)
+/// contents through a pipe the Sprite has no reason to read.
+fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), String> {
+    let dir = format!("{TOOLCHAINS_DIR}/{tree}");
+    let cached = Command::new("sprite")
+        .args([
+            "exec",
+            "-s",
+            sprite,
+            "--",
+            "sh",
+            "-c",
+            &format!("[ -d {dir} ]"),
+        ])
+        .status()
+        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
+    if cached.success() {
+        return Ok(());
+    }
+
+    let archive = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["archive", "--format=tar", &tree.to_string()])
+        .output()
+        .map_err(|e| format!("could not run git archive: {e}"))?;
+    if !archive.status.success() {
+        return Err(format!("git archive failed for toolchain {tree}"));
+    }
+
+    let script = format!("mkdir -p {dir} && tar -x -C {dir}");
+    let mut child = Command::new("sprite")
+        .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("sprite exec did not accept stdin")?
+        .write_all(&archive.stdout)
+        .map_err(|e| format!("could not stream the toolchain into the sprite: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("sprite exec did not complete: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("could not extract toolchain {tree} in the sprite"))
+    }
+}
+
 /// How long a single check may run before the worker abandons it. A runaway
 /// check that outlived this — a hung build, a command blocked on input — is
 /// killed and recorded `error` rather than wedging the worker (and with it every
@@ -744,6 +858,34 @@ mod tests {
         let updates = parse_updates(&input);
         let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
         assert_eq!(refs, vec!["refs/heads/main", "refs/heads/feature"]);
+    }
+
+    #[test]
+    fn activate_leaves_a_toolchain_free_command_unchanged() {
+        let dirs = HashMap::new();
+        assert_eq!(activate("cargo test", &[], &dirs), "cargo test");
+    }
+
+    #[test]
+    fn activate_prefixes_path_in_declared_order() {
+        let mut dirs = HashMap::new();
+        dirs.insert("gcc".to_owned(), "/toolchains/aaa".to_owned());
+        dirs.insert("cmake".to_owned(), "/toolchains/bbb".to_owned());
+        let toolchains = vec!["gcc".to_owned(), "cmake".to_owned()];
+        assert_eq!(
+            activate("make", &toolchains, &dirs),
+            "export PATH=/toolchains/aaa/bin:/toolchains/bbb/bin:$PATH; make"
+        );
+    }
+
+    #[test]
+    fn activate_skips_a_toolchain_missing_from_dirs() {
+        let dirs = HashMap::new();
+        let toolchains = vec!["gcc".to_owned()];
+        assert_eq!(
+            activate("make", &toolchains, &dirs),
+            "export PATH=:$PATH; make"
+        );
     }
 
     #[test]

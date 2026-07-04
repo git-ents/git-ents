@@ -1485,6 +1485,7 @@ dependencies = [
  "git-comment",
  "git-ents-core",
  "git-store",
+ "git-toolchain",
  "gix-actor",
  "gix-date",
  "gix-hash",
