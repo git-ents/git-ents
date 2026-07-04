@@ -9,6 +9,7 @@
 //! This file owns routing and the shared page shell.
 
 mod assets;
+mod component;
 mod debug;
 mod git;
 mod icons;

@@ -24,7 +24,7 @@ use super::git::{
 };
 use super::icons::*;
 use super::render::Render;
-use super::{RepoMeta, Tab, not_found, repo_shell};
+use super::{RepoMeta, Tab, component, not_found, repo_shell};
 
 /// The largest blob or diff rendered in full. Past it a request would read an
 /// unbounded object into memory and highlight it, so the view shows a truncation
@@ -854,7 +854,7 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 /// the full history and the raw set, as before.
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let rel = &meta.rel;
-    let checks = load_checks(repo).await;
+    let checks = component::load::<git_ents::checks::Check>(repo).await;
     let runs = load_runs(repo).await;
     let head = git_output(repo, &["rev-parse", "HEAD"])
         .await
@@ -919,25 +919,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                         }
                     }
                 }
-                div.card {
-                    div.card-header {
-                        "Configuration"
-                        @if let Ok(checks) = &checks { span.count { (checks.len()) } }
-                    }
-                    @match &checks {
-                        Err(err) => div.card-row.muted { "Could not read checks: " (err) }
-                        Ok(checks) if checks.is_empty() => {
-                            div.card-row.muted {
-                                "No checks configured on " code { "refs/meta/checks" } "."
-                            }
-                        }
-                        Ok(checks) => {
-                            @for check in checks {
-                                (check.render())
-                            }
-                        }
-                    }
-                }
+                (component::card(&checks))
             }
         },
     )
@@ -1105,17 +1087,7 @@ fn sanitize_filename(s: &str) -> String {
         .collect()
 }
 
-/// Load the configured check set off the async runtime, since `checks::load`
-/// shells out to git and reads the object database synchronously.
-async fn load_checks(repo: &Path) -> Result<Vec<git_ents::checks::Check>, String> {
-    let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::checks::load(&repo))
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| err.to_string())
-}
-
-/// Load the recorded runs off the async runtime, like [`load_checks`].
+/// Load the recorded runs off the async runtime, like [`component::load`].
 async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, String> {
     let repo = repo.to_owned();
     tokio::task::spawn_blocking(move || git_ents::checks::runs(&repo))
@@ -1129,7 +1101,7 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents::checks::CommitRuns>, Str
 /// derived from the labels that exist. Issue creation is a write path that does
 /// not exist yet, so the "New issue" button stays disabled.
 pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
-    let tpl = match load_issues(repo).await {
+    let tpl = match component::load::<git_ents::issues::Issue>(repo).await {
         Err(err) => IssuesTemplate {
             icons: Icons,
             error: Some(err),
@@ -1139,12 +1111,12 @@ pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
             closed_count: 0,
         },
         Ok(issues) => {
-            let open: Vec<&(String, git_ents::issues::Issue)> =
-                issues.iter().filter(|(_id, i)| i.is_open()).collect();
+            let open: Vec<&git_ents::issues::Issue> =
+                issues.iter().filter(|issue| issue.is_open()).collect();
             let closed = issues.len().saturating_sub(open.len());
             let mut labels: Vec<String> = issues
                 .iter()
-                .flat_map(|(_id, i)| i.labels.iter().cloned())
+                .flat_map(|issue| issue.labels.iter().cloned())
                 .collect();
             labels.sort_unstable();
             labels.dedup();
@@ -1156,7 +1128,7 @@ pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
                 closed_count: closed,
                 open: open
                     .iter()
-                    .map(|(_id, issue)| issue.render().into_string())
+                    .map(|issue| issue.render().into_string())
                     .collect(),
             }
         }
@@ -1176,16 +1148,6 @@ struct IssuesTemplate {
     closed_count: usize,
 }
 
-/// Load the repository's issues off the async runtime, since `issues::list`
-/// reads the object database synchronously.
-async fn load_issues(repo: &Path) -> Result<Vec<(String, git_ents::issues::Issue)>, String> {
-    let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::issues::list(&repo))
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| err.to_string())
-}
-
 /// The Settings tab: a projection over the repository's typed meta refs —
 /// `refs/meta/config` (General), `refs/meta/members` (Members), and the derived
 /// feature and check status. The General fields are editable in place by a
@@ -1197,8 +1159,8 @@ pub(super) async fn settings_page(
     auth: Option<&super::Auth>,
     editing: bool,
 ) -> Markup {
-    let members = load_members(repo).await;
-    let checks = load_checks(repo).await;
+    let members = component::load::<git_ents::members::Member>(repo).await;
+    let checks = component::load::<git_ents::checks::Check>(repo).await;
     let config = load_repo_config(repo).await;
     repo_shell(
         meta,
@@ -1227,51 +1189,17 @@ pub(super) async fn settings_page(
                     (feature_row("Checks (CI)", "Run signed CI records on push.", matches!(&checks, Ok(c) if !c.is_empty())))
                 }
 
-                div.card {
-                    div.card-header {
-                        "Members"
-                        @if let Ok(members) = &members { span.count { (members.len()) } }
-                    }
-                    p.shell-note {
-                        "People on " code { "refs/meta/member/*" } " whose signed pushes are accepted "
-                        "(" code { "git ents members list" } ")."
-                    }
-                    @match &members {
-                        Err(err) => div.card-row.muted { "Could not read members: " (err) }
-                        Ok(members) if members.is_empty() => {
-                            div.card-row.muted {
-                                "No members — pushes are open until the first key is added."
-                            }
-                        }
-                        Ok(members) => {
-                            @for member in members {
-                                (member.render())
-                            }
-                        }
-                    }
+                p.shell-note {
+                    "People on " code { "refs/meta/member/*" } " whose signed pushes are accepted "
+                    "(" code { "git ents members list" } ")."
                 }
+                (component::card(&members))
 
-                div.card {
-                    div.card-header {
-                        "Checks"
-                        @if let Ok(checks) = &checks { span.count { (checks.len()) } }
-                    }
-                    p.shell-note {
-                        "Commands on " code { "refs/meta/checks" } " run against each push "
-                        "(" code { "git ents checks list" } ")."
-                    }
-                    @match &checks {
-                        Err(err) => div.card-row.muted { "Could not read checks: " (err) }
-                        Ok(checks) if checks.is_empty() => {
-                            div.card-row.muted { "No checks configured." }
-                        }
-                        Ok(checks) => {
-                            @for check in checks {
-                                (check.render())
-                            }
-                        }
-                    }
+                p.shell-note {
+                    "Commands on " code { "refs/meta/checks" } " run against each push "
+                    "(" code { "git ents checks list" } ")."
                 }
+                (component::card(&checks))
 
                 div.card {
                     div.card-header { "Roles" }
@@ -1294,20 +1222,10 @@ pub(super) async fn settings_page(
     )
 }
 
-/// Load `refs/meta/config` off the async runtime, like [`load_checks`].
+/// Load `refs/meta/config` off the async runtime, like [`component::load`].
 async fn load_repo_config(repo: &Path) -> Result<git_ents::config::Config, String> {
     let repo = repo.to_owned();
     tokio::task::spawn_blocking(move || git_ents::config::load(&repo))
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| err.to_string())
-}
-
-/// Load the member set off the async runtime, since `members::load_all` shells
-/// out to git and reads the object database synchronously.
-async fn load_members(repo: &Path) -> Result<Vec<git_ents::members::Member>, String> {
-    let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents::members::load_all(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())

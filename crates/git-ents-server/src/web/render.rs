@@ -8,6 +8,8 @@
 //! Types whose presentation needs domain knowledge — a signer's shortened key, a
 //! run's one-line summary — override [`Render::render`] instead.
 
+use std::path::Path;
+
 use facet::{Def, Facet, Peek, Type, UserType};
 use maud::{Markup, PreEscaped, html};
 
@@ -16,6 +18,7 @@ use git_ents::config::{Config, RoleRules};
 use git_ents::issues::Issue;
 use git_ents::members::Member;
 
+use super::component::WebComponent;
 use crate::asciidoc;
 
 /// HTML rendering for a meta-ref value. The default walks the value's [`Facet`]
@@ -45,6 +48,18 @@ impl Render for Check {
             value.push_str(&format!(" · needs {}", self.depends.join(", ")));
         }
         row(&self.name, &value)
+    }
+}
+
+impl WebComponent for Check {
+    const TITLE: &'static str = "Checks";
+
+    fn empty() -> Markup {
+        html! { div.card-row.muted { "No checks configured on " code { "refs/meta/checks" } "." } }
+    }
+
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        git_ents::checks::load(repo).map_err(|err| err.to_string())
     }
 }
 
@@ -94,6 +109,22 @@ impl Render for Issue {
     }
 }
 
+impl WebComponent for Issue {
+    const TITLE: &'static str = "Bug reports";
+
+    fn empty() -> Markup {
+        html! { div.card-row.muted { "No bug reports yet." } }
+    }
+
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        Ok(git_ents::issues::list(repo)
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .map(|(_id, issue)| issue)
+            .collect())
+    }
+}
+
 /// A member renders one row per authorized key — the username as the key column,
 /// a short key label beside it — or a single `cert-authority` row for a pinned
 /// CA, rather than the raw keys and trust enum the structural walk would print.
@@ -110,6 +141,20 @@ impl Render for Member {
                 (row(&self.principal, &signer_label(key)))
             }
         }
+    }
+}
+
+impl WebComponent for Member {
+    const TITLE: &'static str = "Members";
+
+    fn empty() -> Markup {
+        html! {
+            div.card-row.muted { "No members — pushes are open until the first key is added." }
+        }
+    }
+
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        git_ents::members::load_all(repo).map_err(|err| err.to_string())
     }
 }
 
