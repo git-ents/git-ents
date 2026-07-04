@@ -7,6 +7,7 @@ members = [
     "crates/git-ents-core",
     "crates/git-ents-server",
     "crates/git-store",
+    "crates/git-toolchain",
 ]
 
 [workspace.package]
@@ -54,6 +55,7 @@ git-comment = { path = "crates/git-comment" }
 git-ents-core = { path = "crates/git-ents-core" }
 git-ents-server = { path = "crates/git-ents-server" }
 git-store = { path = "crates/git-store" }
+git-toolchain = { path = "crates/git-toolchain" }
 gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-object = "0.61"

@@ -1510,6 +1510,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-toolchain"
+version = "0.0.0"
+dependencies = [
+ "git-store",
+ "gix",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gix"
 version = "0.84.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

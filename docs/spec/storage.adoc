@@ -63,7 +63,11 @@ Key strategy::
   hash of its own content (`issues/<genesis-hash>`,
   `comments/<genesis-hash>`) via the shared `git_store::new_id`
   (origin-or-content-hash), so filing an item never contends a counter and
-  the identity rule cannot drift between collections.
+  the identity rule cannot drift between collections. `toolchains/<name>`
+  (`git-toolchain`) is a named collection like `member/<username>`, but its
+  item is a directory tree imported wholesale rather than a `Facet` document
+  — the one collection whose identity is its own root tree hash
+  (`Store::store_tree`/`ref_tree`) instead of a deserialized value.
 
 Authored collections::
   A collection whose documents treat the commit as the record
