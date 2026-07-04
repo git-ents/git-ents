@@ -18,7 +18,7 @@ use git_ents::config::{Config, RoleRules};
 use git_ents::issues::Issue;
 use git_ents::members::Member;
 
-use super::component::WebComponent;
+use super::component::{Loadable, WebComponent};
 use crate::asciidoc;
 
 /// HTML rendering for a meta-ref value. The default walks the value's [`Facet`]
@@ -51,15 +51,17 @@ impl Render for Check {
     }
 }
 
+impl Loadable for Check {
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        git_ents::checks::load(repo).map_err(|err| err.to_string())
+    }
+}
+
 impl WebComponent for Check {
     const TITLE: &'static str = "Checks";
 
     fn empty() -> Markup {
         html! { div.card-row.muted { "No checks configured on " code { "refs/meta/checks" } "." } }
-    }
-
-    fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents::checks::load(repo).map_err(|err| err.to_string())
     }
 }
 
@@ -109,13 +111,7 @@ impl Render for Issue {
     }
 }
 
-impl WebComponent for Issue {
-    const TITLE: &'static str = "Bug reports";
-
-    fn empty() -> Markup {
-        html! { div.card-row.muted { "No bug reports yet." } }
-    }
-
+impl Loadable for Issue {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
         Ok(git_ents::issues::list(repo)
             .map_err(|err| err.to_string())?
@@ -144,6 +140,12 @@ impl Render for Member {
     }
 }
 
+impl Loadable for Member {
+    fn load(repo: &Path) -> Result<Vec<Self>, String> {
+        git_ents::members::load_all(repo).map_err(|err| err.to_string())
+    }
+}
+
 impl WebComponent for Member {
     const TITLE: &'static str = "Members";
 
@@ -151,10 +153,6 @@ impl WebComponent for Member {
         html! {
             div.card-row.muted { "No members — pushes are open until the first key is added." }
         }
-    }
-
-    fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents::members::load_all(repo).map_err(|err| err.to_string())
     }
 }
 
