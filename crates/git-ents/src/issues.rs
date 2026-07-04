@@ -29,6 +29,8 @@ use std::path::Path;
 
 use facet::Facet;
 
+use crate::component;
+
 /// The namespace under which issues are recorded: one ref,
 /// `refs/meta/issues/<id>`, per issue.
 pub const ISSUES_NS: &str = "refs/meta/issues";
@@ -67,6 +69,15 @@ pub struct Issue {
     pub id: Option<String>,
 }
 
+impl component::Collection for Issue {
+    const NS: &'static str = ISSUES_NS;
+}
+
+impl component::Component for Issue {
+    const NOUN: &'static str = "issue";
+    const PLURAL: &'static str = "issues";
+}
+
 impl Issue {
     /// Whether the issue is open (any state other than [`State::Closed`]).
     #[must_use]
@@ -93,18 +104,18 @@ pub fn new_id(origin: Option<&str>, content: &Issue) -> Result<String, git_store
 /// Load the issue recorded at `refs/meta/issues/<id>` in `repo`, or `None` when
 /// no such issue exists.
 pub fn load(repo: &Path, id: &str) -> Result<Option<Issue>, git_store::Error> {
-    git_store::Store::open(repo)?.load_item(ISSUES_NS, id)
+    component::load_item(&git_store::Store::open(repo)?, id)
 }
 
 /// Write `issue` to `refs/meta/issues/<id>` in `repo`, replacing any existing
 /// value as a new commit so the ref's commit chain is the issue's edit history.
 pub fn store(repo: &Path, id: &str, issue: &Issue) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_item(ISSUES_NS, id, issue, "Update issue")
+    component::store_item(&git_store::Store::open(repo)?, id, issue, "Update issue")
 }
 
 /// List every issue in `repo` as `(id, issue)` pairs, newest issue ref first.
 pub fn list(repo: &Path) -> Result<Vec<(String, Issue)>, git_store::Error> {
-    git_store::Store::open(repo)?.list_items(ISSUES_NS)
+    component::list(&git_store::Store::open(repo)?)
 }
 
 /// The number of open issues in `repo`.
@@ -164,11 +175,10 @@ pub fn promote(repo: &Path, id: &str) -> Result<String, PromoteError> {
     }
     let number = number.ok_or(git_store::Error::Conflict)?.to_string();
 
-    let mut issue = store
-        .load_item::<Issue>(ISSUES_NS, id)?
+    let mut issue = component::load_item::<Issue>(&store, id)?
         .ok_or_else(|| PromoteError::NotFound(id.to_owned()))?;
     issue.id = Some(number.clone());
-    store.store_item(ISSUES_NS, id, &issue, "Update issue")?;
+    component::store_item(&store, id, &issue, "Update issue")?;
     Ok(number)
 }
 

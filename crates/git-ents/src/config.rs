@@ -13,6 +13,8 @@ use std::path::Path;
 
 use facet::Facet;
 
+use crate::component;
+
 /// The ref whose tree holds the repository configuration.
 pub const CONFIG_REF: &str = "refs/meta/config";
 
@@ -31,6 +33,15 @@ pub struct Config {
     /// with no role at all — permits every ref: role rules are opt-in gating
     /// layered on top of that default-allow-all rule.
     pub roles: BTreeMap<String, RoleRules>,
+}
+
+impl component::Document for Config {
+    const REF: &'static str = CONFIG_REF;
+}
+
+impl component::Component for Config {
+    const NOUN: &'static str = "configuration";
+    const PLURAL: &'static str = "configuration";
 }
 
 /// The ref-push rules for one role: glob patterns (`*` matches any run of
@@ -99,7 +110,7 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 /// has not been set yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no configuration set".
 pub fn load_with(store: &git_store::Store) -> Result<Config, git_store::Error> {
-    Ok(store.load::<Config>(CONFIG_REF)?.unwrap_or_default())
+    Ok(component::load::<Config>(store)?.unwrap_or_default())
 }
 
 /// Load the configuration recorded at [`CONFIG_REF`] in `repo`. See
@@ -116,7 +127,11 @@ pub fn load(repo: &Path) -> Result<Config, git_store::Error> {
 /// throwaway ref and pushes it onto [`CONFIG_REF`] through a signed push, so
 /// the `pre-receive` gate judges the change rather than a direct write.
 pub fn store(repo: &Path, config: &Config) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(CONFIG_REF, config, "Update configuration")
+    component::store(
+        &git_store::Store::open(repo)?,
+        config,
+        "Update configuration",
+    )
 }
 
 #[cfg(test)]

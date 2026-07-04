@@ -38,6 +38,8 @@ use std::path::Path;
 
 use facet::Facet;
 
+use crate::component;
+
 /// The namespace whose refs hold the member set — the push trust root. One
 /// `refs/meta/member/<username>` ref per person.
 pub const MEMBER_NS: &str = "refs/meta/member";
@@ -138,6 +140,15 @@ impl git_store::HasId for Member {
     fn id(&self) -> &str {
         &self.principal
     }
+}
+
+impl component::Collection for Member {
+    const NS: &'static str = MEMBER_NS;
+}
+
+impl component::Component for Member {
+    const NOUN: &'static str = "member";
+    const PLURAL: &'static str = "members";
 }
 
 impl iddqd::IdOrdItem for Member {
@@ -272,7 +283,7 @@ pub fn load_with(
     store: &git_store::Store,
     username: &str,
 ) -> Result<Option<Member>, git_store::Error> {
-    store.load_item(MEMBER_NS, username)
+    component::load_item(store, username)
 }
 
 /// Load the member named `username` in `repo`, or `None` when the ref is absent.
@@ -287,8 +298,7 @@ pub fn load(repo: &Path, username: &str) -> Result<Option<Member>, git_store::Er
 /// present but unreadable member ref is an error so callers can fail closed
 /// rather than mistake corruption for "no members".
 pub fn load_all_with(store: &git_store::Store) -> Result<Vec<Member>, git_store::Error> {
-    Ok(store
-        .list_items::<Member>(MEMBER_NS)?
+    Ok(component::list::<Member>(store)?
         .into_iter()
         .map(|(_id, member)| member)
         .collect())
@@ -321,7 +331,7 @@ pub fn load_all_indexed(repo: &Path) -> Result<iddqd::IdOrdMap<Member>, git_stor
 /// validity window is malformed or inverted — see [`Member::validate`].
 pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
     member.validate().map_err(git_store::Error::Invalid)?;
-    git_store::Store::open(repo)?.store_keyed(MEMBER_NS, member, "Update member")
+    component::store_keyed(&git_store::Store::open(repo)?, member, "Update member")
 }
 
 /// Drop every `revoked` fingerprint from `members`, returning the trust set the

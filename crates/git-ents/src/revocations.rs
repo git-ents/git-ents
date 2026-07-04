@@ -28,14 +28,18 @@ use std::path::Path;
 
 use facet::Facet;
 
+use crate::component;
+
 /// The ref whose tree holds the revocation list — the deny overlay on the trust
 /// set.
 pub const REVOKED_REF: &str = "refs/meta/revoked";
 
 /// A revoked key's on-disk body. The map key (its fingerprint) is its
-/// identity, so it is not duplicated inside the body.
+/// identity, so it is not duplicated inside the body. `pub` only because it
+/// is [`component::MapDocument::Body`] for [`Revocation`]; nothing outside
+/// this module constructs one directly.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct RevocationBody {
+pub struct RevocationBody {
     /// A free-text reason, or `""` when none was given.
     reason: String,
 }
@@ -49,31 +53,44 @@ pub struct Revocation {
     pub reason: String,
 }
 
-/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
-/// yields an empty list — nothing is revoked.
-pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
-    git_store::Store::open(repo)?.load_map(REVOKED_REF, |fingerprint, body: RevocationBody| {
+impl component::MapDocument for Revocation {
+    const REF: &'static str = REVOKED_REF;
+    type Body = RevocationBody;
+
+    fn compose(fingerprint: String, body: RevocationBody) -> Self {
         Revocation {
             fingerprint,
             reason: body.reason,
         }
-    })
+    }
+
+    fn decompose(&self) -> (&str, RevocationBody) {
+        (
+            &self.fingerprint,
+            RevocationBody {
+                reason: self.reason.clone(),
+            },
+        )
+    }
+}
+
+impl component::Component for Revocation {
+    const NOUN: &'static str = "revocation";
+    const PLURAL: &'static str = "revocations";
+}
+
+/// Load the revocations recorded at [`REVOKED_REF`] in `repo`. An absent ref
+/// yields an empty list — nothing is revoked.
+pub fn load(repo: &Path) -> Result<Vec<Revocation>, git_store::Error> {
+    component::load_map(&git_store::Store::open(repo)?)
 }
 
 /// Write `revocations` to [`REVOKED_REF`] in `repo`, replacing any existing
 /// list as a new commit.
 pub fn store(repo: &Path, revocations: &[Revocation]) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_map(
-        REVOKED_REF,
+    component::store_map(
+        &git_store::Store::open(repo)?,
         revocations,
-        |revocation| {
-            (
-                revocation.fingerprint.clone(),
-                RevocationBody {
-                    reason: revocation.reason.clone(),
-                },
-            )
-        },
         "Update revocations",
     )
 }

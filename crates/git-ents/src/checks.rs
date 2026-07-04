@@ -26,13 +26,17 @@ use std::path::Path;
 use facet::Facet;
 use gix::ObjectId;
 
+use crate::component;
+
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";
 
 /// A configured check's on-disk body. The map key (its name) is the check's
-/// identity, so it is not duplicated inside the body.
+/// identity, so it is not duplicated inside the body. `pub` only because it
+/// is [`component::MapDocument::Body`] for [`Check`]; nothing outside this
+/// module constructs one directly.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
-struct CheckBody {
+pub struct CheckBody {
     /// The shell command run for the check (e.g. `cargo fmt --check`), or
     /// `None` for a composite check that only aggregates its `depends`.
     command: Option<String>,
@@ -57,42 +61,53 @@ pub struct Check {
     pub depends: Vec<String>,
 }
 
+impl component::MapDocument for Check {
+    const REF: &'static str = CHECKS_REF;
+    type Body = CheckBody;
+
+    fn compose(name: String, body: CheckBody) -> Self {
+        Check {
+            name,
+            command: body.command,
+            image: body.image,
+            depends: body.depends.unwrap_or_default(),
+        }
+    }
+
+    fn decompose(&self) -> (&str, CheckBody) {
+        (
+            &self.name,
+            CheckBody {
+                command: self.command.clone(),
+                image: self.image.clone(),
+                depends: if self.depends.is_empty() {
+                    None
+                } else {
+                    Some(self.depends.clone())
+                },
+            },
+        )
+    }
+}
+
+impl component::Component for Check {
+    const NOUN: &'static str = "check";
+    const PLURAL: &'static str = "checks";
+}
+
 /// Load the configured checks recorded at [`CHECKS_REF`] in `repo`.
 ///
 /// An absent ref yields an empty set, as on a server whose check set has not
 /// been pushed yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no checks configured".
 pub fn load(repo: &Path) -> Result<Vec<Check>, git_store::Error> {
-    git_store::Store::open(repo)?.load_map(CHECKS_REF, |name, body: CheckBody| Check {
-        name,
-        command: body.command,
-        image: body.image,
-        depends: body.depends.unwrap_or_default(),
-    })
+    component::load_map(&git_store::Store::open(repo)?)
 }
 
 /// Write `checks` to [`CHECKS_REF`] in `repo`, replacing any existing set as a
 /// new commit.
 pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_map(
-        CHECKS_REF,
-        checks,
-        |check| {
-            (
-                check.name.clone(),
-                CheckBody {
-                    command: check.command.clone(),
-                    image: check.image.clone(),
-                    depends: if check.depends.is_empty() {
-                        None
-                    } else {
-                        Some(check.depends.clone())
-                    },
-                },
-            )
-        },
-        "Update checks",
-    )
+    component::store_map(&git_store::Store::open(repo)?, checks, "Update checks")
 }
 
 /// Validate `checks` as a static dependency graph and return them in an order

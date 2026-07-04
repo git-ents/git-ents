@@ -11,6 +11,8 @@ use std::path::Path;
 
 use facet::Facet;
 
+use crate::component;
+
 /// The ref whose tree holds the account profile, and whose mere presence marks a
 /// repository as an account repo.
 pub const ACCOUNT_REF: &str = "refs/meta/account";
@@ -29,16 +31,25 @@ pub struct Account {
     pub created_at: u64,
 }
 
+impl component::Document for Account {
+    const REF: &'static str = ACCOUNT_REF;
+}
+
+impl component::Component for Account {
+    const NOUN: &'static str = "account";
+    const PLURAL: &'static str = "account";
+}
+
 /// Load the account profile at [`ACCOUNT_REF`] in `repo`, or `None` when the
 /// ref is absent — i.e. when the repository is not an account repo.
 pub fn load(repo: &Path) -> Result<Option<Account>, git_store::Error> {
-    git_store::Store::open(repo)?.load::<Account>(ACCOUNT_REF)
+    component::load(&git_store::Store::open(repo)?)
 }
 
 /// Write `account` to [`ACCOUNT_REF`] in `repo`, replacing any existing value
 /// as a new commit.
 pub fn store(repo: &Path, account: &Account) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store(ACCOUNT_REF, account, "Update account")
+    component::store(&git_store::Store::open(repo)?, account, "Update account")
 }
 
 /// Whether `repo` is an account repo — whether it carries [`ACCOUNT_REF`].
