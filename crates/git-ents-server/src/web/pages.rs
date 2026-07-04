@@ -960,7 +960,7 @@ fn head_check_row(
             code.key { (check.name) }
             @match outcome {
                 None => span.muted { "no run yet" }
-                Some(outcome) if outcome.recording.is_some() => {
+                Some(outcome) if outcome.recording.is_some() || is_in_progress(outcome.status) => {
                     a href={ "/" (rel) "/checks/" (head) "/" (check.name) } { (outcome.status.to_string()) }
                 }
                 Some(outcome) => span.muted { (outcome.status.to_string()) }
@@ -969,45 +969,79 @@ fn head_check_row(
     }
 }
 
-/// One check's recorded terminal session on `commit`, replayed with
-/// `asciinema-player` — reached by clicking a linked status on the "Checks on
-/// HEAD" card. 404s when `commit` has no run recorded, `name` is not among its
-/// results, or that outcome carries no recording (an older run, from before
-/// recording landed, or a check that errored before a pty was allocated).
+/// Whether `status` is still on its way to a terminal outcome — the check has
+/// no recording yet, but its run page has a live view worth linking to.
+fn is_in_progress(status: git_ents::checks::Status) -> bool {
+    matches!(
+        status,
+        git_ents::checks::Status::Queued | git_ents::checks::Status::Running
+    )
+}
+
+/// Find `name`'s outcome in `commit`'s latest recorded run, or `None` when
+/// `commit` has no run, or no result under that name.
+async fn latest_outcome(
+    repo: &Path,
+    commit_oid: ObjectId,
+    name: &str,
+) -> Option<git_ents::checks::RunOutcome> {
+    load_runs(repo)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|commit_runs| commit_runs.commit == commit_oid)
+        .and_then(|commit_runs| commit_runs.runs.into_iter().next())
+        .and_then(|run| run.results.into_iter().find(|result| result.name == name))
+}
+
+/// One check's terminal session on `commit` — reached by clicking a linked
+/// status on the "Checks on HEAD" card. While the check is still `queued` or
+/// `running` this is a live view, polling [`check_live_fragment`] until the
+/// check settles; once it has, it replays the finished recording with
+/// `asciinema-player`, or reports the exit code plain when there was no
+/// output to replay. 404s when `commit` has no run recorded or `name` is not
+/// among its results.
 pub(super) async fn check_recording_page(
     repo: &Path,
     meta: &RepoMeta,
     commit: &str,
     name: &str,
+    live_runs: &crate::checks::LiveRegistry,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
         return not_found().into_response();
     };
-    let runs = load_runs(repo).await;
-    let recording = runs.ok().and_then(|commits| {
-        commits
-            .into_iter()
-            .find(|commit_runs| commit_runs.commit == commit_oid)
-            .and_then(|commit_runs| commit_runs.runs.into_iter().next())
-            .and_then(|run| run.results.into_iter().find(|result| result.name == name))
-            .and_then(|outcome| outcome.recording)
-    });
-    let Some(recording) = recording else {
+    let Some(outcome) = latest_outcome(repo, commit_oid, name).await else {
         return not_found().into_response();
     };
     let short_commit = commit.get(..8).unwrap_or(commit);
-    let body = if crate::asciidoc::recording_has_no_output(&recording) {
+    let rel = &meta.rel;
+
+    let body = if is_in_progress(outcome.status) {
+        let key = (repo.to_owned(), commit_oid, name.to_owned());
+        let fragment_url = format!("/{rel}/checks/{commit}/{name}/live");
+        let initial = live_fragment_body(crate::checks::live_snapshot(live_runs, &key));
         html! {
-            p.muted { "This check produced no terminal output." }
+            p.shell-note {
+                "This check is still " (outcome.status.to_string()) "; the view below updates live."
+            }
+            style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
+            div #live-terminal data-live-check=(fragment_url) { (initial) }
+        }
+    } else if let Some(recording) = &outcome.recording {
+        if crate::asciidoc::recording_has_no_output(recording) {
+            html! { (no_output_notice(&outcome)) }
+        } else {
+            let Some(player) = crate::asciidoc::render_recording(recording) else {
+                return not_found().into_response();
+            };
+            html! {
+                style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
+                (PreEscaped(player))
+            }
         }
     } else {
-        let Some(player) = crate::asciidoc::render_recording(&recording) else {
-            return not_found().into_response();
-        };
-        html! {
-            style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
-            (PreEscaped(player))
-        }
+        return not_found().into_response();
     };
     repo_shell(
         meta,
@@ -1021,6 +1055,58 @@ pub(super) async fn check_recording_page(
         },
     )
     .into_response()
+}
+
+/// The best-possible-UX fallback for a settled check that produced no
+/// terminal output: its exit code when the command actually ran, or just its
+/// status when it didn't (a composite, or an infra failure before any command
+/// started).
+fn no_output_notice(outcome: &git_ents::checks::RunOutcome) -> Markup {
+    html! {
+        @match outcome.exit_code {
+            Some(code) => p.muted { "Check finished with exit code " code { (code) } " without output." }
+            None => p.muted { "This check produced no terminal output." }
+        }
+    }
+}
+
+/// The live-terminal container's inner markup for one poll: the check's
+/// current screen, rendered as a static snapshot (see
+/// [`asciidoc::render_live`](crate::asciidoc::render_live)), or a placeholder
+/// while output has yet to arrive.
+fn live_fragment_body(recording: Option<String>) -> Markup {
+    let rendered = recording
+        .filter(|recording| !crate::asciidoc::recording_has_no_output(recording))
+        .and_then(|recording| crate::asciidoc::render_live(&recording));
+    match rendered {
+        Some(player) => html! { (PreEscaped(player)) },
+        None => html! { p.muted { "Waiting for output…" } },
+    }
+}
+
+/// One poll of a running check's live output — the fragment [`LIVE_SCRIPT`]
+/// swaps into the run page's `#live-terminal` container. Signals completion
+/// (the check no longer has a live buffer: it settled, or was never queued)
+/// via the `X-Check-Live: done` response header rather than the body, so the
+/// script can tell a finished check apart from one that simply has no output
+/// yet.
+///
+/// [`LIVE_SCRIPT`]: super::assets::LIVE_SCRIPT
+pub(super) async fn check_live_fragment(
+    repo: &Path,
+    commit: &str,
+    name: &str,
+    live_runs: &crate::checks::LiveRegistry,
+) -> Response {
+    let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
+        return not_found().into_response();
+    };
+    let key = (repo.to_owned(), commit_oid, name.to_owned());
+    let recording = crate::checks::live_snapshot(live_runs, &key);
+    let done = recording.is_none();
+    let body = live_fragment_body(recording).into_string();
+    let header = if done { "done" } else { "running" };
+    ([("x-check-live", header)], body).into_response()
 }
 
 /// Load the configured check set off the async runtime, since `checks::load`

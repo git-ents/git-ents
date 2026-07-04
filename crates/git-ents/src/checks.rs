@@ -225,6 +225,10 @@ struct Outcome {
     /// The check's terminal session, captured as asciicast v2 (JSONL) text,
     /// when the runner recorded one.
     recording: Option<String>,
+    /// The command's process exit code, when the check ran to completion
+    /// rather than erroring out before or during execution (an unreachable
+    /// sandbox, a timeout).
+    exit_code: Option<i32>,
 }
 
 /// One check's outcome within a [`Run`], assembled from its map key and
@@ -240,6 +244,10 @@ pub struct RunOutcome {
     /// The check's terminal session, captured as asciicast v2 (JSONL) text,
     /// when the runner recorded one.
     pub recording: Option<String>,
+    /// The command's process exit code, when the check ran to completion
+    /// rather than erroring out before or during execution (an unreachable
+    /// sandbox, a timeout).
+    pub exit_code: Option<i32>,
 }
 
 /// One recorded execution of the check set against a commit.
@@ -341,6 +349,7 @@ fn outcome_split(outcome: &RunOutcome) -> (String, Outcome) {
             status: outcome.status,
             duration_secs: outcome.duration_secs,
             recording: outcome.recording.clone(),
+            exit_code: outcome.exit_code,
         },
     )
 }
@@ -352,6 +361,7 @@ fn assemble_outcome(name: String, outcome: Outcome) -> RunOutcome {
         status: outcome.status,
         duration_secs: outcome.duration_secs,
         recording: outcome.recording,
+        exit_code: outcome.exit_code,
     }
 }
 
@@ -483,6 +493,7 @@ mod tests {
             status,
             duration_secs: None,
             recording: None,
+            exit_code: None,
         }
     }
 
@@ -545,6 +556,7 @@ mod tests {
             status: Status::Pass,
             duration_secs: Some(12),
             recording: Some("{\"version\": 2}\n[0.5, \"o\", \"hi\\r\\n\"]\n".to_owned()),
+            exit_code: Some(0),
         };
         record(&repo, commit, std::slice::from_ref(&rich)).unwrap();
         let commits = runs(&repo).unwrap();

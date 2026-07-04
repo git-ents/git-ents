@@ -26,8 +26,8 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use git_ents::checks::{self, Check, RunOutcome, Status};
@@ -37,6 +37,55 @@ use tokio::sync::Mutex;
 
 /// Where the pushed tree is unpacked inside the Sprite.
 const WORKDIR: &str = "/work";
+
+/// A currently-running check's growing asciicast v2 recording, keyed by the
+/// repository, the commit being checked, and the check's name.
+pub(crate) type LiveKey = (PathBuf, ObjectId, String);
+
+/// Live buffers for every check currently running, shared between the worker
+/// thread appending to a check's output as it arrives and the web layer
+/// polling it for a live view. A buffer exists only while its check is
+/// running — [`live_start`] adds it, [`live_finish`] removes it once the
+/// result is recorded — so a lookup miss unambiguously means "not running"
+/// rather than "running with no output yet". Asciicast is the definitive log
+/// format end to end: the same string a live poll reads is, unmodified,
+/// what [`run_one`] hands back as the check's recorded `recording`.
+pub(crate) type LiveRegistry = Arc<StdMutex<HashMap<LiveKey, Arc<StdMutex<String>>>>>;
+
+/// A fresh, empty [`LiveRegistry`] — one per server process, held on
+/// [`crate::AppState`].
+pub(crate) fn new_live_registry() -> LiveRegistry {
+    Arc::new(StdMutex::new(HashMap::new()))
+}
+
+/// The text accumulated so far for a running check's live buffer, or `None`
+/// when no check is running under `key` (finished, or never started).
+pub(crate) fn live_snapshot(registry: &LiveRegistry, key: &LiveKey) -> Option<String> {
+    let buffer = lock(registry).get(key).cloned()?;
+    Some(lock(&buffer).clone())
+}
+
+/// Register a fresh live buffer for `key`, returning the handle [`run_one`]
+/// appends to as the check's output arrives.
+fn live_start(registry: &LiveRegistry, key: LiveKey) -> Arc<StdMutex<String>> {
+    let buffer = Arc::new(StdMutex::new(String::new()));
+    lock(registry).insert(key, Arc::clone(&buffer));
+    buffer
+}
+
+/// Remove `key`'s live buffer once its check has settled — recorded results
+/// are read from the run ref from then on, not the live registry.
+fn live_finish(registry: &LiveRegistry, key: &LiveKey) {
+    lock(registry).remove(key);
+}
+
+/// Lock a [`StdMutex`], recovering the guard from a poisoned lock rather than
+/// panicking: a live buffer is best-effort output for a browser to look at,
+/// not something worth tearing the process down over if a prior panic
+/// poisoned it.
+fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// The environment variable through which the server hands the hook the queue
 /// directory; the worker is given the same path directly.
@@ -106,6 +155,7 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
             status,
             duration_secs: None,
             recording: None,
+            exit_code: None,
         })
         .collect()
 }
@@ -121,7 +171,7 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
 /// every other repository's checks; isolating them by repository keeps a slow
 /// repository's backlog from blocking the rest. Jobs for *one* repository stay
 /// serialized so concurrent runs never collide in its single Sprite.
-pub async fn worker(queue: PathBuf) {
+pub async fn worker(queue: PathBuf, live: LiveRegistry) {
     if let Err(e) = std::fs::create_dir_all(&queue) {
         eprintln!("checks: could not create queue directory {queue:?}: {e}");
         return;
@@ -138,7 +188,8 @@ pub async fn worker(queue: PathBuf) {
                 continue;
             }
             let inflight = Arc::clone(&inflight);
-            let handle = tokio::task::spawn_blocking(move || drain_repo(&jobs));
+            let live = live.clone();
+            let handle = tokio::task::spawn_blocking(move || drain_repo(&jobs, &live));
             tokio::spawn(async move {
                 let _done = handle.await;
                 inflight.lock().await.remove(&repo);
@@ -175,9 +226,9 @@ fn pending_jobs(queue: &Path) -> HashMap<PathBuf, Vec<(PathBuf, Job)>> {
 
 /// Drain one repository's queued jobs in order, deleting each job file after it
 /// is handled (whether it ran cleanly or failed) so it is never retried.
-fn drain_repo(jobs: &[(PathBuf, Job)]) {
+fn drain_repo(jobs: &[(PathBuf, Job)], live: &LiveRegistry) {
     for (path, job) in jobs {
-        if let Err(e) = process_job(job) {
+        if let Err(e) = process_job(job, live) {
             eprintln!("checks: {e}");
         }
         let _removed = std::fs::remove_file(path);
@@ -194,7 +245,7 @@ fn drain_repo(jobs: &[(PathBuf, Job)]) {
 /// re-validation) finalizes the run as `error` rather than leaving it stuck at
 /// `running`, then returns `Err`. Returns `Ok` even when a check fails — a
 /// failing check is a recorded result, not an error.
-fn process_job(job: &Job) -> Result<(), String> {
+fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     let runnable = checks::load(&job.repo).map_err(|e| format!("could not read checks: {e}"))?;
     if runnable.is_empty() {
         return Ok(());
@@ -249,11 +300,15 @@ fn process_job(job: &Job) -> Result<(), String> {
         let all_pass = deps.iter().all(|status| *status == Status::Pass);
         match &check.command {
             Some(command) if all_pass => {
-                let result = run_one(&sprite, &check.name, command);
+                let key: LiveKey = (job.repo.clone(), job.new, check.name.clone());
+                let buffer = live_start(live, key.clone());
+                let result = run_one(&sprite, &check.name, command, &buffer);
+                live_finish(live, &key);
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = result.status;
                     outcome.duration_secs = Some(result.duration_secs);
                     outcome.recording = Some(result.recording);
+                    outcome.exit_code = result.exit_code;
                 }
             }
             Some(_) => {
@@ -500,26 +555,34 @@ const CHECK_PTY_SIZE: PtySize = PtySize {
     pixel_height: 0,
 };
 
-/// A finished check run: its outcome, wall-clock duration, and full terminal
-/// session as an asciicast v2 recording.
+/// A finished check run: its outcome, wall-clock duration, process exit code
+/// (when the command ran to completion), and the full terminal session as an
+/// asciicast v2 recording.
 struct RunResult {
     status: Status,
     duration_secs: u64,
     recording: String,
+    exit_code: Option<i32>,
 }
 
 /// Run one check in the Sprite's [`WORKDIR`], recording its terminal session —
 /// a real pty (`sprite exec --tty`), not a pipe, so the recording plays back
 /// exactly what a developer running the check by hand would see — and logging
-/// a `PASS`/`FAIL` line. Returns its outcome; a check that exceeds
-/// [`CHECK_TIMEOUT`] or cannot be captured is [`Status::Error`].
-fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
+/// a `PASS`/`FAIL` line. `live` is appended to as output arrives, in the same
+/// asciicast v2 format as the final recording, so a browser can poll it for a
+/// live view of a check still in progress; it is what [`finish`] hands back
+/// as the recorded `recording`, not a separate representation of the same
+/// output. Returns the check's outcome; a check that exceeds [`CHECK_TIMEOUT`]
+/// or cannot be captured is [`Status::Error`].
+fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>) -> RunResult {
     let start = Instant::now();
+    lock(live).push_str(&asciicast_header());
+
     let pair = match native_pty_system().openpty(CHECK_PTY_SIZE) {
         Ok(pair) => pair,
         Err(e) => {
             eprintln!("checks: ERROR {name} (could not allocate a pty: {e})");
-            return finish(Status::Error, start, &[]);
+            return finish(Status::Error, start, None, live);
         }
     };
     let mut cmd = CommandBuilder::new("sprite");
@@ -530,7 +593,7 @@ fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
         Ok(child) => child,
         Err(e) => {
             eprintln!("checks: ERROR {name} (could not run: {e})");
-            return finish(Status::Error, start, &[]);
+            return finish(Status::Error, start, None, live);
         }
     };
     // The child holds the slave now; drop ours so the master sees EOF when the
@@ -541,7 +604,7 @@ fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
     let Ok(mut reader) = master.try_clone_reader() else {
         eprintln!("checks: ERROR {name} (could not read the pty)");
         let _killed = child.kill();
-        return finish(Status::Error, start, &[]);
+        return finish(Status::Error, start, None, live);
     };
 
     // The pty's `Read` is blocking, so it gets its own thread; the main thread
@@ -563,17 +626,17 @@ fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
         }
     });
 
-    let mut events: Vec<(f64, String)> = Vec::new();
     let deadline = start.checked_add(CHECK_TIMEOUT).unwrap_or(start);
     let timed_out = loop {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break true;
         };
         match rx.recv_timeout(remaining) {
-            Ok(chunk) => events.push((
-                start.elapsed().as_secs_f64(),
-                String::from_utf8_lossy(&chunk).into_owned(),
-            )),
+            Ok(chunk) => {
+                let elapsed = start.elapsed().as_secs_f64();
+                let data = String::from_utf8_lossy(&chunk);
+                push_event(&mut lock(live), elapsed, &data);
+            }
             Err(RecvTimeoutError::Timeout) => break true,
             Err(RecvTimeoutError::Disconnected) => break false,
         }
@@ -583,55 +646,63 @@ fn run_one(sprite: &str, name: &str, command: &str) -> RunResult {
     if timed_out {
         eprintln!("checks: ERROR {name} (timed out after {CHECK_TIMEOUT:?})");
         let _killed = child.kill();
-        return finish(Status::Error, start, &events);
+        return finish(Status::Error, start, None, live);
     }
 
     let status = match child.wait() {
         Ok(status) => status,
         Err(e) => {
             eprintln!("checks: ERROR {name} (could not wait on the sprite CLI: {e})");
-            return finish(Status::Error, start, &events);
+            return finish(Status::Error, start, None, live);
         }
     };
 
+    let exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
     if status.success() {
         eprintln!("checks: PASS {name}");
-        finish(Status::Pass, start, &events)
+        finish(Status::Pass, start, exit_code, live)
     } else {
         eprintln!("checks: FAIL {name} ({command})");
-        finish(Status::Fail, start, &events)
+        finish(Status::Fail, start, exit_code, live)
     }
 }
 
-/// Assemble a [`RunResult`] from `events` captured so far — used on every exit
-/// path, including the failure ones, so a check that errors out still keeps
-/// whatever terminal output it produced before that happened.
-fn finish(status: Status, start: Instant, events: &[(f64, String)]) -> RunResult {
+/// Assemble a [`RunResult`] from `live`'s accumulated recording — used on
+/// every exit path, including the failure ones, so a check that errors out
+/// still keeps whatever terminal output it produced before that happened.
+fn finish(
+    status: Status,
+    start: Instant,
+    exit_code: Option<i32>,
+    live: &StdMutex<String>,
+) -> RunResult {
     RunResult {
         status,
         duration_secs: start.elapsed().as_secs(),
-        recording: asciicast(events),
+        recording: lock(live).clone(),
+        exit_code,
     }
 }
 
-/// Render `events` (elapsed-seconds, output chunk) pairs captured from a
-/// check's pty as an asciicast v2 recording: a header line naming the
-/// terminal's fixed [`CHECK_PTY_SIZE`], then one `[time, "o", data]` output
-/// event per line — the format the Checks tab's `asciinema-player` replay
-/// expects (<https://docs.asciinema.org/manual/asciicast/v2/>).
-fn asciicast(events: &[(f64, String)]) -> String {
-    let mut out = format!(
+/// The asciicast v2 header line naming the terminal's fixed [`CHECK_PTY_SIZE`]
+/// — the first line of every check recording, live or finished (see
+/// <https://docs.asciinema.org/manual/asciicast/v2/>).
+fn asciicast_header() -> String {
+    format!(
         "{{\"version\": 2, \"width\": {}, \"height\": {}}}\n",
         CHECK_PTY_SIZE.cols, CHECK_PTY_SIZE.rows
-    );
-    for (time, data) in events {
-        out.push('[');
-        out.push_str(&format!("{time:.6}"));
-        out.push_str(", \"o\", ");
-        push_json_string(data, &mut out);
-        out.push_str("]\n");
-    }
-    out
+    )
+}
+
+/// Append one asciicast v2 `[time, "o", data]` output event to `out`, the
+/// Checks tab's replay format for a chunk of pty output captured `time`
+/// seconds into the run.
+fn push_event(out: &mut String, time: f64, data: &str) {
+    out.push('[');
+    out.push_str(&format!("{time:.6}"));
+    out.push_str(", \"o\", ");
+    push_json_string(data, out);
+    out.push_str("]\n");
 }
 
 /// Append `value` to `out` as a quoted JSON string. Hand-rolled rather than

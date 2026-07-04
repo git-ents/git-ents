@@ -575,6 +575,7 @@ mod tests {
             sessions: crate::web::new_sessions(),
             challenges: crate::web::new_challenges(),
             web_signing_key: None,
+            live_runs: crate::checks::new_live_registry(),
         }
     }
 

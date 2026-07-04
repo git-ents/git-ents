@@ -11,3 +11,7 @@ pub(super) const STYLE: &str = include_str!("style.css");
 
 /// Clipboard handler for the clone-URL copy button.
 pub(super) const COPY_SCRIPT: &str = include_str!("copy.js");
+
+/// Polls a running check's live-output fragment and swaps it in, reloading the
+/// page once the server reports the check has finished.
+pub(super) const LIVE_SCRIPT: &str = include_str!("live.js");

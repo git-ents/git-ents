@@ -98,6 +98,9 @@ pub(crate) struct AppState {
     /// The server's own signing key for browser-made edits; `None` disables
     /// editing.
     pub(crate) web_signing_key: Option<PathBuf>,
+    /// Live output for checks the worker currently has running, polled by the
+    /// Checks tab's live view.
+    pub(crate) live_runs: checks::LiveRegistry,
 }
 
 fn main() -> ExitCode {
@@ -152,10 +155,14 @@ async fn serve(args: Args) -> ExitCode {
         sessions: web::new_sessions(),
         challenges: web::new_challenges(),
         web_signing_key: args.web_signing_key,
+        live_runs: checks::new_live_registry(),
     };
 
     // Drain queued pushes and run their checks for the life of the server.
-    tokio::spawn(checks::worker(state.checks_queue.clone()));
+    tokio::spawn(checks::worker(
+        state.checks_queue.clone(),
+        state.live_runs.clone(),
+    ));
 
     // The git smart-HTTP protocol streams whole packfiles through the request
     // body, so the default 2 MiB cap would reject any non-trivial push.

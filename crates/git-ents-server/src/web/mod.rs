@@ -42,7 +42,7 @@ pub(super) struct Auth {
     csrf: String,
 }
 
-use self::assets::{COPY_SCRIPT, FONTS, STYLE};
+use self::assets::{COPY_SCRIPT, FONTS, LIVE_SCRIPT, STYLE};
 use self::git::{discover_repos, git_output};
 use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, icon_search};
 
@@ -77,7 +77,16 @@ pub(crate) async fn render(
     }
 
     if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
-        return route(&repo, &rel, rest, host, session, editing_enabled(state)).await;
+        return route(
+            &repo,
+            &rel,
+            rest,
+            host,
+            session,
+            editing_enabled(state),
+            &state.live_runs,
+        )
+        .await;
     }
 
     not_found().into_response()
@@ -375,6 +384,7 @@ async fn route(
     host: Option<&str>,
     session: Option<write::SessionSnapshot>,
     editing: bool,
+    live_runs: &crate::checks::LiveRegistry,
 ) -> Response {
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {
@@ -412,7 +422,10 @@ async fn route(
         Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
         Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
         Some((&"checks", &[commit, name])) => {
-            pages::check_recording_page(repo, &meta, commit, name).await
+            pages::check_recording_page(repo, &meta, commit, name, live_runs).await
+        }
+        Some((&"checks", &[commit, name, "live"])) => {
+            pages::check_live_fragment(repo, commit, name, live_runs).await
         }
         Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
         Some((&"settings", &[])) => {
@@ -762,6 +775,7 @@ fn page(title: &str, body: Markup) -> Markup {
                     }
                 }
                 script { (PreEscaped(COPY_SCRIPT)) }
+                script { (PreEscaped(LIVE_SCRIPT)) }
             }
         }
     }

@@ -82,6 +82,93 @@ pub(crate) fn recording_has_no_output(recording: &str) -> bool {
     recording.lines().skip(1).all(|line| line.trim().is_empty())
 }
 
+/// Render the *current* screen of an in-progress asciicast v2 recording as a
+/// static terminal snapshot via acdc's plain `[terminal]` block (no replay
+/// scrubber — a running check has no fixed timeline yet, just a screen that
+/// keeps changing), or `None` if it cannot be parsed or converted. The
+/// asciicast recording stays the single source of truth for the check's
+/// output; this only reconstitutes the raw bytes acdc's terminal emulator
+/// needs; unlike [`render_recording`], it does not go through acdc's asciicast
+/// parser, since that produces a scrubbable timeline rather than one snapshot.
+pub(crate) fn render_live(recording: &str) -> Option<String> {
+    let ansi = extract_output(recording);
+    let source = format!("[terminal]\n----\n{ansi}\n----\n");
+    let parsed = acdc_parser::parse(&source, &ParseOptions::default()).ok()?;
+    let doc = parsed.document();
+    let processor = Processor::new(ConvertOptions::default(), doc.attributes.clone());
+    let options = RenderOptions {
+        embedded: true,
+        ..RenderOptions::default()
+    };
+    let mut output = Vec::new();
+    let source = WarningSource::new("html").with_variant("live-recording");
+    let mut warnings = Vec::new();
+    let mut diagnostics = Diagnostics::new(&source, &mut warnings);
+    processor
+        .convert_to_writer(doc, &mut output, &options, &mut diagnostics)
+        .ok()?;
+    for warning in &warnings {
+        eprintln!("live check recording render: {warning}");
+    }
+    String::from_utf8(output).ok()
+}
+
+/// Concatenate every `[time, "o", data]` event's `data` field out of an
+/// asciicast v2 recording, in order, undoing the JSON escaping the checks
+/// worker applies when it writes them — the raw terminal bytes underneath the
+/// recording, for feeding to a *static* terminal renderer (see
+/// [`render_live`]). The finished-recording path doesn't need this: acdc's own
+/// asciicast parser (used by [`render_recording`]) reads the format natively.
+fn extract_output(recording: &str) -> String {
+    let mut out = String::new();
+    for line in recording.lines().skip(1) {
+        if let Some(data) = event_data(line) {
+            out.push_str(&data);
+        }
+    }
+    out
+}
+
+/// Extract and unescape the `data` field of one `[time, "o", "data"]` event
+/// line, or `None` if the line does not look like one.
+fn event_data(line: &str) -> Option<String> {
+    const MARKER: &str = "\"o\", \"";
+    let start = line.find(MARKER)?.checked_add(MARKER.len())?;
+    let rest = line.get(start..)?;
+    let end = rest.rfind("\"]")?;
+    Some(unescape_json_string(rest.get(..end)?))
+}
+
+/// The inverse of the checks worker's hand-rolled JSON string escaping:
+/// unescape `"`, `\`, the recognized single-character escapes, and `\uXXXX`
+/// control-code escapes, passing everything else through unchanged.
+fn unescape_json_string(escaped: &str) -> String {
+    let mut out = String::with_capacity(escaped.len());
+    let mut chars = escaped.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
 /// Render an asciicast v2/v3 `recording` as a replayable terminal session via
 /// acdc's `[terminal%replay]` block, or `None` if it cannot be parsed or
 /// converted. Wraps `recording` in a listing block, so a recording containing
