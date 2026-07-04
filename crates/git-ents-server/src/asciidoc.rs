@@ -74,12 +74,15 @@ pub(crate) const TERMINAL_VIEW_CSS: &str = "\
 .terminal-view__row{white-space:pre;min-height:1.2em}
 ";
 
-/// Whether an asciicast v2/v3 `recording` has no output events beyond its
-/// header line — e.g. a check that passed without printing anything. acdc's
-/// replay player renders this as a bare empty box with no explanation, so
-/// callers should check this first and show their own message instead.
+/// Whether an asciicast v2/v3 `recording` decodes to no visible terminal
+/// output — e.g. a check that passed without printing anything beyond a
+/// trailing newline. acdc's replay player renders this as a bare empty box
+/// with no explanation, so callers should check this first and show their
+/// own message instead. Checking the decoded bytes rather than the raw JSONL
+/// lines matters: an output event carrying just `"\n"` is a non-empty JSON
+/// line but has nothing worth showing.
 pub(crate) fn recording_has_no_output(recording: &str) -> bool {
-    recording.lines().skip(1).all(|line| line.trim().is_empty())
+    extract_output(recording).trim().is_empty()
 }
 
 /// Render the *current* screen of an in-progress asciicast v2 recording as a
