@@ -13,6 +13,7 @@
 
 mod debug_session;
 mod interactive;
+mod registry;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -230,22 +231,38 @@ enum ChecksAction {
 #[repr(u8)]
 enum ToolchainAction {
     /// Import a local directory as toolchain `name` on a remote and push it.
-    /// Prompts for any field left unset when run at an interactive terminal.
+    /// Prompts for any field left unset when run at an interactive terminal,
+    /// unless `--from` supplies it via a recipe.
     Import {
         /// Name to record the toolchain under (`toolchains/<name>`).
         #[facet(args::positional, default)]
         name: Option<String>,
         /// Directory of executables to import, activated on `PATH` when a
-        /// check requests this toolchain.
+        /// check requests this toolchain. Not needed with `--from`.
         #[facet(args::positional, default)]
         bin: Option<String>,
         /// Directory of source to import alongside `bin`, if any — kept for
         /// provenance, never activated on `PATH`.
         #[facet(args::named)]
         src: Option<String>,
-        /// License covering `bin` (and `src`, if given).
+        /// SPDX license expression covering `bin` (and `src`, if given).
         #[facet(args::named, default)]
         license: Option<String>,
+        /// Semver version of the toolchain being imported.
+        #[facet(args::named, default)]
+        version: Option<String>,
+        /// Target triple the toolchain runs on (`x86_64-unknown-linux-gnu`,
+        /// ...).
+        #[facet(args::named, default)]
+        platform: Option<String>,
+        /// Recipe to derive `bin`/`src`/`license`/`version`/`platform` from
+        /// instead of supplying them by hand (currently only `rustup`).
+        #[facet(args::named)]
+        from: Option<String>,
+        /// Recipe-specific selector (for `--from rustup`, the toolchain
+        /// name `rustup` itself knows, e.g. `stable`; defaults to `stable`).
+        #[facet(args::named)]
+        spec: Option<String>,
     },
     /// List the toolchains configured on a remote.
     List,
@@ -460,7 +477,13 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
             bin,
             src,
             license,
-        } => toolchain_import(name, bin, src, license, remote),
+            version,
+            platform,
+            from,
+            spec,
+        } => toolchain_import(
+            name, bin, src, license, version, platform, from, spec, remote,
+        ),
         ToolchainAction::List => toolchain_list(remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
         ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
@@ -469,18 +492,54 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
 
 /// Import `bin`'s (and, optionally, `src`'s) contents as toolchain `name` on
 /// `remote` and push it. Prompts for any field left unset when run at an
-/// interactive terminal.
+/// interactive terminal, unless `from` names a recipe (`registry::resolve`)
+/// to derive `bin`/`src`/`license`/`version`/`platform` from instead;
+/// explicit flags still win over a recipe's values.
+#[expect(clippy::too_many_arguments, reason = "one flag per import field")]
 fn toolchain_import(
     name: Option<String>,
     bin: Option<String>,
     src: Option<String>,
     license: Option<String>,
+    version: Option<String>,
+    platform: Option<String>,
+    from: Option<String>,
+    spec: Option<String>,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Toolchain name")?;
-    let bin = interactive::text_or(bin, "Directory of executables to import")?;
-    let src = interactive::optional_text_or(src, "Directory of source to import (optional)")?;
-    let license = interactive::text_or(license, "License")?;
+
+    let recipe = from
+        .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable")))
+        .transpose()?;
+
+    let bin = match bin.or_else(|| recipe.as_ref().map(|r| r.bin.display().to_string())) {
+        Some(bin) => bin,
+        None => interactive::text_or(None, "Directory of executables to import")?,
+    };
+    let src = src.or_else(|| {
+        recipe
+            .as_ref()
+            .and_then(|r| r.src.as_ref().map(|s| s.display().to_string()))
+    });
+    let src = if src.is_some() {
+        src
+    } else {
+        interactive::optional_text_or(None, "Directory of source to import (optional)")?
+    };
+    let license = match license.or_else(|| recipe.as_ref().map(|r| r.license.clone())) {
+        Some(license) => license,
+        None => interactive::text_or(None, "License (SPDX expression)")?,
+    };
+    let version = match version.or_else(|| recipe.as_ref().map(|r| r.version.clone())) {
+        Some(version) => version,
+        None => interactive::text_or(None, "Version (semver)")?,
+    };
+    let platform = match platform.or_else(|| recipe.as_ref().map(|r| r.platform.clone())) {
+        Some(platform) => platform,
+        None => interactive::text_or(None, "Platform (target triple)")?,
+    };
+
     let refname = format!("{TOOLCHAINS_NS}/{name}");
     let expected = sync(remote, &refname)?;
     let repo = repo()?;
@@ -490,6 +549,8 @@ fn toolchain_import(
         Path::new(&bin),
         src.as_deref().map(Path::new),
         &license,
+        &version,
+        &platform,
     )
     .map_err(|error| error.to_string())?;
     push_signed(remote, &refname, expected.as_deref())?;
@@ -497,7 +558,8 @@ fn toolchain_import(
     Ok(())
 }
 
-/// Print every toolchain configured on `remote` as `<name>  <bin>  <license>`.
+/// Print every toolchain configured on `remote` as
+/// `<name>  <bin>  <version>  <platform>  <license>`.
 fn toolchain_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, TOOLCHAINS_NS)?;
@@ -508,8 +570,10 @@ fn toolchain_list(remote: &str) -> Result<(), String> {
     }
     for (name, toolchain) in toolchains {
         println!(
-            "{name}  {}  {}",
+            "{name}  {}  {}  {}  {}",
             short_id(&toolchain.bin.oid().to_string()),
+            toolchain.version,
+            toolchain.platform,
             toolchain.license
         );
     }
@@ -525,8 +589,8 @@ fn toolchain_export(name: &str, dest: &str, remote: &str) -> Result<(), String> 
     let toolchain =
         git_toolchain::export(&repo, name, Path::new(dest)).map_err(|error| error.to_string())?;
     println!(
-        "exported toolchain {name} to {dest} (license: {})",
-        toolchain.license
+        "exported toolchain {name} to {dest} (version: {}, platform: {}, license: {})",
+        toolchain.version, toolchain.platform, toolchain.license
     );
     Ok(())
 }

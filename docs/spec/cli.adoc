@@ -69,14 +69,22 @@ before proceeding, since it can lock the operator out of the remote.
 The CLI MUST provide, under `git ents toolchain`:
 
 * `import` — write a local `bin` directory (and, optionally, a `src`
-  directory) plus a license to `refs/meta/toolchains/<name>` on a remote and
-  push it, creating the ref when absent. `bin` MUST be non-empty and
-  `license` MUST be non-empty.
+  directory) plus a license, version, and platform to
+  `refs/meta/toolchains/<name>` on a remote and push it, creating the ref
+  when absent. `bin` MUST be non-empty; `license` MUST be a valid SPDX
+  license expression; `version` MUST be a valid semver version; `platform`
+  MUST be a valid target triple.
+* `import --from <recipe>` — derive `bin`/`src`/`license`/`version`/
+  `platform` from a local toolchain install instead of supplying them by
+  hand, via a named recipe (currently only `rustup`, selected further by
+  `--spec <name>`, e.g. `stable`); any of the fields also passed explicitly
+  override the recipe's value.
 * `list` — render every toolchain configured on a remote with its `bin`
-  tree id and license.
+  tree id, version, platform, and license.
 * `export` — recreate a remote's named toolchain's `bin` (and `src`, if
   present) under a local destination directory, restoring the executable bit
-  and symlinks, and print the license; read-only, per <<cli.remote-admin>>.
+  and symlinks, and print the version, platform, and license; read-only, per
+  <<cli.remote-admin>>.
 * `remove` — delete the toolchain's ref on a remote.
 --
 

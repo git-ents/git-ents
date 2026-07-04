@@ -24,6 +24,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::str::FromStr as _;
 
 use facet::Facet;
 use facet_git_tree::RawTree;
@@ -39,12 +40,18 @@ use gix::objs::{FindExt as _, Tree, Write as _};
 pub const TOOLCHAINS_NS: &str = "refs/meta/toolchains";
 
 /// A toolchain: an executable `bin` directory, an optional `src` directory,
-/// and the license covering them — the document stored at the tip of
-/// `refs/meta/toolchains/<name>`.
+/// its license, version, and target platform — the document stored at the
+/// tip of `refs/meta/toolchains/<name>`.
 ///
 /// `bin` and `src` are [`RawTree`]: each is captured as a single opaque git
 /// tree by [`import`], not walked field-by-field, since a toolchain's
 /// on-disk layout has no fixed shape for `Facet` to model.
+///
+/// `license`, `version`, and `platform` are stored as plain strings — like
+/// `license` before them, `version` and `platform` are validated against a
+/// real parser (`semver`, `target-lexicon`) at [`import`] time rather than
+/// carried as a parsed type, since nothing downstream needs more than the
+/// canonical string back.
 #[derive(Debug, Clone, PartialEq, Facet)]
 pub struct Toolchain {
     /// The toolchain's executables, activated on `PATH` when a check
@@ -53,8 +60,16 @@ pub struct Toolchain {
     /// The toolchain's source, if imported — not activated on `PATH`, kept
     /// only for provenance.
     pub src: Option<RawTree>,
-    /// The license covering `bin` (and `src`, if present).
+    /// The license covering `bin` (and `src`, if present), an SPDX license
+    /// expression (`MIT`, `Apache-2.0 WITH LLVM-exception`, ...).
     pub license: String,
+    /// The toolchain's version, a semver string.
+    pub version: String,
+    /// The toolchain's target platform, an LLVM/autotools-style target
+    /// triple (`x86_64-unknown-linux-gnu`, ...) — the closest thing to a
+    /// standard platform identifier; there is no SPDX-equivalent registry
+    /// for platforms.
+    pub platform: String,
 }
 
 /// A failure importing, resolving, listing, exporting, or removing a
@@ -88,29 +103,44 @@ pub enum Error {
     /// activates nothing on `PATH` is not a toolchain.
     #[error("{0} contains nothing importable; a toolchain's bin directory must not be empty")]
     EmptyBin(PathBuf),
-    /// [`import`]'s `license` argument was empty.
-    #[error("toolchain license must not be empty")]
-    EmptyLicense,
+    /// [`import`]'s `license` argument was not a valid SPDX license
+    /// expression.
+    #[error("{0:?} is not a valid SPDX license expression: {1}")]
+    InvalidLicense(String, spdx::ParseError),
+    /// [`import`]'s `version` argument was not a valid semver version.
+    #[error("{0:?} is not a valid semver version: {1}")]
+    InvalidVersion(String, semver::Error),
+    /// [`import`]'s `platform` argument was not a valid target triple.
+    #[error("{0:?} is not a valid target triple")]
+    InvalidPlatform(String),
 }
 
 /// Import `bin_dir` (and, optionally, `src_dir`) into `repo` as the
 /// toolchain `name`: write each directory tree bottom-up into the object
-/// database, assemble a [`Toolchain`] document over them and `license`, and
-/// fast-forward `refs/meta/toolchains/<name>` to a commit over it. Returns
-/// the document's root tree object id.
+/// database, assemble a [`Toolchain`] document over them, `license`,
+/// `version`, and `platform`, and fast-forward `refs/meta/toolchains/<name>`
+/// to a commit over it. Returns the document's root tree object id.
+///
+/// `license` MUST be a valid SPDX license expression, `version` a valid
+/// semver version, and `platform` a valid target triple.
 pub fn import(
     repo: &Path,
     name: &str,
     bin_dir: &Path,
     src_dir: Option<&Path>,
     license: &str,
+    version: &str,
+    platform: &str,
 ) -> Result<ObjectId, Error> {
     if !git_store::ref_segment_ok(name) {
         return Err(Error::InvalidName(name.to_owned()));
     }
-    if license.is_empty() {
-        return Err(Error::EmptyLicense);
-    }
+    spdx::Expression::parse(license)
+        .map_err(|error| Error::InvalidLicense(license.to_owned(), error))?;
+    semver::Version::parse(version)
+        .map_err(|error| Error::InvalidVersion(version.to_owned(), error))?;
+    target_lexicon::Triple::from_str(platform)
+        .map_err(|_error| Error::InvalidPlatform(platform.to_owned()))?;
     let odb = odb_at(repo)?;
 
     let bin_tree = build_tree(&odb, bin_dir)?;
@@ -130,6 +160,8 @@ pub fn import(
         bin,
         src,
         license: license.to_owned(),
+        version: version.to_owned(),
+        platform: platform.to_owned(),
     };
     let oid = facet_git_tree::serialize_into(&toolchain, &odb)?;
 
@@ -363,6 +395,11 @@ mod tests {
 
     use super::*;
 
+    /// A valid semver version and target triple, reused across tests that
+    /// only care about `license`.
+    const VERSION: &str = "1.0.0";
+    const PLATFORM: &str = "x86_64-unknown-linux-gnu";
+
     /// A file, an executable, and (on unix) a symlink, plus an empty
     /// subdirectory — enough to exercise every branch of `write_entry`.
     fn populate(dir: &Path) {
@@ -383,8 +420,26 @@ mod tests {
         populate(a.path());
         populate(b.path());
 
-        let first = import(repo_dir.path(), "gcc", a.path(), None, "MIT").unwrap();
-        let second = import(repo_dir.path(), "clang", b.path(), None, "MIT").unwrap();
+        let first = import(
+            repo_dir.path(),
+            "gcc",
+            a.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
+        let second = import(
+            repo_dir.path(),
+            "clang",
+            b.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
         assert_eq!(first, second);
     }
 
@@ -394,7 +449,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
 
-        import(repo_dir.path(), "gcc", dir.path(), None, "MIT").unwrap();
+        import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
         let toolchain = resolve(repo_dir.path(), "gcc").unwrap();
         let odb = odb_at(repo_dir.path()).unwrap();
         let mut buf = Vec::new();
@@ -408,7 +472,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
 
-        let oid = import(repo_dir.path(), "gcc", dir.path(), None, "MIT").unwrap();
+        let oid = import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
         let toolchain = resolve(repo_dir.path(), "gcc").unwrap();
         assert_eq!(toolchain.license, "MIT");
         assert!(toolchain.src.is_none());
@@ -425,7 +498,16 @@ mod tests {
         let repo_dir = repo();
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
-        import(repo_dir.path(), "gcc", dir.path(), None, "MIT").unwrap();
+        import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
 
         let dest = tempfile::tempdir().unwrap();
         let dest_path = dest.path().join("out");
@@ -456,6 +538,8 @@ mod tests {
             bin_dir.path(),
             Some(src_dir.path()),
             "MIT",
+            VERSION,
+            PLATFORM,
         )
         .unwrap();
 
@@ -477,7 +561,16 @@ mod tests {
         let repo_dir = repo();
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
-        import(repo_dir.path(), "gcc", dir.path(), None, "MIT").unwrap();
+        import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
 
         let dest = tempfile::tempdir().unwrap();
         fs::write(dest.path().join("already-here"), b"x").unwrap();
@@ -486,12 +579,54 @@ mod tests {
     }
 
     #[test]
-    fn import_rejects_an_empty_license() {
+    fn import_rejects_an_invalid_license() {
         let repo_dir = repo();
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
-        let result = import(repo_dir.path(), "gcc", dir.path(), None, "");
-        assert!(matches!(result, Err(Error::EmptyLicense)));
+        let result = import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "not a license",
+            VERSION,
+            PLATFORM,
+        );
+        assert!(matches!(result, Err(Error::InvalidLicense(_, _))));
+    }
+
+    #[test]
+    fn import_rejects_an_invalid_version() {
+        let repo_dir = repo();
+        let dir = tempfile::tempdir().unwrap();
+        populate(dir.path());
+        let result = import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            "not-semver",
+            PLATFORM,
+        );
+        assert!(matches!(result, Err(Error::InvalidVersion(_, _))));
+    }
+
+    #[test]
+    fn import_rejects_an_invalid_platform() {
+        let repo_dir = repo();
+        let dir = tempfile::tempdir().unwrap();
+        populate(dir.path());
+        let result = import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            "not a platform!!",
+        );
+        assert!(matches!(result, Err(Error::InvalidPlatform(_))));
     }
 
     #[test]
@@ -501,7 +636,15 @@ mod tests {
         // Only an empty subdirectory: `build_tree` skips it, so `bin` ends up
         // with nothing importable.
         fs::create_dir(dir.path().join("empty")).unwrap();
-        let result = import(repo_dir.path(), "gcc", dir.path(), None, "MIT");
+        let result = import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        );
         assert!(matches!(result, Err(Error::EmptyBin(_))));
     }
 
@@ -513,8 +656,26 @@ mod tests {
         populate(a.path());
         fs::write(b.path().join("distinct"), b"x").unwrap();
 
-        import(repo_dir.path(), "gcc", a.path(), None, "MIT").unwrap();
-        import(repo_dir.path(), "clang", b.path(), None, "Apache-2.0").unwrap();
+        import(
+            repo_dir.path(),
+            "gcc",
+            a.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
+        import(
+            repo_dir.path(),
+            "clang",
+            b.path(),
+            None,
+            "Apache-2.0",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
 
         let mut listed = list(repo_dir.path()).unwrap();
         listed.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -529,7 +690,16 @@ mod tests {
         let repo_dir = repo();
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
-        import(repo_dir.path(), "gcc", dir.path(), None, "MIT").unwrap();
+        import(
+            repo_dir.path(),
+            "gcc",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        )
+        .unwrap();
 
         remove(repo_dir.path(), "gcc").unwrap();
         let _ = resolve(repo_dir.path(), "gcc").unwrap_err();
@@ -540,7 +710,15 @@ mod tests {
         let repo_dir = repo();
         let dir = tempfile::tempdir().unwrap();
         populate(dir.path());
-        let result = import(repo_dir.path(), "not/valid", dir.path(), None, "MIT");
+        let result = import(
+            repo_dir.path(),
+            "not/valid",
+            dir.path(),
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+        );
         assert!(matches!(result, Err(Error::InvalidName(_))));
     }
 }

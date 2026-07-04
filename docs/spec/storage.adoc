@@ -66,13 +66,18 @@ Key strategy::
   the identity rule cannot drift between collections. `toolchains/<name>`
   (`git-toolchain`) is a named collection like `member/<username>`, and its
   item is a `Facet` document like any other — a `bin` directory tree, an
-  optional `src` directory tree, and a license — but `bin` and `src` are each
+  optional `src` directory tree, an SPDX license expression, a semver
+  version, and a target-triple platform — but `bin` and `src` are each
   captured whole as a `facet_git_tree::RawTree`, a raw-passthrough field
   wrapping an already-written tree's object id rather than a directory
-  layout `Facet` could model field-by-field. `Store::store_tree`/`ref_tree`
-  write and read the document's root tree directly, since the two
-  directories underneath must be written into the object database before the
-  document that references them can be assembled.
+  layout `Facet` could model field-by-field. `license`, `version`, and
+  `platform` are plain strings validated against a real parser (`spdx`,
+  `semver`, `target-lexicon`) at import time rather than carried as a parsed
+  type, since nothing downstream needs more than the canonical string back.
+  `Store::store_tree`/`ref_tree` write and read the document's root tree
+  directly, since the two directories underneath must be written into the
+  object database before the document that references them can be
+  assembled.
 
 Authored collections::
   A collection whose documents treat the commit as the record
