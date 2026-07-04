@@ -168,6 +168,52 @@ it deletes code, which at three components it likely does not).
 Count deleted lines and re-read the trait. If any trait grew an optional
 method used by one impl, inline it back. Update this doc with the outcome.
 
+==== Outcome
+
+C1–C4 landed as four commits (`1892fa82`, `d89c4caa`, `70e8f5db`, `e442c808`).
+Measured `git diff --stat` across the whole change: *+424/-196* lines in
+`crates/` — a net addition, not the hoped-for shrink. This confirms the
+"Net-negative simplification" risk rather than dodging it: `git-ents`'s
+`component.rs` (storage traits) and `git-ents-server`'s `component.rs`
+(`Loadable`/`WebComponent`) are ~165 lines of new infrastructure that six
+implementors (`Config`, `Account`, `Check`, `Revocation`, `Member`, `Issue`)
+each pay a small, fixed impl-block tax into. At this component count the tax
+outweighs the boilerplate it removes. The win is qualitative, per the
+original framing: one extension point (define the Facet struct, implement a
+handful of trait methods, done) instead of three independently-grown partial
+ones — the measure that matters if a seventh component ever gets added, not
+today's line count.
+
+Deviations from the plan as written, and why:
+
+* *`component_page::<T>` was never built.* No page turned out to be a clean
+  fit: the only single-component page (Issues) needs an open/closed filter
+  and dual subtab counts that replace the generic header entirely, which
+  would require a hook the plan's own trait-bloat rule rules out. Building
+  it anyway for zero real call sites would be exactly the "design for
+  hypothetical future requirements" this plan otherwise avoids. The card
+  renderer (`card`) is the piece that actually paid for itself, reused
+  across `checks_page`'s Configuration card and `settings_page`'s Members
+  and Checks cards.
+* *`WebComponent` split into `Loadable` + `WebComponent`.* `Issue` only
+  benefits from the shared `spawn_blocking` loader (`issues_page` keeps its
+  own header/body); the original single trait would have forced it to
+  implement a `TITLE`/`empty` it never calls. Splitting the sync loader out
+  as its own supertrait is the trait-bloat rule applied in the other
+  direction — a method (well, a whole sub-contract) with fewer than two real
+  users does not stay bundled into the bigger trait.
+* *C4 was a no-op.* With no `component_page`, the route table already was
+  the "one explicit call per meta-ref page" shape C4 asked for; there was
+  nothing left to collapse.
+* *A few small copy changes were accepted* as the cost of genuine reuse:
+  `checks_page`'s "Configuration" card is now titled "Checks" (matching
+  `settings_page`'s card of the same data), and both share one empty-state
+  message ("No checks configured on `refs/meta/checks`.") where the two
+  pages previously had two different copies. The `p.shell-note` lines that
+  used to sit *inside* the Members/Checks cards on the Settings page now sit
+  just above them, since the generic card has no slot for a page-specific
+  note between its header and its rows.
+
 == Risks
 
 [cols="1,4",options="header"]
@@ -189,9 +235,9 @@ method used by one impl, inline it back. Update this doc with the outcome.
   them.
 
 | Net-negative simplification
-| Honest estimate is 300–500 lines of glue deleted across the workspace, not
-  a dramatic shrink — `pages.rs` is mostly bespoke composition that only
-  relocates. The primary win is one extension point instead of three partial
-  abstractions. If C3 migrations produce wrappers longer than the pages they
-  replace, stop and reassess at C5 rather than pushing through.
+| Materialized: +424/-196 lines, not a shrink (see the C5 outcome above).
+  Accepted rather than reversed, since the measure that matters is one
+  extension point instead of three partial abstractions, not today's line
+  count — but this is the risk to revisit first if a future component makes
+  the trait machinery earn its keep even less.
 |===
