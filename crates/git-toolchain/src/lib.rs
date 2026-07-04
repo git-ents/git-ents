@@ -35,6 +35,7 @@ use gix::ObjectId;
 use gix::bstr::ByteSlice as _;
 use gix::objs::tree::{Entry as TreeEntry, EntryKind, EntryMode};
 use gix::objs::{FindExt as _, Tree, Write as _};
+use rayon::prelude::*;
 
 /// The ref namespace holding toolchains, one ref per toolchain:
 /// `refs/meta/toolchains/<name>`. A toolchain's identity is its tip commit's
@@ -366,31 +367,53 @@ fn write_object(odb: &gix::odb::Handle, tree: &Tree) -> Result<ObjectId, Error> 
 }
 
 /// Build `dir`'s tree bottom-up: a directory's own entries are all resolved
-/// (recursing into subdirectories, writing files and symlinks as blobs)
-/// before its own tree object is written, so every child is already an
-/// object id by the time its parent's entry list is sorted and written.
+/// in parallel (recursing into subdirectories, writing files and symlinks as
+/// blobs) before its own tree object is written, so every child is already
+/// an object id by the time its parent's entry list is sorted and written.
+///
+/// A large import (a rustup sysroot's `lib/rustlib/src/rust` alone is tens
+/// of thousands of files) is dominated by per-object filesystem syscall
+/// overhead, not by hashing or compression (gix's loose-object writer already
+/// runs zlib at its fastest level); fanning the write out across every core
+/// is the lever that actually matters here. `gix::odb::Handle` holds
+/// `RefCell`s and so is `Send` but not `Sync` — it cannot be shared by
+/// reference across threads — but it is cheaply `Clone` (an `Arc`-backed
+/// handle to the same store), which is the intended way to use one per
+/// thread; each entry gets its own clone before the parallel fan-out so no
+/// two threads ever touch the same `Handle`.
 fn build_tree(odb: &gix::odb::Handle, dir: &Path) -> Result<Tree, Error> {
-    let mut entries = Vec::new();
     let read_dir = fs::read_dir(dir).map_err(|error| Error::Io(dir.to_owned(), error))?;
-    for item in read_dir {
-        let item = item.map_err(|error| Error::Io(dir.to_owned(), error))?;
-        let path = item.path();
-        let name = item
-            .file_name()
-            .into_string()
-            .map_err(|_name| Error::NotUtf8(path.clone()))?;
-        let file_type = item
-            .file_type()
-            .map_err(|error| Error::Io(path.clone(), error))?;
-        let Some((oid, mode)) = write_entry(odb, &path, file_type)? else {
-            continue;
-        };
-        entries.push(TreeEntry {
-            mode,
-            filename: name.into(),
-            oid,
-        });
-    }
+    let items = read_dir
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| Error::Io(dir.to_owned(), error))?;
+
+    let mut entries: Vec<TreeEntry> = items
+        .into_iter()
+        .map(|item| (item, odb.clone()))
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(item, odb)| -> Result<Option<TreeEntry>, Error> {
+            let path = item.path();
+            let name = item
+                .file_name()
+                .into_string()
+                .map_err(|_name| Error::NotUtf8(path.clone()))?;
+            let file_type = item
+                .file_type()
+                .map_err(|error| Error::Io(path.clone(), error))?;
+            let Some((oid, mode)) = write_entry(&odb, &path, file_type)? else {
+                return Ok(None);
+            };
+            Ok(Some(TreeEntry {
+                mode,
+                filename: name.into(),
+                oid,
+            }))
+        })
+        .collect::<Result<Vec<Option<TreeEntry>>, Error>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     entries.sort();
     Ok(Tree { entries })
 }

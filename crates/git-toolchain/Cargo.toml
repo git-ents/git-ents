@@ -10,6 +10,7 @@ facet = { workspace = true }
 facet-git-tree = { workspace = true }
 git-store = { workspace = true }
 gix = { workspace = true }
+rayon = { workspace = true }
 semver = { workspace = true }
 spdx = { workspace = true }
 target-lexicon = { workspace = true }
