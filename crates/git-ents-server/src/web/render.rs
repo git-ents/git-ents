@@ -323,12 +323,16 @@ fn settled_terminal(outcome: &RunOutcome) -> Markup {
 
 /// The best-possible-UX fallback for a settled check with nothing to replay:
 /// its exit code when the command actually ran, or just its status when it
-/// didn't (a composite, or an infra failure before any command started).
+/// didn't (a composite, or an infra failure before any command started). Boxed
+/// distinctly from a real terminal (dashed border, no fixed light background)
+/// so it reads as "nothing recorded" rather than as an empty transcript.
 fn no_output_notice(outcome: &RunOutcome) -> Markup {
     html! {
-        @match outcome.exit_code {
-            Some(code) => p.muted { "Check finished with exit code " code { (code) } " without output." }
-            None => p.muted { "This check produced no terminal output." }
+        div.terminal-empty {
+            @match outcome.exit_code {
+                Some(code) => { "Check finished with exit code " code { (code) } " without output." }
+                None => { "This check produced no terminal output." }
+            }
         }
     }
 }
@@ -343,6 +347,6 @@ pub(super) fn live_fragment_body(recording: Option<String>) -> Markup {
         .and_then(|recording| asciidoc::render_live(&recording));
     match rendered {
         Some(player) => html! { (PreEscaped(player)) },
-        None => html! { p.muted { "Waiting for output…" } },
+        None => html! { div.terminal-empty { "Waiting for output…" } },
     }
 }

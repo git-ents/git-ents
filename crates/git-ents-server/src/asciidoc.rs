@@ -63,14 +63,18 @@ pub(crate) fn to_html(source: &str) -> Option<String> {
 /// CSS for the `.terminal-view` player acdc's HTML converter emits, vendored
 /// here because embedded-fragment output carries no `<head>` to link or inline
 /// it from (see [`to_html`]'s doctitle note for the same embedded-mode gap).
-/// Lifted verbatim from acdc's built-in stylesheet; keep in sync if it drifts.
+/// Based on acdc's built-in stylesheet (keep the box/layout rules in sync if it
+/// drifts), but `--light`/`--dark` are repainted with the site's own theme
+/// variables (`crates/git-ents-server/src/web/style.css`) rather than acdc's
+/// fixed hex pair: our synthesized `[terminal]`/`[terminal%replay]` source never
+/// carries a `:dark-mode:` attribute, so acdc always picks `--light`, which
+/// otherwise renders a fixed light-on-light box no matter the browser's theme.
 pub(crate) const TERMINAL_VIEW_CSS: &str = "\
-.terminal-view{margin:1.25em 0;max-width:100%;overflow:auto;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.18)}
-.terminal-view__screen{margin:0;padding:18px;font:14px/1.45 ui-monospace,SFMono-Regular,\"SF Mono\",Menlo,Consolas,\"Liberation Mono\",monospace;white-space:pre;tab-size:4}
-.terminal-view--light{background-color:#f6f8fa;color:#1f2328}
-.terminal-view--dark{background-color:#0d1117;color:#e6edf3}
+.terminal-view{margin:1.25em 0;max-width:100%;overflow:auto;border-radius:var(--radius-sm);border:1px solid var(--color-border);box-shadow:var(--shadow-sm)}
+.terminal-view__screen{margin:0;padding:18px;font:14px/1.45 var(--font-mono);white-space:pre;tab-size:4}
+.terminal-view--light,.terminal-view--dark{background-color:var(--color-code-bg);color:var(--color-text)}
 .terminal-view__viewport{overflow:auto;max-width:100%;padding:0 18px 18px}
-.terminal-view__stream{margin:0;padding:0;width:max-content;font-family:ui-monospace,SFMono-Regular,\"SF Mono\",Menlo,Consolas,\"Liberation Mono\",monospace;font-size:14px;line-height:1.2;white-space:normal;tab-size:4}
+.terminal-view__stream{margin:0;padding:0;width:max-content;font-family:var(--font-mono);font-size:14px;line-height:1.2;white-space:normal;tab-size:4}
 .terminal-view__row{white-space:pre;min-height:1.2em}
 ";
 
