@@ -78,13 +78,15 @@ The worker MUST configure the `sprite` CLI from `SPRITES_TOKEN` before each
 run via `sprite auth setup`, so the credential stays current without restart.
 
 Before running a check that names a toolchain, the worker MUST resolve each
-distinct toolchain named across the job's checks (<<checks.toolchains>>) and
-extract it into the Sprite at a hash-keyed directory, skipping the extraction
-when that directory already exists — the Sprite's persistent filesystem is
-the cache, so the same toolchain is never re-extracted across pushes. A
-check's command MUST then run with each of its named toolchains' `bin`
-directory prefixed onto `PATH`, in the order they are declared, so an earlier
-toolchain takes precedence over a later one on a name collision.
+distinct toolchain named across the job's checks (<<checks.toolchains>>) to
+its typed `bin` tree (`git-toolchain`'s `Toolchain::bin`, not the whole
+document) and extract that tree into the Sprite at a hash-keyed directory,
+skipping the extraction when that directory already exists — the Sprite's
+persistent filesystem is the cache, so the same toolchain is never
+re-extracted across pushes. A check's command MUST then run with each of its
+named toolchains' extracted `bin` directory prefixed onto `PATH`, in the
+order they are declared, so an earlier toolchain takes precedence over a
+later one on a name collision.
 --
 
 [role="requirement", id="checks.outcomes"]

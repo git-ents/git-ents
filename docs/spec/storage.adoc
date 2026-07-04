@@ -64,10 +64,15 @@ Key strategy::
   `comments/<genesis-hash>`) via the shared `git_store::new_id`
   (origin-or-content-hash), so filing an item never contends a counter and
   the identity rule cannot drift between collections. `toolchains/<name>`
-  (`git-toolchain`) is a named collection like `member/<username>`, but its
-  item is a directory tree imported wholesale rather than a `Facet` document
-  — the one collection whose identity is its own root tree hash
-  (`Store::store_tree`/`ref_tree`) instead of a deserialized value.
+  (`git-toolchain`) is a named collection like `member/<username>`, and its
+  item is a `Facet` document like any other — a `bin` directory tree, an
+  optional `src` directory tree, and a license — but `bin` and `src` are each
+  captured whole as a `facet_git_tree::RawTree`, a raw-passthrough field
+  wrapping an already-written tree's object id rather than a directory
+  layout `Facet` could model field-by-field. `Store::store_tree`/`ref_tree`
+  write and read the document's root tree directly, since the two
+  directories underneath must be written into the object database before the
+  document that references them can be assembled.
 
 Authored collections::
   A collection whose documents treat the commit as the record

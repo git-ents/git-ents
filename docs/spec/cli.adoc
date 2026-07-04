@@ -68,12 +68,15 @@ before proceeding, since it can lock the operator out of the remote.
 --
 The CLI MUST provide, under `git ents toolchain`:
 
-* `import` — write a local directory's contents to `refs/meta/toolchains/<name>`
-  on a remote and push it, creating the ref when absent.
-* `list` — render every toolchain configured on a remote with its root tree id.
-* `export` — recreate a remote's named toolchain under a local destination
-  directory, restoring the executable bit and symlinks; read-only, per
-  <<cli.remote-admin>>.
+* `import` — write a local `bin` directory (and, optionally, a `src`
+  directory) plus a license to `refs/meta/toolchains/<name>` on a remote and
+  push it, creating the ref when absent. `bin` MUST be non-empty and
+  `license` MUST be non-empty.
+* `list` — render every toolchain configured on a remote with its `bin`
+  tree id and license.
+* `export` — recreate a remote's named toolchain's `bin` (and `src`, if
+  present) under a local destination directory, restoring the executable bit
+  and symlinks, and print the license; read-only, per <<cli.remote-admin>>.
 * `remove` — delete the toolchain's ref on a remote.
 --
 
