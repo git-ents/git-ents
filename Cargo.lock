@@ -1448,6 +1448,7 @@ dependencies = [
  "git-ents-core",
  "git-ents-server",
  "git-store",
+ "git-toolchain",
  "inquire",
  "signal-hook 0.3.18",
  "tempfile",

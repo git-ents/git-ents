@@ -63,6 +63,20 @@ before proceeding, since it can lock the operator out of the remote.
 `refs/meta/checks` set (<<checks.definition>>).
 --
 
+[role="requirement", id="cli.toolchains"]
+.Toolchain Commands
+--
+The CLI MUST provide, under `git ents toolchain`:
+
+* `import` — write a local directory's contents to `refs/meta/toolchains/<name>`
+  on a remote and push it, creating the ref when absent.
+* `list` — render every toolchain configured on a remote with its root tree id.
+* `export` — recreate a remote's named toolchain under a local destination
+  directory, restoring the executable bit and symlinks; read-only, per
+  <<cli.remote-admin>>.
+* `remove` — delete the toolchain's ref on a remote.
+--
+
 [role="requirement", id="cli.comments"]
 .Comment Commands
 --

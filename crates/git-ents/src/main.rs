@@ -3,11 +3,13 @@
 //! It carries `git ents members` for managing the repository members recorded
 //! one-ref-per-person at `refs/meta/member/<username>`, `git ents account` for
 //! the account identity at `refs/meta/account`, `git ents checks` for the check
-//! set, `git ents comment` for the code comments at `refs/meta/comments/<id>`,
-//! and the client setup that produces the signed pushes the server
-//! requires. The member commands read and write a remote's set by fetching the
-//! `refs/meta/member/*` refs into the local repository, editing them through
-//! [`git_ents_core::members`], and pushing them back.
+//! set, `git ents toolchain` for the toolchains stored as git trees at
+//! `refs/meta/toolchains/<name>` (`git-toolchain`), `git ents comment` for the
+//! code comments at `refs/meta/comments/<id>`, and the client setup that
+//! produces the signed pushes the server requires. The member commands read
+//! and write a remote's set by fetching the `refs/meta/member/*` refs into the
+//! local repository, editing them through [`git_ents_core::members`], and
+//! pushing them back.
 
 mod debug_session;
 mod interactive;
@@ -26,6 +28,7 @@ use git_ents_core::checks::{self, CHECKS_REF, Check};
 use git_ents_core::component::{self, Component, MapDocument};
 use git_ents_core::members::{self, MEMBER_NS, Member, Trust, member_ref};
 use git_ents_core::revocations::{self, REVOKED_REF, Revocation};
+use git_toolchain::TOOLCHAINS_NS;
 
 /// Helpful guardians of your git trees.
 #[derive(Facet)]
@@ -56,6 +59,12 @@ enum Top {
     Checks {
         #[facet(args::subcommand)]
         action: ChecksAction,
+    },
+    /// Manage the toolchains stored as git trees at
+    /// `refs/meta/toolchains/<name>`.
+    Toolchain {
+        #[facet(args::subcommand)]
+        action: ToolchainAction,
     },
     /// Comment on code: one comment per ref at `refs/meta/comments/<id>`,
     /// anchored to a blob (and optionally lines) at a commit.
@@ -197,6 +206,10 @@ enum ChecksAction {
         /// Check that must pass before this one runs (repeatable).
         #[facet(args::named, args::label = "CHECK", default)]
         depends: Vec<String>,
+        /// Toolchain (`refs/meta/toolchains/<name>`) to activate on `PATH`
+        /// before the command runs (repeatable).
+        #[facet(args::named, args::label = "TOOLCHAIN", default)]
+        toolchains: Vec<String>,
     },
     /// Remove a check from a remote's set and push the update.
     Remove {
@@ -211,6 +224,40 @@ enum ChecksAction {
     /// Show recorded check runs (queued/running/pass/fail/error) from
     /// `refs/meta/runs/*` on a remote, newest first.
     Runs,
+}
+
+#[derive(Facet)]
+#[repr(u8)]
+enum ToolchainAction {
+    /// Import a local directory as toolchain `name` on a remote and push it.
+    /// Prompts for any field left unset when run at an interactive terminal.
+    Import {
+        /// Name to record the toolchain under (`toolchains/<name>`).
+        #[facet(args::positional, default)]
+        name: Option<String>,
+        /// Directory to import.
+        #[facet(args::positional, default)]
+        path: Option<String>,
+    },
+    /// List the toolchains configured on a remote.
+    List,
+    /// Export a remote's toolchain `name` to a local directory. Read-only:
+    /// fetches the toolchain's tree but never pushes.
+    Export {
+        /// Name (`toolchains/<name>`) to export.
+        #[facet(args::positional)]
+        name: String,
+        /// Destination directory (created if absent; must be empty if it
+        /// already exists).
+        #[facet(args::positional)]
+        dest: String,
+    },
+    /// Remove a toolchain from a remote's set and push the update.
+    Remove {
+        /// Name (`toolchains/<name>`) to drop.
+        #[facet(args::positional)]
+        name: String,
+    },
 }
 
 #[derive(Facet)]
@@ -292,6 +339,7 @@ fn main() -> ExitCode {
         Top::Members { action } => exit_code(run_members(action, &remote)),
         Top::Account { action } => exit_code(run_account(action, &remote)),
         Top::Checks { action } => exit_code(run_checks(action, &remote)),
+        Top::Toolchain { action } => exit_code(run_toolchain(action, &remote)),
         Top::Comment { action } => exit_code(run_comment(action, &remote)),
         Top::Login { key } => exit_code(login(&remote, key.as_deref())),
         Top::Server(args) => git_ents_server::run(args),
@@ -360,7 +408,8 @@ fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
             command,
             image,
             depends,
-        } => add_check(name, command, image, depends, remote),
+            toolchains,
+        } => add_check(name, command, image, depends, toolchains, remote),
         ChecksAction::Remove { name } => remove::<Check>(&name, remote),
         ChecksAction::Debug => checks_debug(remote),
         ChecksAction::Runs => checks_runs(remote),
@@ -393,6 +442,70 @@ fn checks_runs(remote: &str) -> Result<(), String> {
             short_id(&commit_runs.commit.to_string())
         );
     }
+    Ok(())
+}
+
+fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
+    match action {
+        ToolchainAction::Import { name, path } => toolchain_import(name, path, remote),
+        ToolchainAction::List => toolchain_list(remote),
+        ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
+        ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
+    }
+}
+
+/// Import `path`'s contents as toolchain `name` on `remote` and push it.
+/// Prompts for any field left unset when run at an interactive terminal.
+fn toolchain_import(
+    name: Option<String>,
+    path: Option<String>,
+    remote: &str,
+) -> Result<(), String> {
+    let name = interactive::text_or(name, "Toolchain name")?;
+    let path = interactive::text_or(path, "Directory to import")?;
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    let expected = sync(remote, &refname)?;
+    let repo = repo()?;
+    git_toolchain::import(&repo, &name, Path::new(&path)).map_err(|error| error.to_string())?;
+    push_signed(remote, &refname, expected.as_deref())?;
+    println!("imported toolchain {name}");
+    Ok(())
+}
+
+/// Print every toolchain configured on `remote` as `<name>  <tree>`.
+fn toolchain_list(remote: &str) -> Result<(), String> {
+    let repo = repo()?;
+    sync_namespace(remote, TOOLCHAINS_NS)?;
+    let toolchains = git_toolchain::list(&repo).map_err(|error| error.to_string())?;
+    if toolchains.is_empty() {
+        println!("no toolchains configured on {remote}");
+        return Ok(());
+    }
+    for (name, tree) in toolchains {
+        println!("{name}  {}", short_id(&tree.to_string()));
+    }
+    Ok(())
+}
+
+/// Export `remote`'s toolchain `name` to `dest`. Read-only per
+/// `cli.remote-admin`: fetches the toolchain's tree but never pushes.
+fn toolchain_export(name: &str, dest: &str, remote: &str) -> Result<(), String> {
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
+    let repo = repo()?;
+    git_toolchain::export(&repo, name, Path::new(dest)).map_err(|error| error.to_string())?;
+    println!("exported toolchain {name} to {dest}");
+    Ok(())
+}
+
+/// Remove toolchain `name` on `remote`, deleting its ref and pushing the
+/// update.
+fn toolchain_remove(name: &str, remote: &str) -> Result<(), String> {
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    let expected =
+        sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
+    push_delete(remote, &refname, &expected)?;
+    println!("removed toolchain {name}");
     Ok(())
 }
 
@@ -703,17 +816,26 @@ fn add_check(
     command: Option<String>,
     image: Option<String>,
     depends: Vec<String>,
+    toolchains: Vec<String>,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Check name")?;
     let command = interactive::optional_text_or(command, "Command (empty for a composite)")?;
     let depends = if depends.is_empty() {
-        parse_depends(interactive::optional_text_or(
+        parse_names(interactive::optional_text_or(
             None,
             "Depends on (comma-separated, empty for none)",
         )?)
     } else {
         depends
+    };
+    let toolchains = if toolchains.is_empty() {
+        parse_names(interactive::optional_text_or(
+            None,
+            "Toolchains (comma-separated, empty for none)",
+        )?)
+    } else {
+        toolchains
     };
     let repo = repo()?;
     let expected = sync(remote, CHECKS_REF)?;
@@ -724,7 +846,7 @@ fn add_check(
         command,
         image,
         depends,
-        toolchains: Vec::new(),
+        toolchains,
     });
     let _ordered = checks::order(&checks)?;
     checks::store(&repo, &checks).map_err(|error| error.to_string())?;
@@ -733,9 +855,11 @@ fn add_check(
     Ok(())
 }
 
-/// Split an interactive comma-separated dependency reply into names, dropping
-/// empty segments; `None` (no reply) is no dependencies.
-fn parse_depends(reply: Option<String>) -> Vec<String> {
+/// Split an interactive comma-separated reply into names, dropping empty
+/// segments; `None` (no reply) is no names. Shared by `depends` and
+/// `toolchains`, whose interactive prompts are both a comma-separated name
+/// list.
+fn parse_names(reply: Option<String>) -> Vec<String> {
     reply
         .map(|value| {
             value
