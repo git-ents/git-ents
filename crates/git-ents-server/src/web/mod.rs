@@ -427,6 +427,9 @@ async fn route(
         Some((&"checks", &[commit, name, "live"])) => {
             pages::check_live_fragment(repo, commit, name, live_runs).await
         }
+        Some((&"checks", &[commit, name, "download"])) => {
+            pages::check_recording_download(repo, commit, name).await
+        }
         Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
         Some((&"settings", &[])) => {
             let auth = resolve_auth(repo, session).await;

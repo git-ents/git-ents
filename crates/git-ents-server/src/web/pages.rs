@@ -955,27 +955,13 @@ fn head_check_row(
 ) -> Markup {
     let outcome =
         head_run.and_then(|run| run.results.iter().find(|result| result.name == check.name));
+    let href = format!("/{rel}/checks/{head}/{}", check.name);
     html! {
         div.card-row.signer-row {
             code.key { (check.name) }
-            @match outcome {
-                None => span.muted { "no run yet" }
-                Some(outcome) if outcome.recording.is_some() || is_in_progress(outcome.status) => {
-                    a href={ "/" (rel) "/checks/" (head) "/" (check.name) } { (outcome.status.to_string()) }
-                }
-                Some(outcome) => span.muted { (outcome.status.to_string()) }
-            }
+            (super::render::check_list_row(outcome, &href))
         }
     }
-}
-
-/// Whether `status` is still on its way to a terminal outcome — the check has
-/// no recording yet, but its run page has a live view worth linking to.
-fn is_in_progress(status: git_ents::checks::Status) -> bool {
-    matches!(
-        status,
-        git_ents::checks::Status::Queued | git_ents::checks::Status::Running
-    )
 }
 
 /// Find `name`'s outcome in `commit`'s latest recorded run, or `None` when
@@ -1017,10 +1003,11 @@ pub(super) async fn check_recording_page(
     let short_commit = commit.get(..8).unwrap_or(commit);
     let rel = &meta.rel;
 
-    let body = if is_in_progress(outcome.status) {
+    let body = if super::render::is_in_progress(outcome.status) {
         let key = (repo.to_owned(), commit_oid, name.to_owned());
         let fragment_url = format!("/{rel}/checks/{commit}/{name}/live");
-        let initial = live_fragment_body(crate::checks::live_snapshot(live_runs, &key));
+        let initial =
+            super::render::live_fragment_body(crate::checks::live_snapshot(live_runs, &key));
         html! {
             p.shell-note {
                 "This check is still " (outcome.status.to_string()) "; the view below updates live."
@@ -1028,20 +1015,9 @@ pub(super) async fn check_recording_page(
             style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
             div #live-terminal data-live-check=(fragment_url) { (initial) }
         }
-    } else if let Some(recording) = &outcome.recording {
-        if crate::asciidoc::recording_has_no_output(recording) {
-            html! { (no_output_notice(&outcome)) }
-        } else {
-            let Some(player) = crate::asciidoc::render_recording(recording) else {
-                return not_found().into_response();
-            };
-            html! {
-                style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
-                (PreEscaped(player))
-            }
-        }
     } else {
-        return not_found().into_response();
+        let download_href = format!("/{rel}/checks/{commit}/{name}/download");
+        super::render::check_result_view(&outcome, &download_href)
     };
     repo_shell(
         meta,
@@ -1055,33 +1031,6 @@ pub(super) async fn check_recording_page(
         },
     )
     .into_response()
-}
-
-/// The best-possible-UX fallback for a settled check that produced no
-/// terminal output: its exit code when the command actually ran, or just its
-/// status when it didn't (a composite, or an infra failure before any command
-/// started).
-fn no_output_notice(outcome: &git_ents::checks::RunOutcome) -> Markup {
-    html! {
-        @match outcome.exit_code {
-            Some(code) => p.muted { "Check finished with exit code " code { (code) } " without output." }
-            None => p.muted { "This check produced no terminal output." }
-        }
-    }
-}
-
-/// The live-terminal container's inner markup for one poll: the check's
-/// current screen, rendered as a static snapshot (see
-/// [`asciidoc::render_live`](crate::asciidoc::render_live)), or a placeholder
-/// while output has yet to arrive.
-fn live_fragment_body(recording: Option<String>) -> Markup {
-    let rendered = recording
-        .filter(|recording| !crate::asciidoc::recording_has_no_output(recording))
-        .and_then(|recording| crate::asciidoc::render_live(&recording));
-    match rendered {
-        Some(player) => html! { (PreEscaped(player)) },
-        None => html! { p.muted { "Waiting for output…" } },
-    }
 }
 
 /// One poll of a running check's live output — the fragment [`LIVE_SCRIPT`]
@@ -1104,9 +1053,56 @@ pub(super) async fn check_live_fragment(
     let key = (repo.to_owned(), commit_oid, name.to_owned());
     let recording = crate::checks::live_snapshot(live_runs, &key);
     let done = recording.is_none();
-    let body = live_fragment_body(recording).into_string();
+    let body = super::render::live_fragment_body(recording).into_string();
     let header = if done { "done" } else { "running" };
     ([("x-check-live", header)], body).into_response()
+}
+
+/// Download a check's raw asciicast recording, for replaying outside the
+/// browser (`asciinema play <file>`) or archiving. 404s under the same
+/// conditions as [`check_recording_page`] (no run recorded, or none for
+/// `name`), and also when the settled run has no recording to hand out.
+pub(super) async fn check_recording_download(repo: &Path, commit: &str, name: &str) -> Response {
+    let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
+        return not_found().into_response();
+    };
+    let Some(recording) = latest_outcome(repo, commit_oid, name)
+        .await
+        .and_then(|outcome| outcome.recording)
+    else {
+        return not_found().into_response();
+    };
+    let short_commit = commit.get(..8).unwrap_or(commit);
+    let filename = format!(
+        "{}-{}.cast",
+        sanitize_filename(name),
+        sanitize_filename(short_commit)
+    );
+    (
+        [
+            ("content-type", "application/x-asciicast".to_owned()),
+            (
+                "content-disposition",
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        recording,
+    )
+        .into_response()
+}
+
+/// Keep only characters safe for a `Content-Disposition` filename, so a check
+/// name can't inject header syntax into the download response.
+fn sanitize_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Load the configured check set off the async runtime, since `checks::load`
@@ -1203,6 +1199,7 @@ pub(super) async fn settings_page(
 ) -> Markup {
     let members = load_members(repo).await;
     let checks = load_checks(repo).await;
+    let config = load_repo_config(repo).await;
     repo_shell(
         meta,
         Tab::Settings,
@@ -1275,9 +1272,35 @@ pub(super) async fn settings_page(
                         }
                     }
                 }
+
+                div.card {
+                    div.card-header { "Roles" }
+                    p.shell-note {
+                        "Ref-push gating by member role, on " code { "refs/meta/config" }
+                        " — members join a role with " code { "git ents members add --role" } "."
+                    }
+                    @match &config {
+                        Err(err) => div.card-row.muted { "Could not read config: " (err) }
+                        Ok(config) if config.roles.is_empty() => {
+                            div.card-row.muted {
+                                "No roles configured — every member may push any ref."
+                            }
+                        }
+                        Ok(config) => (config.render())
+                    }
+                }
             }
         },
     )
+}
+
+/// Load `refs/meta/config` off the async runtime, like [`load_checks`].
+async fn load_repo_config(repo: &Path) -> Result<git_ents::config::Config, String> {
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || git_ents::config::load(&repo))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 /// Load the member set off the async runtime, since `members::load_all` shells
