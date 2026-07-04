@@ -245,6 +245,39 @@ impl Store {
         self.try_set_ref(refname, expected, commit)
     }
 
+    /// Write `tree` to `refname` as a new commit on top of the ref's current
+    /// tip, so the update fast-forwards and accrues history — the same
+    /// compare-and-swap shape [`store`](Self::store) uses, but for a caller
+    /// that already has a tree of its own construction (not a [`Facet`]
+    /// value to serialize), e.g. a `git-toolchain` import.
+    pub fn store_tree(&self, refname: &str, tree: ObjectId, message: &str) -> Result<(), Error> {
+        let expected = self.ref_commit(refname)?;
+        let parents = expected.into_iter().collect();
+        let commit = self.write_commit(tree, parents, message, None)?;
+        self.try_set_ref(refname, expected, commit)
+    }
+
+    /// The tree of `refname`'s tip commit.
+    pub fn ref_tree(&self, refname: &str) -> Result<ObjectId, Error> {
+        let commit = self
+            .ref_commit(refname)?
+            .ok_or_else(|| Error::Ref(format!("{refname} does not exist")))?;
+        Ok(self.read_commit(&commit)?.tree)
+    }
+
+    /// Delete `refname` outright, for a collection item removed by name
+    /// rather than by rewriting a map document (e.g. `git-toolchain`'s
+    /// `remove`).
+    pub fn delete_ref(&self, refname: &str) -> Result<(), Error> {
+        let reference = self
+            .repo
+            .find_reference(refname)
+            .map_err(|error| Error::Ref(error.to_string()))?;
+        reference
+            .delete()
+            .map_err(|error| Error::Ref(error.to_string()))
+    }
+
     /// Load the item `id` under the collection ref namespace `prefix`
     /// (`{prefix}/{id}`), or `None` when its ref is absent. The thin wrapper
     /// every decomposed-ref collection (members, checks, issues, comments, …)
@@ -737,6 +770,43 @@ mod tests {
             store.load::<String>("refs/meta/bag").unwrap(),
             Some("second".to_owned())
         );
+    }
+
+    #[test]
+    fn store_tree_then_ref_tree_round_trips() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let tree = facet_git_tree::serialize_into(&"payload".to_owned(), &store.odb).unwrap();
+        store.store_tree("refs/meta/raw", tree, "write").unwrap();
+        assert_eq!(store.ref_tree("refs/meta/raw").unwrap(), tree);
+    }
+
+    #[test]
+    fn ref_tree_errors_when_the_ref_is_absent() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let _ = store.ref_tree("refs/meta/missing").unwrap_err();
+    }
+
+    #[test]
+    fn store_tree_advances_the_ref_and_keeps_the_new_tip() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let first = facet_git_tree::serialize_into(&"first".to_owned(), &store.odb).unwrap();
+        let second = facet_git_tree::serialize_into(&"second".to_owned(), &store.odb).unwrap();
+        store.store_tree("refs/meta/raw", first, "write").unwrap();
+        store.store_tree("refs/meta/raw", second, "write").unwrap();
+        assert_eq!(store.ref_tree("refs/meta/raw").unwrap(), second);
+    }
+
+    #[test]
+    fn delete_ref_removes_the_ref() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let tree = facet_git_tree::serialize_into(&"payload".to_owned(), &store.odb).unwrap();
+        store.store_tree("refs/meta/raw", tree, "write").unwrap();
+        store.delete_ref("refs/meta/raw").unwrap();
+        let _ = store.ref_tree("refs/meta/raw").unwrap_err();
     }
 
     /// A minimal keyed item, used to exercise `load_item`/`store_item`/
