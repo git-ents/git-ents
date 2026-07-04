@@ -32,9 +32,9 @@ pub(super) trait Render: for<'a> Facet<'a> {
 }
 
 /// A check's name is the key and its command the value — `(composite)` for a
-/// check with none — with its image and dependencies appended as ` · `-joined
-/// annotations rather than the raw `Option`/`Vec` the structural walk would
-/// print.
+/// check with none — with its image, dependencies, and toolchains appended
+/// as ` · `-joined annotations rather than the raw `Option`/`Vec` the
+/// structural walk would print.
 impl Render for Check {
     fn render(&self) -> Markup {
         let mut value = self
@@ -46,6 +46,9 @@ impl Render for Check {
         }
         if !self.depends.is_empty() {
             value.push_str(&format!(" · needs {}", self.depends.join(", ")));
+        }
+        if !self.toolchains.is_empty() {
+            value.push_str(&format!(" · toolchains {}", self.toolchains.join(", ")));
         }
         row(&self.name, &value)
     }

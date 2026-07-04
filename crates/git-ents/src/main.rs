@@ -724,6 +724,7 @@ fn add_check(
         command,
         image,
         depends,
+        toolchains: Vec::new(),
     });
     let _ordered = checks::order(&checks)?;
     checks::store(&repo, &checks).map_err(|error| error.to_string())?;

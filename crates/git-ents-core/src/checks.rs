@@ -45,6 +45,10 @@ pub struct CheckBody {
     /// Names of sibling checks that must pass before this one runs. Stored as
     /// `None` when empty so an independent check stays a minimal tree.
     depends: Option<Vec<String>>,
+    /// Names of toolchains (`git-toolchain`, `refs/meta/toolchains/<name>`)
+    /// activated on `PATH` before the command runs. Stored as `None` when
+    /// empty, like `depends`.
+    toolchains: Option<Vec<String>>,
 }
 
 /// One configured check, assembled from its map key and [`CheckBody`] at load.
@@ -59,6 +63,8 @@ pub struct Check {
     pub image: Option<String>,
     /// Names of sibling checks that must pass before this one runs.
     pub depends: Vec<String>,
+    /// Names of toolchains activated on `PATH` before the command runs.
+    pub toolchains: Vec<String>,
 }
 
 impl component::MapDocument for Check {
@@ -71,6 +77,7 @@ impl component::MapDocument for Check {
             command: body.command,
             image: body.image,
             depends: body.depends.unwrap_or_default(),
+            toolchains: body.toolchains.unwrap_or_default(),
         }
     }
 
@@ -84,6 +91,11 @@ impl component::MapDocument for Check {
                     None
                 } else {
                     Some(self.depends.clone())
+                },
+                toolchains: if self.toolchains.is_empty() {
+                    None
+                } else {
+                    Some(self.toolchains.clone())
                 },
             },
         )
@@ -116,10 +128,14 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
 ///
 /// Rejected here, at write time, so the worker only ever walks a fixed order:
 /// a `depends` entry naming no configured check, a duplicate or self edge, a
-/// check with neither a command nor dependencies, and any dependency cycle
-/// (reported with its member names). A check that sets an `image` is also
-/// rejected until the Sprite sandbox can honor one — the field exists in the
-/// format now so supporting it later is not a data migration.
+/// check with neither a command nor dependencies, any dependency cycle
+/// (reported with its member names), and a `toolchains` entry that is not a
+/// valid ref-path segment. A check that sets an `image` is also rejected
+/// until the Sprite sandbox can honor one — the field exists in the format
+/// now so supporting it later is not a data migration. Whether a named
+/// toolchain actually exists is checked server-side at job time, not here —
+/// unlike `depends`, `toolchains` cross-references a different ref
+/// namespace this function has no set of configured names to check against.
 pub fn order(checks: &[Check]) -> Result<Vec<&Check>, String> {
     let mut by_name: std::collections::BTreeMap<&str, &Check> = std::collections::BTreeMap::new();
     for check in checks {
@@ -140,6 +156,14 @@ pub fn order(checks: &[Check]) -> Result<Vec<&Check>, String> {
                 "check {} sets an image, which the checks sandbox does not support yet",
                 check.name
             ));
+        }
+        for toolchain in &check.toolchains {
+            if !git_store::ref_segment_ok(toolchain) {
+                return Err(format!(
+                    "check {} names an invalid toolchain {toolchain:?}",
+                    check.name
+                ));
+            }
         }
         let mut seen = std::collections::BTreeSet::new();
         for dep in &check.depends {
@@ -402,6 +426,7 @@ mod tests {
             command: Some(command.to_owned()),
             image: None,
             depends: Vec::new(),
+            toolchains: Vec::new(),
         }
     }
 
@@ -411,12 +436,20 @@ mod tests {
             command: None,
             image: None,
             depends: depends.iter().map(|dep| (*dep).to_owned()).collect(),
+            toolchains: Vec::new(),
         }
     }
 
     fn dependent(name: &str, command: &str, depends: &[&str]) -> Check {
         Check {
             depends: depends.iter().map(|dep| (*dep).to_owned()).collect(),
+            ..check(name, command)
+        }
+    }
+
+    fn toolchained(name: &str, command: &str, toolchains: &[&str]) -> Check {
+        Check {
+            toolchains: toolchains.iter().map(|t| (*t).to_owned()).collect(),
             ..check(name, command)
         }
     }
@@ -458,10 +491,10 @@ mod tests {
     #[test]
     fn loads_the_on_disk_checks_format() {
         // A fixture written as the real `checks/<name>/command/some` subtree
-        // layout (the `Option`-wrapped command, with `image`/`depends` omitted
-        // entirely) must keep loading, with the missing optional fields unset —
-        // guarding the checks document's shape against an incompatible change
-        // to data already on a ref.
+        // layout (the `Option`-wrapped command, with `image`/`depends`/
+        // `toolchains` omitted entirely) must keep loading, with the missing
+        // optional fields unset — guarding the checks document's shape
+        // against an incompatible change to data already on a ref.
         let repo = unique_repo();
         write_checks_doc(
             &repo,
@@ -675,5 +708,34 @@ mod tests {
             err.contains("neither a command nor dependencies"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn order_accepts_a_valid_toolchain_name() {
+        let checks = vec![toolchained("build", "make", &["gcc-12"])];
+        assert_eq!(
+            order(&checks)
+                .unwrap()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["build"]
+        );
+    }
+
+    #[test]
+    fn order_rejects_an_invalid_toolchain_name() {
+        let checks = vec![toolchained("build", "make", &["not/valid"])];
+        let err = order(&checks).unwrap_err();
+        assert!(err.contains("invalid toolchain"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn store_then_load_round_trips_toolchains() {
+        let repo = unique_repo();
+        let written = vec![toolchained("build", "make", &["gcc-12", "cmake"])];
+        store(&repo, &written).unwrap();
+        assert_eq!(load(&repo).unwrap(), written);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

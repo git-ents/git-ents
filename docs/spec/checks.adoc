@@ -5,8 +5,9 @@
 --
 The configured checks for a repository MUST be stored at `refs/meta/checks` as
 a map from check name to a check body holding an optional shell command, an
-optional sandbox image, and an optional list of dependencies (names of sibling
-checks that must pass first).
+optional sandbox image, an optional list of dependencies (names of sibling
+checks that must pass first), and an optional list of toolchain names
+(<<checks.toolchains>>).
 A check with no command is a composite: it runs nothing itself and derives its
 outcome from its dependencies alone.
 A check's definition living on a meta ref means a branch under check cannot
@@ -15,10 +16,22 @@ rewrite the check set that gates it.
 The dependency graph is fully static — no conditional edges, no runtime
 expansion — and MUST be validated when the set is written: a dependency naming
 no configured check, a duplicate or self edge, a check with neither a command
-nor dependencies, and any dependency cycle MUST each be rejected before the
-set is stored. A check that sets an image MUST be rejected until the sandbox
-can honor one, rather than the image being silently ignored; the field is
-reserved in the format so honoring it later is not a data migration.
+nor dependencies, any dependency cycle, and a toolchain name that is not a
+valid ref-path segment MUST each be rejected before the set is stored. A check
+that sets an image MUST be rejected until the sandbox can honor one, rather
+than the image being silently ignored; the field is reserved in the format so
+honoring it later is not a data migration.
+--
+
+[role="requirement", id="checks.toolchains"]
+.Check Toolchains
+--
+A check's optional list of toolchain names MUST each be a valid ref-path
+segment (<<storage.meta-ref>>'s collection-key rule), validated when the set
+is written; whether a named toolchain actually exists MUST be checked
+server-side at job time instead, since it names an entry in a different ref
+namespace (`refs/meta/toolchains/<name>`, `git-toolchain`) the check set
+itself does not enumerate.
 --
 
 [role="requirement", id="checks.post-receive"]
