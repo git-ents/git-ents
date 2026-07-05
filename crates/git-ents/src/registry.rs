@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use facet::Facet;
 use git_toolchain::Component;
 use tempfile::TempDir;
 
@@ -40,11 +41,31 @@ pub struct Resolved {
     _staging: Option<TempDir>,
 }
 
+/// A recipe `git ents toolchain import --from` accepts, described richly
+/// enough to render on its own via `facet_pretty` (see `git ents toolchain
+/// recipes`) rather than as a bare name.
+#[derive(Facet)]
+pub struct RecipeInfo {
+    /// The name passed to `--from`.
+    pub name: &'static str,
+    /// What `--from-spec` selects for this recipe, e.g. a rustup channel or
+    /// version name.
+    pub spec: &'static str,
+    /// What this recipe does, in one line.
+    pub summary: &'static str,
+}
+
 /// Every recipe `resolve` knows, for `git ents toolchain recipes` and
 /// `resolve`'s own error message — a plain list rather than a trait registry,
 /// since each recipe is one function with its own selector semantics, not a
 /// uniform interface worth abstracting over for a list of one.
-pub const RECIPES: &[&str] = &["rustup"];
+pub const RECIPES: &[RecipeInfo] = &[RecipeInfo {
+    name: "rustup",
+    spec: "a channel or version, e.g. stable, nightly, 1.75.0",
+    summary: "Resolves a rustup-managed toolchain via `rustc +<spec> -vV`; \
+              by default points at rust-lang's own hosted, hash-pinned \
+              component archives instead of importing local bytes.",
+}];
 
 /// Resolve `recipe` against `spec` (a recipe-specific selector, e.g. a
 /// rustup toolchain name). See [`RECIPES`] for what's known.
@@ -58,7 +79,11 @@ pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String
         "rustup" => rustup(spec, embed),
         other => Err(format!(
             "unknown toolchain recipe {other:?} (known: {})",
-            RECIPES.join(", ")
+            RECIPES
+                .iter()
+                .map(|recipe| recipe.name)
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }

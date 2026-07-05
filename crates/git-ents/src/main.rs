@@ -627,8 +627,9 @@ fn toolchain_list(remote: &str) -> Result<(), String> {
 
 /// Print every recipe `git ents toolchain import --from` accepts.
 fn toolchain_recipes() -> Result<(), String> {
+    let printer = facet_pretty::PrettyPrinter::new().with_doc_comments(true);
     for recipe in registry::RECIPES {
-        println!("{recipe}");
+        println!("{}", recipe.pretty_with(printer.clone()));
     }
     Ok(())
 }
