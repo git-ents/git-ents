@@ -50,8 +50,10 @@ use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, 
 /// Render the page for `path`: the repository index at the root, a repository
 /// overview, or one of its browse views (`tree`, `blob`, `commit`). `host` is
 /// the request's `Host` header, used to build a copy-pasteable clone URL.
-// r[impl web.server-rendered] - entry point for every browser GET
-// r[impl web.auth.challenge] `/login` and `/login/cli` issue the one-time challenge
+///
+/// ## Requirements
+///
+/// @relation(web.server-rendered, web.auth.challenge)
 pub(crate) async fn render(
     state: &AppState,
     path: &str,
@@ -137,8 +139,10 @@ fn resolve_repo<'a>(
 
 /// Handle a browser POST: signing in, signing out, or saving a settings edit.
 /// Git wire POSTs never reach here — [`crate::http`] routes those to the backend.
-// r[impl web.auth.challenge] the `/login` and `/login/cli` POST endpoints complete the challenge-response
-// r[impl web.auth.session] `/login` opens the session cookie; `/logout` requires the CSRF token and clears it
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge, web.auth.session)
 pub(crate) async fn handle_post(
     state: &AppState,
     path: &str,
@@ -194,7 +198,10 @@ pub(crate) async fn handle_post(
 /// gate (nonce seed + hooks) and its own signing key, all of which
 /// [`write::edit_config`] requires. When any is unset, edit controls are not
 /// offered so a member is never told they can edit when a submit would only fail.
-// r[impl web.auth.edit] hides edit controls when the server has no signing key or nonce seed
+///
+/// ## Requirements
+///
+/// @relation(web.auth.edit)
 fn editing_enabled(state: &AppState) -> bool {
     state.cert_nonce_seed.is_some() && state.hooks_dir.is_some() && state.web_signing_key.is_some()
 }
@@ -211,7 +218,10 @@ fn is_secure_request(headers: &HeaderMap) -> bool {
 
 /// Apply a settings edit, then redirect back to the settings page on success or
 /// render the reason it was rejected.
-// r[impl web.auth.edit] the settings-edit request path (CSRF check, then a real signed push)
+///
+/// ## Requirements
+///
+/// @relation(web.auth.edit)
 async fn save_settings(
     state: &AppState,
     repo: &Path,
@@ -279,7 +289,10 @@ async fn save_settings(
 
 /// Record a code comment posted from a file view, then redirect back to that
 /// file on success or render the reason it was rejected.
-// r[impl web.comments] - lands a browser comment through the same signed-push gate as a settings edit
+///
+/// ## Requirements
+///
+/// @relation(web.comments)
 async fn save_comment(
     state: &AppState,
     repo: &Path,
@@ -365,7 +378,10 @@ fn redirect(location: &str, set_cookie: Option<String>) -> Response {
 }
 
 /// The `Set-Cookie` value that opens a session, marked `Secure` over HTTPS.
-// r[impl web.auth.session] issues the `ents_session` cookie
+///
+/// ## Requirements
+///
+/// @relation(web.auth.session)
 fn session_cookie(token: &str, secure: bool) -> String {
     format!(
         "{}={token}; Path=/; HttpOnly; SameSite=Lax{}",
@@ -375,7 +391,10 @@ fn session_cookie(token: &str, secure: bool) -> String {
 }
 
 /// The `Set-Cookie` value that clears a session.
-// r[impl web.auth.session] clears the cookie on sign-out
+///
+/// ## Requirements
+///
+/// @relation(web.auth.session)
 fn cleared_cookie(secure: bool) -> String {
     format!(
         "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}",
@@ -387,8 +406,10 @@ fn cleared_cookie(secure: bool) -> String {
 /// Dispatch the part of the path that follows the repository to a browse view.
 /// Each top-level tab is its own route, since the product is server-rendered
 /// with no client JavaScript.
-// r[impl web.server-rendered] - navigation is ordinary GET requests, dispatched here
-// r[impl web.tabs] - routes each tab to its page renderer
+///
+/// ## Requirements
+///
+/// @relation(web.server-rendered, web.tabs)
 async fn route(
     repo: &Path,
     rel: &str,
@@ -471,7 +492,10 @@ async fn resolve_auth(repo: &Path, session: Option<write::SessionSnapshot>) -> O
 }
 
 /// The top-level tabs of a repository page.
-// r[impl web.tabs] - the set of tabs a repository's web UI provides
+///
+/// ## Requirements
+///
+/// @relation(web.tabs)
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Overview,
@@ -601,7 +625,10 @@ fn repo_header(meta: &RepoMeta) -> Markup {
 
 /// The tab bar with the active tab underlined. Tabs that have no backing data
 /// yet still render so the navigation matches the design.
-// r[impl web.tabs] - the tab bar navigation
+///
+/// ## Requirements
+///
+/// @relation(web.tabs)
 fn tab_bar(meta: &RepoMeta, active: Tab) -> Markup {
     let rel = &meta.rel;
     html! {
@@ -623,7 +650,10 @@ fn tab_bar(meta: &RepoMeta, active: Tab) -> Markup {
 }
 
 /// The repository listing shown at `/`.
-// r[impl web.index]
+///
+/// ## Requirements
+///
+/// @relation(web.index)
 fn index(state: &AppState, session: Option<&write::SessionSnapshot>) -> Markup {
     let repos = discover_repos(&state.data_dir);
     page(
@@ -699,7 +729,10 @@ fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
 /// The sign-in page: prove control of a member key by signing a one-time
 /// challenge locally, without ever surrendering the key. `error` shows a failed
 /// attempt's reason; `challenge` is the nonce to sign.
-// r[impl web.auth.challenge] points at `git ents login` as the preferred flow, manual signing as fallback
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge)
 fn login_page(
     session: Option<&write::SessionSnapshot>,
     challenge: Option<&str>,
@@ -764,7 +797,7 @@ fn edit_error(back: &str, error: &str) -> Markup {
 }
 
 /// Wrap page `body` in the shared HTML shell, navigation, and styling.
-// r[impl web.server-rendered] - the shared shell; its two scripts (copy-to-clipboard,
+// @relation(web.server-rendered)
 // live check polling) are progressive enhancement, not required for navigation
 fn page(title: &str, body: Markup) -> Markup {
     html! {

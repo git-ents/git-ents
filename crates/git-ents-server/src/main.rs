@@ -14,11 +14,13 @@ struct Cli {
     builtins: FigueBuiltins,
 }
 
-// r[impl server.embeddable] - the standalone binary runs the same `git_ents_server::run` as `git ents server`
+/// ## Requirements
+///
+/// @relation(server.embeddable)
 fn main() -> ExitCode {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
-    // r[impl deploy.fly]
+    // @relation(deploy.fly)
     // With zero CLI tokens (how Fly.io always runs this image — every setting
     // arrives via env vars, which `git_ents_server::run` reads itself),
     // `#[facet(flatten)]`'s all-`Option` `args` never gets a single populated

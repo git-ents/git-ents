@@ -19,8 +19,10 @@ pub(crate) fn is_markdown(name: &str) -> bool {
 /// Render Markdown `source` to an embedded HTML fragment, with the tables,
 /// footnotes, strikethrough, and task-list extensions people expect from
 /// forge-flavored Markdown.
-// r[impl web.render-registry] - Markdown's entry in the MIME-keyed registry
-// r[impl web.syntax-highlight] - Markdown rendered to HTML
+///
+/// ## Requirements
+///
+/// @relation(web.render-registry, web.syntax-highlight)
 pub(crate) fn to_html(source: &str) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES

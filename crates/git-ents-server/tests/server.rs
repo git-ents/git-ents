@@ -13,9 +13,7 @@ use std::process::Command;
 
 use rstest::rstest;
 
-// r[verify web.server-rendered] - GET / returns a rendered page, no client required
-// r[verify web.index] - GET / renders the repository index
-// r[verify server.embeddable] - exercises the standalone `git-ents-server` binary
+// @relation(web.server-rendered, web.index, server.embeddable, role=Verifies)
 #[test]
 fn responds_to_requests() {
     let port = free_port();
@@ -44,9 +42,7 @@ fn responds_to_requests() {
     let _wait = child.wait();
 }
 
-// r[verify storage.bare] - a first push auto-creates the bare repo, and it survives to be cloned
-// r[verify namespace.auto-create]
-// r[verify protocol.git]
+// @relation(storage.bare, namespace.auto-create, protocol.git, role=Verifies)
 #[test]
 fn push_then_clone_round_trip() {
     let data = tempfile::tempdir().unwrap();
@@ -85,8 +81,7 @@ fn push_then_clone_round_trip() {
     assert_eq!(pushed, cloned, "cloned HEAD must match pushed HEAD");
 }
 
-// r[verify namespace.path] - `org/repo` and `org/team/repo` are accepted multi-segment paths
-// r[verify namespace.auto-create]
+// @relation(namespace.path, namespace.auto-create, role=Verifies)
 #[rstest]
 #[case("org/repo")]
 #[case("org/team/repo")]
@@ -128,7 +123,7 @@ fn nested_push_then_clone_round_trip(#[case] name: &str) {
     );
 }
 
-// r[verify namespace.auto-create] - a colliding creation is refused, not raced
+// @relation(namespace.auto-create, role=Verifies)
 #[rstest]
 #[case("org/repo.git/deep.git")] // nested inside an existing repository
 #[case("org")] // already exists as a namespace

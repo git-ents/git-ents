@@ -11,7 +11,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 /// Open a debug session at `url`, authenticated with the session `token`
 /// stored by `git ents login`.
-// r[impl checks.debug] `git ents checks debug` CLI side of the interactive shell
+///
+/// ## Requirements
+///
+/// @relation(checks.debug)
 pub(crate) async fn run(url: &str, token: &str) -> Result<(), String> {
     let mut request = url
         .into_client_request()
@@ -38,7 +41,10 @@ pub(crate) async fn run(url: &str, token: &str) -> Result<(), String> {
 /// straight to stdout. A dedicated thread reads stdin because raw terminal
 /// input has no natural way to interrupt a blocking read when the session
 /// ends from the other side.
-// r[impl checks.debug] terminal resize forwarded as control frames
+///
+/// ## Requirements
+///
+/// @relation(checks.debug)
 async fn pump<S, R>(sink: &mut S, source: &mut R) -> Result<(), String>
 where
     S: futures_util::Sink<Message> + Unpin,

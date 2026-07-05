@@ -20,10 +20,7 @@ use std::process::{Child, Command, Stdio};
 const BIN: &str = env!("CARGO_BIN_EXE_git-ents-server");
 const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 
-// r[verify web.tabs] - Settings tab is editable in the browser by a signed-in member
-// r[verify web.auth.edit] - lands as a real signed push authored by the member, committed by the server
-// r[verify web.auth.challenge] - signs in via the challenge/signature flow first
-// r[verify web.auth.session] - the session cookie authorizes the edit
+// @relation(web.tabs, web.auth.edit, web.auth.challenge, web.auth.session, role=Verifies)
 #[test]
 fn a_member_edits_settings_through_the_browser() {
     let env = Server::start();
@@ -85,7 +82,7 @@ fn a_member_edits_settings_through_the_browser() {
     );
 }
 
-// r[verify web.auth.session] - a state-changing POST without the matching CSRF token is refused
+// @relation(web.auth.session, role=Verifies)
 #[test]
 fn an_edit_without_a_valid_csrf_token_is_refused() {
     let env = Server::start();
@@ -109,7 +106,7 @@ fn an_edit_without_a_valid_csrf_token_is_refused() {
     );
 }
 
-// r[verify web.auth.edit] - require_admin_registered refuses a self-attested member's settings edit
+// @relation(web.auth.edit, role=Verifies)
 #[test]
 fn a_self_attested_member_is_refused_a_settings_edit() {
     let env = Server::start();
@@ -149,7 +146,7 @@ fn a_self_attested_member_is_refused_a_settings_edit() {
     );
 }
 
-// r[verify web.auth.challenge] - a session proves key control, not membership or authority
+// @relation(web.auth.challenge, role=Verifies)
 #[test]
 fn a_non_member_is_not_offered_an_edit_form() {
     let env = Server::start();
@@ -174,7 +171,7 @@ fn a_non_member_is_not_offered_an_edit_form() {
     );
 }
 
-// r[verify web.auth.challenge] - a signature that does not match the pasted public key must not open a session
+// @relation(web.auth.challenge, role=Verifies)
 #[test]
 fn a_signature_that_does_not_match_the_public_key_is_refused() {
     let env = Server::start();

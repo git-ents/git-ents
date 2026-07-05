@@ -15,11 +15,11 @@ use facet::Facet;
 
 use crate::component;
 
-// r[impl config.ref]
+// @relation(config.ref)
 /// The ref whose tree holds the repository configuration.
 pub const CONFIG_REF: &str = "refs/meta/config";
 
-// r[impl config.ref]
+// @relation(config.ref)
 /// The repository configuration stored at [`CONFIG_REF`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Facet)]
 pub struct Config {
@@ -111,7 +111,10 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 /// An absent ref yields [`Config::default`], as on a repository whose metadata
 /// has not been set yet. A present but unreadable ref is an error so callers can
 /// distinguish corruption from "no configuration set".
-// r[impl config.ref] - an absent ref yields the default (all empty)
+///
+/// ## Requirements
+///
+/// @relation(config.ref)
 pub fn load_with(store: &git_store::Store) -> Result<Config, git_store::Error> {
     Ok(component::load::<Config>(store)?.unwrap_or_default())
 }
@@ -161,7 +164,7 @@ mod tests {
         }
     }
 
-    // r[verify config.ref]
+    // @relation(config.ref, role=Verifies)
     #[test]
     fn store_then_load_round_trips_the_config() {
         let repo = unique_repo();
@@ -179,7 +182,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // r[verify storage.meta-ref] - hand-built fixture load test for the Config document
+    // @relation(storage.meta-ref, role=Verifies)
     #[test]
     fn loads_the_on_disk_config_format() {
         // A fixture written as the real on-disk layout — `description` and
@@ -198,7 +201,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // r[verify config.ref]
+    // @relation(config.ref, role=Verifies)
     #[test]
     fn default_when_the_config_ref_is_absent() {
         let repo = unique_repo();

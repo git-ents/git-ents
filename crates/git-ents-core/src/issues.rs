@@ -31,7 +31,7 @@ use facet::Facet;
 
 use crate::component;
 
-// r[impl issues.ref]
+// @relation(issues.ref)
 /// The namespace under which issues are recorded: one ref,
 /// `refs/meta/issues/<id>`, per issue.
 pub const ISSUES_NS: &str = "refs/meta/issues";
@@ -51,7 +51,7 @@ pub enum State {
     Closed,
 }
 
-// r[impl issues.ref]
+// @relation(issues.ref)
 /// One issue stored at `refs/meta/issues/<id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Issue {
@@ -99,7 +99,10 @@ struct IssueNumber {
 /// issue derives from one — one origin, one issue, deduplicated on
 /// provenance — otherwise the hash of the issue's own initial content, since
 /// every issue is a git object and so always has one.
-// r[impl issues.id]
+///
+/// ## Requirements
+///
+/// @relation(issues.id)
 pub fn new_id(origin: Option<&str>, content: &Issue) -> Result<String, git_store::Error> {
     git_store::new_id(origin, content)
 }
@@ -157,7 +160,10 @@ const MAX_PROMOTE_RETRIES: usize = 5;
 /// callers believe they claimed it. A CAS conflict here is retried by
 /// re-reading the counter, so the number handed back is always the one
 /// actually reserved for this call.
-// r[impl issues.id] - only promotion advances the friendly-number counter, never renaming the ref
+///
+/// ## Requirements
+///
+/// @relation(issues.id)
 pub fn promote(repo: &Path, id: &str) -> Result<String, PromoteError> {
     let store = git_store::Store::open(repo)?;
     let mut number = None;
@@ -212,7 +218,7 @@ mod tests {
         }
     }
 
-    // r[verify issues.ref]
+    // @relation(issues.ref, role=Verifies)
     #[test]
     fn store_then_load_round_trips_an_issue() {
         let repo = unique_repo();
@@ -241,7 +247,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // r[verify storage.meta-ref] - hand-built fixture load test for the Issue document
+    // @relation(storage.meta-ref, role=Verifies)
     #[test]
     fn loads_the_on_disk_issue_format() {
         // A fixture written as the real on-disk layout — `title`, `body`,
@@ -266,14 +272,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // r[verify issues.id]
+    // @relation(issues.id, role=Verifies)
     #[test]
     fn new_id_uses_the_origin_when_one_is_given() {
         let content = issue("A bug", State::Open, &[]);
         assert_eq!(new_id(Some("deadbeef"), &content).unwrap(), "deadbeef");
     }
 
-    // r[verify issues.id]
+    // @relation(issues.id, role=Verifies)
     #[test]
     fn new_id_hashes_its_own_content_with_no_origin() {
         let a = issue("A bug", State::Open, &[]);
@@ -286,7 +292,7 @@ mod tests {
         assert_ne!(a_id, b_id);
     }
 
-    // r[verify issues.id]
+    // @relation(issues.id, role=Verifies)
     #[test]
     fn filing_an_issue_leaves_its_friendly_number_unset() {
         let repo = unique_repo();
@@ -297,7 +303,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // r[verify issues.id]
+    // @relation(issues.id, role=Verifies)
     #[test]
     fn promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref() {
         let repo = unique_repo();

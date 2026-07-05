@@ -25,8 +25,10 @@ pub(crate) fn is_asciidoc(name: &str) -> bool {
 /// Render AsciiDoc `source` to an embedded HTML fragment, or `None` if it cannot
 /// be parsed or converted. The fragment carries no document frame, so callers
 /// place it inside their own container.
-// r[impl web.render-registry] - AsciiDoc's entry in the MIME-keyed registry
-// r[impl web.syntax-highlight] - AsciiDoc rendered to HTML
+///
+/// ## Requirements
+///
+/// @relation(web.render-registry, web.syntax-highlight)
 pub(crate) fn to_html(source: &str) -> Option<String> {
     let parsed = acdc_parser::parse(source, &ParseOptions::default()).ok()?;
     let doc = parsed.document();

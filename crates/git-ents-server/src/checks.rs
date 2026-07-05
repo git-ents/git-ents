@@ -106,8 +106,10 @@ const POLL: Duration = Duration::from_secs(2);
 /// The hook does no check work itself: it writes one job file per updated branch
 /// into the shared queue directory ([`QUEUE_ENV`]) and returns, so the push is
 /// never blocked on a Sprite. The server's [`worker`] picks the jobs up.
-// r[impl checks.post-receive] enqueues one job per updated non-meta branch with a non-zero tip, records `queued` immediately, does not run checks itself, returns fast
-// r[impl nonfunctional.push-latency] - writes job files and returns without running any check
+///
+/// ## Requirements
+///
+/// @relation(checks.post-receive, nonfunctional.push-latency)
 pub fn post_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
 
@@ -178,8 +180,10 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
 /// every other repository's checks; isolating them by repository keeps a slow
 /// repository's backlog from blocking the rest. Jobs for *one* repository stay
 /// serialized so concurrent runs never collide in its single Sprite.
-// r[impl checks.worker] persistent worker drains the queue; jobs grouped by repo, serialized per-repo, concurrent across repos
-// r[impl nonfunctional.concurrency] - check jobs run via `spawn_blocking`, never on the async runtime's own thread
+///
+/// ## Requirements
+///
+/// @relation(checks.worker, nonfunctional.concurrency)
 pub async fn worker(queue: PathBuf, live: LiveRegistry) {
     if let Err(e) = std::fs::create_dir_all(&queue) {
         eprintln!("checks: could not create queue directory {queue:?}: {e}");
@@ -254,7 +258,10 @@ fn drain_repo(jobs: &[(PathBuf, Job)], live: &LiveRegistry) {
 /// re-validation) finalizes the run as `error` rather than leaving it stuck at
 /// `running`, then returns `Err`. Returns `Ok` even when a check fails — a
 /// failing check is a recorded result, not an error.
-// r[impl checks.worker] checks settle in topological order, skipped-on-failed-dependency semantics, composite outcome derivation, re-validates the DAG before running, finalizes as error if invalid
+///
+/// ## Requirements
+///
+/// @relation(checks.worker)
 fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     let runnable = checks::load(&job.repo).map_err(|e| format!("could not read checks: {e}"))?;
     if runnable.is_empty() {
@@ -356,7 +363,10 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
 /// A composite check's status, derived from its dependencies' settled
 /// statuses: `pass` when everything passed, `fail` when anything failed or
 /// errored, `skipped` when nothing failed but something was skipped.
-// r[impl checks.worker] composite outcome derivation from dependency statuses
+///
+/// ## Requirements
+///
+/// @relation(checks.worker)
 fn derive_composite(deps: &[Status]) -> Status {
     if deps.iter().all(|status| *status == Status::Pass) {
         Status::Pass
@@ -380,7 +390,10 @@ fn advance(repo: &Path, new: ObjectId, outcomes: &[RunOutcome]) {
 
 /// Mark every check in `outcomes` `error` and record it — the terminal state for
 /// a run the worker could not carry out.
-// r[impl checks.worker] finalizes a run as error when it cannot be carried out
+///
+/// ## Requirements
+///
+/// @relation(checks.worker)
 fn finalize_error(repo: &Path, new: ObjectId, outcomes: &mut [RunOutcome]) {
     for outcome in outcomes.iter_mut() {
         outcome.status = Status::Error;
@@ -399,7 +412,10 @@ struct Job {
 /// Write a job for `update` into `queue` as a three-line file (`repo`, new oid,
 /// ref). The file is written under a `.tmp` name and renamed into place so the
 /// worker never observes a half-written job.
-// r[impl checks.post-receive] job files are written to a tmp name then renamed into place
+///
+/// ## Requirements
+///
+/// @relation(checks.post-receive)
 fn enqueue(queue: &Path, repo: &Path, update: &Update) -> Result<(), String> {
     std::fs::create_dir_all(queue)
         .map_err(|e| format!("could not create queue directory {queue:?}: {e}"))?;
@@ -466,7 +482,10 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
 ///
 /// Shared with [`crate::web`]'s debug-session broker, which targets the same
 /// persistent per-repo Sprite a check run used.
-// r[impl checks.sandbox] each check runs in a Fly.io Sprite per repo
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
 pub(crate) fn sprite_name(repo: &Path) -> String {
     let stem = repo
         .file_name()
@@ -494,8 +513,10 @@ pub(crate) fn sprite_name(repo: &Path) -> String {
 /// token per call, so without this it reports "no organizations configured"
 /// even with the token in the environment. `auth setup` is idempotent, so it is
 /// run on every push to keep the steady state self-healing.
-// r[impl checks.sandbox] configures the sprite CLI from SPRITES_TOKEN
-// r[impl compat.sprite] - `sprite auth setup --token` from SPRITES_TOKEN, run per-push since credentials persist to a config file
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox, compat.sprite)
 pub(crate) fn ensure_auth() -> Result<(), String> {
     let token = std::env::var("SPRITES_TOKEN")
         .ok()
@@ -518,8 +539,10 @@ pub(crate) fn ensure_auth() -> Result<(), String> {
 /// fails when the Sprite is already there, which is the steady state once the
 /// first push has run, so its failure is tolerated and surfaces only later if
 /// the Sprite turns out to be unreachable.
-// r[impl checks.sandbox] creates the repository's per-repo Sprite
-// r[impl compat.sprite] - `sprite create` on PATH at runtime
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox, compat.sprite)
 pub(crate) fn ensure_sprite(sprite: &str) -> Result<(), String> {
     let _existing = Command::new("sprite")
         .args(["create", "--skip-console", sprite])
@@ -532,9 +555,10 @@ pub(crate) fn ensure_sprite(sprite: &str) -> Result<(), String> {
 /// previous contents while leaving the rest of the persistent filesystem (build
 /// caches and the like) intact. `git archive` emits the tree as a tar that the
 /// Sprite unpacks over stdin.
-// r[impl checks.sandbox] syncs the pushed tree via git archive | tar -x
-// r[impl compat.sprite] - `sprite exec` on PATH at runtime
-// r[impl compat.git] - invokes `git archive` as an external subprocess
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox, compat.sprite, compat.git)
 fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
     let archive = Command::new("git")
         .arg("-C")
@@ -573,8 +597,10 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
 /// failed resolution (the named ref does not exist) is the one place
 /// `checks::order` could not have caught it, since `refs/meta/toolchains/*`
 /// is a different namespace than the check set itself.
-// r[impl checks.toolchains] existence of a named toolchain is checked server-side at job time
-// r[impl checks.sandbox] resolves toolchain bin trees and extracts into a hash-keyed dir, with caching
+///
+/// ## Requirements
+///
+/// @relation(checks.toolchains, checks.sandbox)
 fn resolve_toolchains(
     repo: &Path,
     sprite: &str,
@@ -628,7 +654,10 @@ fn components_key(components: &[git_toolchain::Component]) -> String {
 /// `bin` directories, declared order first (so the first-listed toolchain's
 /// `bin` wins on a name collision); a check with no toolchains is returned
 /// unchanged.
-// r[impl checks.sandbox] PATH prefixing of resolved toolchains in declaration order
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
 fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>) -> String {
     if toolchains.is_empty() {
         return command.to_owned();
@@ -648,7 +677,10 @@ fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>
 /// persistent filesystem is the cache. Checked before running `git archive`
 /// so an already-cached toolchain never streams its (potentially large)
 /// contents through a pipe the Sprite has no reason to read.
-// r[impl checks.sandbox] extracts an embedded toolchain into a hash-keyed dir, cached
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
 fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), String> {
     let dir = format!("{TOOLCHAINS_DIR}/{tree}");
     let cached = Command::new("sprite")
@@ -707,7 +739,10 @@ fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), Strin
 /// mirroring `git_toolchain::export`'s local equivalent: downloading through
 /// the server first and streaming the bytes in would defeat the point of not
 /// storing them.
-// r[impl checks.sandbox] extracts a downloaded toolchain into a hash-keyed dir, cached
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
 fn sync_downloaded_toolchain(
     sprite: &str,
     key: &str,
@@ -759,7 +794,10 @@ fn sync_downloaded_toolchain(
 /// killed and recorded `error` rather than wedging the worker (and with it every
 /// other repository's checks) on the one blocking-pool thread the queue drains
 /// on.
-// r[impl checks.outcomes] timeout at 30 minutes finalizes a check as error
+///
+/// ## Requirements
+///
+/// @relation(checks.outcomes)
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The fixed size a check's recorded terminal session runs at. Nothing
@@ -791,7 +829,10 @@ struct RunResult {
 /// as the recorded `recording`, not a separate representation of the same
 /// output. Returns the check's outcome; a check that exceeds [`CHECK_TIMEOUT`]
 /// or cannot be captured is [`Status::Error`].
-// r[impl compat.sprite] - `sprite exec` (with `--tty`) on PATH at runtime
+///
+/// ## Requirements
+///
+/// @relation(compat.sprite)
 fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>) -> RunResult {
     let start = Instant::now();
     lock(live).push_str(&asciicast_header());
@@ -949,7 +990,7 @@ mod tests {
 
     use super::*;
 
-    // r[verify checks.post-receive] only updated non-meta branches with a non-zero tip are enqueued
+    // @relation(checks.post-receive, role=Verifies)
     #[test]
     fn parse_updates_keeps_content_branches_only() {
         let new = "1111111111111111111111111111111111111111";
@@ -965,14 +1006,14 @@ mod tests {
         assert_eq!(refs, vec!["refs/heads/main", "refs/heads/feature"]);
     }
 
-    // r[verify checks.sandbox]
+    // @relation(checks.sandbox, role=Verifies)
     #[test]
     fn activate_leaves_a_toolchain_free_command_unchanged() {
         let dirs = HashMap::new();
         assert_eq!(activate("cargo test", &[], &dirs), "cargo test");
     }
 
-    // r[verify checks.sandbox] PATH prefixing in declaration order
+    // @relation(checks.sandbox, role=Verifies)
     #[test]
     fn activate_prefixes_path_in_declared_order() {
         let mut dirs = HashMap::new();
@@ -985,7 +1026,7 @@ mod tests {
         );
     }
 
-    // r[verify checks.sandbox]
+    // @relation(checks.sandbox, role=Verifies)
     #[test]
     fn activate_skips_a_toolchain_missing_from_dirs() {
         let dirs = HashMap::new();
@@ -996,7 +1037,7 @@ mod tests {
         );
     }
 
-    // r[verify checks.worker] composite outcome derivation
+    // @relation(checks.worker, role=Verifies)
     #[test]
     fn composite_status_derives_from_its_dependencies() {
         assert_eq!(
@@ -1020,7 +1061,7 @@ mod tests {
         assert_eq!(derive_composite(&[]), Status::Pass);
     }
 
-    // r[verify checks.worker] jobs grouped by repo for per-repo draining
+    // @relation(checks.worker, role=Verifies)
     #[test]
     fn pending_jobs_groups_by_repo_and_drops_malformed() {
         let queue = tempfile::tempdir().unwrap();

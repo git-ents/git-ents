@@ -6,7 +6,7 @@
 
 use std::io::IsTerminal as _;
 
-// r[impl cli.interactive] - TTY detection gating prompting vs. failing fast
+// @relation(cli.interactive)
 /// Whether prompting is possible: both stdin and stdout are a terminal.
 #[must_use]
 pub fn available() -> bool {
@@ -17,7 +17,10 @@ pub fn available() -> bool {
 /// error naming `message` when not, so a script never hangs on a missing
 /// argument. An empty string — whether passed explicitly or typed at the
 /// prompt — is rejected the same as a missing value.
-// r[impl cli.interactive] - prompt for a required field at a TTY; error naming the field otherwise
+///
+/// ## Requirements
+///
+/// @relation(cli.interactive)
 pub fn text_or(existing: Option<String>, message: &str) -> Result<String, String> {
     if let Some(value) = existing {
         return if value.is_empty() {
@@ -43,7 +46,10 @@ pub fn text_or(existing: Option<String>, message: &str) -> Result<String, String
 /// `existing`, or an optional text prompt for `message` when interactive —
 /// an empty reply is `None`. Non-interactive with no `existing` value stays
 /// `None` rather than erroring, since the field is optional.
-// r[impl cli.interactive] - prompt for an optional field at a TTY, `None` otherwise
+///
+/// ## Requirements
+///
+/// @relation(cli.interactive)
 pub fn optional_text_or(existing: Option<String>, message: &str) -> Result<Option<String>, String> {
     if existing.is_some() {
         return Ok(existing);
@@ -59,7 +65,10 @@ pub fn optional_text_or(existing: Option<String>, message: &str) -> Result<Optio
 
 /// A `Select` prompt among `options`, run only when interactive; `default`
 /// otherwise.
-// r[impl cli.interactive] - prompt with a selection at a TTY, `default` otherwise
+///
+/// ## Requirements
+///
+/// @relation(cli.interactive)
 pub fn select_or(message: &str, options: &[&str], default: usize) -> Result<usize, String> {
     if !available() {
         return Ok(default);

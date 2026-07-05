@@ -46,7 +46,10 @@ pub(super) async fn git_output_bytes(repo: &Path, args: &[&str]) -> Option<Vec<u
 /// bounds the memory a single request can consume, so an arbitrarily large blob
 /// or diff renders as a truncation notice instead of being slurped whole — the
 /// difference between a capped response and an out-of-memory kill.
-// r[impl nonfunctional.memory-cap] - kills git and truncates once the cap is exceeded
+///
+/// ## Requirements
+///
+/// @relation(nonfunctional.memory-cap)
 pub(super) async fn git_output_capped(
     repo: &Path,
     args: &[&str],
@@ -346,7 +349,7 @@ mod tests {
         }
     }
 
-    // r[verify nonfunctional.memory-cap]
+    // @relation(nonfunctional.memory-cap, role=Verifies)
     #[tokio::test]
     async fn capped_read_flags_oversized_output() {
         let dir = tempfile::tempdir().unwrap();
@@ -359,7 +362,7 @@ mod tests {
         assert_eq!(bytes.len(), 1024);
     }
 
-    // r[verify nonfunctional.memory-cap]
+    // @relation(nonfunctional.memory-cap, role=Verifies)
     #[tokio::test]
     async fn capped_read_returns_full_small_output() {
         let dir = tempfile::tempdir().unwrap();

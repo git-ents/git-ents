@@ -43,11 +43,9 @@ struct Cli {
     builtins: FigueBuiltins,
 }
 
-// r[impl cli.members] - top-level subcommand
-// r[impl cli.account-checks] - top-level subcommands
-// r[impl cli.toolchains] - top-level subcommand
-// r[impl cli.comments] - top-level subcommand
-// r[impl cli.login] - top-level subcommand
+/// ## Requirements
+///
+/// @relation(cli.members, cli.account-checks, cli.toolchains, cli.comments, cli.login)
 #[derive(Facet)]
 #[repr(u8)]
 enum Top {
@@ -92,7 +90,9 @@ enum Top {
     Server(git_ents_server::Args),
 }
 
-// r[impl cli.members] - members subcommands (list/add/remove/revoke/unrevoke/check/setup)
+/// ## Requirements
+///
+/// @relation(cli.members)
 #[derive(Facet)]
 #[repr(u8)]
 enum Action {
@@ -172,7 +172,9 @@ enum Action {
     },
 }
 
-// r[impl cli.account-checks] - `account create`
+/// ## Requirements
+///
+/// @relation(cli.account-checks)
 #[derive(Facet)]
 #[repr(u8)]
 enum AccountAction {
@@ -192,7 +194,9 @@ enum AccountAction {
     },
 }
 
-// r[impl cli.account-checks] - `checks list`/`add`/`remove`
+/// ## Requirements
+///
+/// @relation(cli.account-checks)
 #[derive(Facet)]
 #[repr(u8)]
 enum ChecksAction {
@@ -235,7 +239,9 @@ enum ChecksAction {
     Runs,
 }
 
-// r[impl cli.toolchains] - `import`/`list`/`export`/`remove`
+/// ## Requirements
+///
+/// @relation(cli.toolchains)
 #[derive(Facet)]
 #[repr(u8)]
 enum ToolchainAction {
@@ -316,7 +322,9 @@ enum ToolchainAction {
     },
 }
 
-// r[impl cli.comments] - `add`/`list`/`show`/`remove`
+/// ## Requirements
+///
+/// @relation(cli.comments)
 #[derive(Facet)]
 #[repr(u8)]
 enum CommentAction {
@@ -415,7 +423,9 @@ fn exit_code(result: Result<(), String>) -> ExitCode {
     }
 }
 
-// r[impl cli.members] - dispatch
+/// ## Requirements
+///
+/// @relation(cli.members)
 fn run_members(action: Action, remote: &str) -> Result<(), String> {
     match action {
         Action::Setup { key, local } => setup(key.as_deref(), local),
@@ -448,7 +458,9 @@ fn run_members(action: Action, remote: &str) -> Result<(), String> {
     }
 }
 
-// r[impl cli.account-checks] - `account create` dispatch
+/// ## Requirements
+///
+/// @relation(cli.account-checks)
 fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
     match action {
         AccountAction::Create {
@@ -459,7 +471,9 @@ fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
     }
 }
 
-// r[impl cli.account-checks] - `checks` dispatch
+/// ## Requirements
+///
+/// @relation(cli.account-checks)
 fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
     match action {
         ChecksAction::List => list::<Check>(remote),
@@ -505,7 +519,9 @@ fn checks_runs(remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.toolchains] - dispatch
+/// ## Requirements
+///
+/// @relation(cli.toolchains)
 fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
     match action {
         ToolchainAction::Import {
@@ -535,7 +551,10 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
 /// interactive terminal, unless `from` names a recipe (`registry::resolve`)
 /// to derive `bin`/`src`/`license`/`version`/`platform` from instead;
 /// explicit flags still win over a recipe's values.
-// r[impl cli.toolchains] - `import` (including `--from`/`--embed`)
+///
+/// ## Requirements
+///
+/// @relation(cli.toolchains)
 #[expect(clippy::too_many_arguments, reason = "one flag per import field")]
 fn toolchain_import(
     name: Option<String>,
@@ -622,7 +641,7 @@ fn toolchain_import(
     Ok(())
 }
 
-// r[impl cli.toolchains] - `list`
+// @relation(cli.toolchains)
 /// Print every toolchain configured on `remote` as
 /// `<name>  <bin>  <version>  <platform>  <license>`.
 fn toolchain_list(remote: &str) -> Result<(), String> {
@@ -675,8 +694,7 @@ fn toolchain_log(name: &str, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.toolchains] - `export`
-// r[impl cli.remote-admin] - `toolchain export` is read-only
+// @relation(cli.toolchains, cli.remote-admin)
 /// Export `remote`'s toolchain `name` to `dest`. Read-only per
 /// `cli.remote-admin`: fetches the toolchain's tree but never pushes.
 fn toolchain_export(name: &str, dest: &str, remote: &str) -> Result<(), String> {
@@ -711,7 +729,7 @@ fn toolchain_view(name: &str, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.toolchains] - `remove`
+// @relation(cli.toolchains)
 /// Remove toolchain `name` on `remote`, deleting its ref and pushing the
 /// update.
 fn toolchain_remove(name: &str, remote: &str) -> Result<(), String> {
@@ -723,7 +741,9 @@ fn toolchain_remove(name: &str, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.comments] - dispatch
+/// ## Requirements
+///
+/// @relation(cli.comments)
 fn run_comment(action: CommentAction, remote: &str) -> Result<(), String> {
     match action {
         CommentAction::Add {
@@ -743,7 +763,10 @@ fn run_comment(action: CommentAction, remote: &str) -> Result<(), String> {
 /// record it at `refs/meta/comments/<id>` authored as the configured git
 /// identity, and push it. Prompts for the path and body left `None` when run
 /// at an interactive terminal.
-// r[impl cli.comments] - `add`
+///
+/// ## Requirements
+///
+/// @relation(cli.comments)
 fn comment_add(
     path: Option<String>,
     body: Option<String>,
@@ -774,8 +797,7 @@ fn comment_add(
     Ok(())
 }
 
-// r[impl cli.comments] - `list`
-// r[impl cli.remote-admin] - `comment list` is read-only
+// @relation(cli.comments, cli.remote-admin)
 /// List every comment on `remote` as `<id>  <author>  <location>  <body>`,
 /// with each anchor projected onto `rev`.
 fn comment_list(remote: &str, rev: &str) -> Result<(), String> {
@@ -797,8 +819,7 @@ fn comment_list(remote: &str, rev: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.comments] - `show`
-// r[impl cli.remote-admin] - `comment show` is read-only
+// @relation(cli.comments, cli.remote-admin)
 /// Show the comment `id` (or a unique prefix): who wrote and last edited it,
 /// where it was anchored, where that sits on `rev`, the anchored text, and
 /// the body.
@@ -852,7 +873,7 @@ fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.comments] - `remove`
+// @relation(cli.comments)
 /// Remove the comment `id` (or a unique prefix) on `remote`, deleting its ref
 /// and pushing the deletion.
 fn comment_remove(id: &str, remote: &str) -> Result<(), String> {
@@ -997,8 +1018,7 @@ fn window_suffix(member: &Member) -> String {
     }
 }
 
-// r[impl cli.account-checks] - `checks list`
-// r[impl cli.remote-admin] - a `Set` listing is read-only
+// @relation(cli.account-checks, cli.remote-admin)
 /// Print each entry of the set `S` on `remote` as `<key>  <value>`.
 fn list<S: Set>(remote: &str) -> Result<(), String> {
     let repo = repo()?;
@@ -1014,7 +1034,7 @@ fn list<S: Set>(remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.account-checks] - `checks remove`
+// @relation(cli.account-checks)
 /// Drop the entry keyed `key` from the set `S` on `remote` and push the update.
 fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
@@ -1039,7 +1059,10 @@ fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
 /// unset when run at an interactive terminal. The whole set is validated as a
 /// dependency graph (`checks::order`) before it is stored, so a cycle or a
 /// dangling dependency never lands on the remote.
-// r[impl cli.account-checks] - `checks add`
+///
+/// ## Requirements
+///
+/// @relation(cli.account-checks)
 fn add_check(
     name: Option<String>,
     command: Option<String>,
@@ -1105,8 +1128,10 @@ fn parse_names(reply: Option<String>) -> Vec<String> {
 /// (SSH-format signatures, the key, and "sign when the server asks" so pushes
 /// elsewhere are untouched). Writes global config by default, since the setup
 /// is per-machine.
-// r[impl cli.members] - `setup`
-// r[impl auth.client-setup]
+///
+/// ## Requirements
+///
+/// @relation(cli.members, auth.client-setup)
 fn setup(key: Option<&Path>, local: bool) -> Result<(), String> {
     let scope = if local { "--local" } else { "--global" };
     let signing_key = match key {
@@ -1134,7 +1159,10 @@ fn setup(key: Option<&Path>, local: bool) -> Result<(), String> {
 /// Ensure a usable SSH key exists at `path`, returning the public-key path to
 /// record in `user.signingkey`. Generates an ed25519 keypair when neither the
 /// key nor its `.pub` is present; derives a missing `.pub` from the private key.
-// r[impl cli.key-resolution] - `members setup` may generate a new `~/.ssh/id_ed25519`
+///
+/// ## Requirements
+///
+/// @relation(cli.key-resolution)
 fn ensure_key(path: &Path) -> Result<String, String> {
     let (private, public) = key_paths(path);
     if public.exists() {
@@ -1253,8 +1281,10 @@ fn default_key_path() -> Result<PathBuf, String> {
 /// `cert-authority` line per pinned-CA member — as
 /// `<username>[/<fingerprint>]  <label><window>`, flagging keys on the
 /// `refs/meta/revoked` deny list as `[revoked]`.
-// r[impl cli.members] - `list`
-// r[impl cli.remote-admin] - `members list` is read-only
+///
+/// ## Requirements
+///
+/// @relation(cli.members, cli.remote-admin)
 fn members_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, MEMBER_NS)?;
@@ -1293,7 +1323,10 @@ fn members_list(remote: &str) -> Result<(), String> {
 
 /// Add `fingerprint` to `remote`'s `refs/meta/revoked` deny list and push the
 /// update, so the key is refused before its window would expire.
-// r[impl cli.members] - `revoke`
+///
+/// ## Requirements
+///
+/// @relation(cli.members)
 fn members_revoke(fingerprint: &str, remote: &str, reason: String) -> Result<(), String> {
     if !looks_like_fingerprint(fingerprint) {
         return Err(format!(
@@ -1305,7 +1338,7 @@ fn members_revoke(fingerprint: &str, remote: &str, reason: String) -> Result<(),
     // Revoking your own key fails closed against you too: if it is the last key
     // that authorizes your pushes, you cannot even push the un-revoke. Warn
     // before locking yourself out.
-    // r[impl cli.members] - confirmation before revoking the operator's own last key
+    // @relation(cli.members)
     if own_fingerprint().is_some_and(|own| own == fingerprint)
         && !confirm(&format!(
             "{fingerprint} is your own signing key; \
@@ -1335,7 +1368,10 @@ fn members_revoke(fingerprint: &str, remote: &str, reason: String) -> Result<(),
 
 /// Remove `fingerprint` from `remote`'s `refs/meta/revoked` deny list and push
 /// the update.
-// r[impl cli.members] - `unrevoke`
+///
+/// ## Requirements
+///
+/// @relation(cli.members)
 fn members_unrevoke(fingerprint: &str, remote: &str) -> Result<(), String> {
     let repo = repo()?;
     let expected = sync(remote, REVOKED_REF)?;
@@ -1355,7 +1391,10 @@ fn members_unrevoke(fingerprint: &str, remote: &str) -> Result<(), String> {
 /// either is already set or the terminal is non-interactive, so
 /// `--key`/`--cert-authority` and scripted runs are unchanged; otherwise
 /// prompts for which kind of trust to add.
-// r[impl cli.interactive] - prompt for which kind of trust to add when unset at a TTY
+///
+/// ## Requirements
+///
+/// @relation(cli.interactive)
 fn resolve_trust(
     key: Option<PathBuf>,
     cert_authority: Option<PathBuf>,
@@ -1383,7 +1422,9 @@ fn resolve_trust(
     clippy::too_many_arguments,
     reason = "each argument is an independent, optional member field set from its own CLI flag"
 )]
-// r[impl cli.members] - `add`
+/// ## Requirements
+///
+/// @relation(cli.members)
 fn members_add(
     username: Option<String>,
     remote: &str,
@@ -1471,7 +1512,10 @@ fn members_add(
 /// Revoke the member `username` on `remote`, deleting its ref and pushing the
 /// deletion. Removal here is a plain signed delete; quorum-gated removal is a
 /// later server-side policy.
-// r[impl cli.members] - `remove`
+///
+/// ## Requirements
+///
+/// @relation(cli.members)
 fn members_remove(username: &str, remote: &str) -> Result<(), String> {
     let refname = member_ref(username);
     let expected =
@@ -1481,7 +1525,7 @@ fn members_remove(username: &str, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-// r[impl cli.account-checks] - `account create`
+// @relation(cli.account-checks)
 /// Create or update this repository's account identity on `remote` and push it.
 fn account_create(
     username: Option<String>,
@@ -1527,7 +1571,10 @@ const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 /// signature back — the same proof the browser login page collects by hand.
 /// The returned session token is stored locally so `checks_debug` can reuse
 /// it.
-// r[impl cli.login] - challenge fetch, sign, submit
+///
+/// ## Requirements
+///
+/// @relation(cli.login)
 fn login(remote: &str, key: Option<&Path>) -> Result<(), String> {
     let (base, _repo_path) = remote_http_base(remote)?;
     let private_key = signing_key_file(key)?;
@@ -1550,7 +1597,10 @@ fn login(remote: &str, key: Option<&Path>) -> Result<(), String> {
 /// Open an interactive, read-write shell in `remote`'s persistent checks
 /// Sprite, brokered by the server over a WebSocket using the session
 /// `login` stored.
-// r[impl checks.debug] `git ents checks debug`
+///
+/// ## Requirements
+///
+/// @relation(checks.debug)
 fn checks_debug(remote: &str) -> Result<(), String> {
     let (base, repo_path) = remote_http_base(remote)?;
     let host = host_of(&base)?;
@@ -1565,7 +1615,10 @@ fn checks_debug(remote: &str) -> Result<(), String> {
 
 /// The path to the private half of the signing key to use: `key` verbatim, or
 /// the path behind `user.signingkey`, resolved the same way `setup` does.
-// r[impl cli.key-resolution] - default to `user.signingkey`
+///
+/// ## Requirements
+///
+/// @relation(cli.key-resolution)
 fn signing_key_file(key: Option<&Path>) -> Result<PathBuf, String> {
     match key {
         Some(path) => Ok(key_paths(path).0),
@@ -1580,7 +1633,10 @@ fn signing_key_file(key: Option<&Path>) -> Result<PathBuf, String> {
 /// Sign `nonce` under [`LOGIN_NAMESPACE`] with the private key at `path`,
 /// returning the armored SSH signature. `ssh-keygen -Y sign` only writes a
 /// signature next to a file it read, so the nonce is staged there first.
-// r[impl cli.login] - sign the fetched challenge with the configured key
+///
+/// ## Requirements
+///
+/// @relation(cli.login)
 fn sign_challenge(private_key: &Path, nonce: &str) -> Result<String, String> {
     let dir = tempfile::tempdir().map_err(|error| format!("could not create temp dir: {error}"))?;
     let data = dir.path().join("nonce");
@@ -1770,8 +1826,7 @@ fn validate_timestamp(value: &str) -> Result<(), String> {
     }
 }
 
-// r[impl cli.members] - `check`
-// r[impl cli.remote-admin] - `members check` is read-only
+// @relation(cli.members, cli.remote-admin)
 /// Report whether `key` is a member on `remote` and how this client is
 /// configured.
 fn check(remote: &str, key: Option<&Path>) -> Result<(), String> {
@@ -1812,7 +1867,10 @@ fn repo() -> Result<PathBuf, String> {
 /// the current value, returning the remote's current object id (or `None` when
 /// it has no such ref — for the signer set, the open bootstrap window). When the
 /// remote has none, clear any stale local ref so the set reads empty.
-// r[impl cli.remote-admin] - fetch the relevant `refs/meta/*` ref before a mutating command edits it
+///
+/// ## Requirements
+///
+/// @relation(cli.remote-admin)
 fn sync(remote: &str, refname: &str) -> Result<Option<String>, String> {
     let listing = ls_remote(remote, refname)?;
     let oid = listing.split_whitespace().next().map(str::to_owned);
@@ -1828,7 +1886,10 @@ fn sync(remote: &str, refname: &str) -> Result<Option<String>, String> {
 /// Mirror every ref under `remote`'s `namespace` (e.g. `refs/meta/member`) into
 /// the local repository, pruning local refs the remote no longer has, so the
 /// glob helpers see the remote's current set.
-// r[impl cli.remote-admin] - fetch a whole `refs/meta/*` namespace for read-only listing commands
+///
+/// ## Requirements
+///
+/// @relation(cli.remote-admin)
 fn sync_namespace(remote: &str, namespace: &str) -> Result<(), String> {
     let refspec = format!("+{namespace}/*:{namespace}/*");
     git_run(&["fetch", "--quiet", "--prune", remote, &refspec])
@@ -1840,8 +1901,10 @@ fn sync_namespace(remote: &str, namespace: &str) -> Result<(), String> {
 /// not exist). Pushing with `--force-with-lease` pinned to that value, plus
 /// `--force-if-includes`, makes the update a clean compare-and-swap: it is
 /// rejected rather than clobbering a set someone changed since the fetch.
-// r[impl cli.remote-admin] - signed push of an updated typed document back to the remote
-// r[impl cli.compare-and-swap] - `--force-with-lease=<ref>:<expected>` plus `--force-if-includes`; create pins the lease to the zero object id
+///
+/// ## Requirements
+///
+/// @relation(cli.remote-admin, cli.compare-and-swap)
 fn push_signed(remote: &str, refname: &str, expected: Option<&str>) -> Result<(), String> {
     let lease = format!(
         "--force-with-lease={refname}:{}",
@@ -1853,8 +1916,10 @@ fn push_signed(remote: &str, refname: &str, expected: Option<&str>) -> Result<()
 /// Delete `refname` on `remote`, signed per the client's config and pinned with
 /// `--force-with-lease` to the `expected` tip so a member changed since the
 /// fetch is not clobbered.
-// r[impl cli.remote-admin] - deletion is still a signed push
-// r[impl cli.compare-and-swap] - `--force-with-lease` pinned to the observed tip
+///
+/// ## Requirements
+///
+/// @relation(cli.remote-admin, cli.compare-and-swap)
 fn push_delete(remote: &str, refname: &str, expected: &str) -> Result<(), String> {
     let lease = format!("--force-with-lease={refname}:{expected}");
     let refspec = format!(":{refname}");
@@ -1863,7 +1928,10 @@ fn push_delete(remote: &str, refname: &str, expected: &str) -> Result<(), String
 
 /// Resolve the OpenSSH public key to operate on, defaulting to the key behind
 /// `user.signingkey`.
-// r[impl cli.key-resolution] - default to `user.signingkey`, accepting an inline `key::` value
+///
+/// ## Requirements
+///
+/// @relation(cli.key-resolution)
 fn public_key(key: Option<&Path>) -> Result<String, String> {
     match key {
         Some(path) => read_public_key(path),
@@ -1880,7 +1948,10 @@ fn public_key(key: Option<&Path>) -> Result<String, String> {
 
 /// Read an OpenSSH public key from `path`, accepting either a `.pub` file or a
 /// private key (whose public half is derived with `ssh-keygen -y`).
-// r[impl cli.key-resolution] - a `.pub` file, or a private key whose public half is derived with `ssh-keygen -y`
+///
+/// ## Requirements
+///
+/// @relation(cli.key-resolution)
 fn read_public_key(path: &Path) -> Result<String, String> {
     if let Ok(contents) = std::fs::read_to_string(path)
         && looks_like_public_key(&contents)
@@ -1929,7 +2000,10 @@ fn expand_tilde(value: &str) -> PathBuf {
 /// The key's MD5 fingerprint in colon form (`aa:bb:…`). Colon-separated pairs
 /// are filesystem-safe, unlike the slashes in a base64 SHA256 fingerprint that
 /// would split the `members/<name>` entry into a subtree.
-// r[impl cli.key-resolution] - MD5 colon-form fingerprint
+///
+/// ## Requirements
+///
+/// @relation(cli.key-resolution)
 fn fingerprint(public_key: &str) -> Result<String, String> {
     let scratch =
         tempfile::tempdir().map_err(|error| format!("could not create temp dir: {error}"))?;

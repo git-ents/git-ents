@@ -39,7 +39,10 @@ pub(crate) type Challenges = Arc<Mutex<HashMap<String, Instant>>>;
 
 /// One browser session. It holds only the member's *public* key — enough to
 /// authorize per repository — plus a display label and a CSRF token.
-// r[impl web.auth.session] holds only the public key, label, and CSRF token; nothing secret, in memory only
+///
+/// ## Requirements
+///
+/// @relation(web.auth.session)
 pub(crate) struct Session {
     /// The member's public key line (`type base64`), matched against members.
     public_key: String,
@@ -83,7 +86,10 @@ pub(crate) fn new_challenges() -> Challenges {
 }
 
 /// Issue a fresh one-time sign-in challenge, returning the nonce to sign.
-// r[impl web.auth.challenge] server issues a one-time nonce
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge)
 pub(super) fn issue_challenge(challenges: &Challenges) -> Result<String, String> {
     let nonce = random_token()?;
     let mut table = challenges
@@ -96,7 +102,10 @@ pub(super) fn issue_challenge(challenges: &Challenges) -> Result<String, String>
 }
 
 /// Consume `nonce`, returning whether it was a live, unexpired challenge.
-// r[impl web.auth.challenge] a challenge is consumed on first use and expires after CHALLENGE_TTL (600s)
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge)
 fn take_challenge(challenges: &Challenges, nonce: &str) -> bool {
     let Ok(mut table) = challenges.lock() else {
         return false;
@@ -123,8 +132,10 @@ pub(super) fn snapshot(sessions: &Sessions, cookie: Option<&str>) -> Option<Sess
 /// against the pasted `public_key`, and on success open a session and return its
 /// token. Holding a session grants nothing on its own — an edit is authorized
 /// per repository against the live member list.
-// r[impl web.auth.challenge] verifies the pasted signature against the pasted public key
-// r[impl web.auth.session] on success, opens a session carrying an unguessable random token
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge, web.auth.session)
 pub(super) fn login(
     sessions: &Sessions,
     challenges: &Challenges,
@@ -162,7 +173,10 @@ pub(super) fn login(
 }
 
 /// Whether `cookie`'s session exists and its CSRF token matches `token`.
-// r[impl web.auth.session] state-changing POSTs must echo back the session's CSRF token
+///
+/// ## Requirements
+///
+/// @relation(web.auth.session)
 pub(super) fn csrf_ok(sessions: &Sessions, cookie: Option<&str>, token: &str) -> bool {
     let Some(session_token) = cookie.and_then(self::token) else {
         return false;
@@ -175,7 +189,10 @@ pub(super) fn csrf_ok(sessions: &Sessions, cookie: Option<&str>, token: &str) ->
 }
 
 /// Drop the session a `Cookie` header points at, if any.
-// r[impl web.auth.session] sign-out drops the session from server memory
+///
+/// ## Requirements
+///
+/// @relation(web.auth.session)
 pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
     let Some(token) = cookie.and_then(token) else {
         return;
@@ -191,7 +208,10 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
 /// `pre_receive` cannot enforce this — it is purely key-based, and a
 /// self-attested member typically has no push key to gate — so the web write
 /// path is the enforcement point.
-// r[impl web.auth.edit] gates settings edits to admin-registered members
+///
+/// ## Requirements
+///
+/// @relation(web.auth.edit)
 fn require_admin_registered(store: &git_store::Store, username: &str) -> Result<(), String> {
     use git_ents_core::members::Provenance;
     let member = git_ents_core::members::load_with(store, username)
@@ -214,7 +234,10 @@ fn require_admin_registered(store: &git_store::Store, username: &str) -> Result<
 /// `seed`, `hooks`, and `signing_key` are the server's signed-push nonce seed,
 /// hooks directory, and own member key; all are required, so a web edit is never
 /// a way around a server that is not enforcing the gate.
-// r[impl web.auth.edit] lands the settings edit as a signed push through the pre-receive gate
+///
+/// ## Requirements
+///
+/// @relation(web.auth.edit)
 pub(super) fn edit_config(
     sessions: &Sessions,
     cookie: Option<&str>,
@@ -254,7 +277,10 @@ pub(super) fn edit_config(
 /// blob at the commented path. Any signed-in member may comment — including a
 /// self-attested web member, whose allowed writes are exactly issues and
 /// comments — so there is no [`require_admin_registered`] gate here.
-// r[impl web.comments] - signed push through the same pre-receive gate, no admin-registered provenance required
+///
+/// ## Requirements
+///
+/// @relation(web.comments)
 pub(super) fn add_comment(
     sessions: &Sessions,
     cookie: Option<&str>,
@@ -329,7 +355,7 @@ fn session_public_key(sessions: &Sessions, cookie: Option<&str>) -> Option<Strin
 /// *always* deleted before returning — whether or not the push was accepted,
 /// so a rejected edit never leaves a zombie ref behind — and the commit that
 /// lands is authored by `username` while the server is the committer.
-// r[impl web.auth.edit] author is the signed-in member, committer is the server; staging ref always deleted
+// @relation(web.auth.edit)
 #[expect(
     clippy::too_many_arguments,
     reason = "the server identity a signed edit requires"
@@ -364,7 +390,10 @@ fn signed_edit<T: for<'a> facet::Facet<'a>>(
 /// Point `staging` at `target_ref`'s current tip, build the new commit on it
 /// authored by `username`, then push it signed with the server's key onto
 /// `target_ref`.
-// r[impl web.auth.edit] the actual `git push --signed` with the server's own key
+///
+/// ## Requirements
+///
+/// @relation(web.auth.edit)
 #[expect(clippy::too_many_arguments, reason = "internal step of signed_edit")]
 fn stage_and_push<T: for<'a> facet::Facet<'a>>(
     repo: &Path,
@@ -429,7 +458,10 @@ fn stage_and_push<T: for<'a> facet::Facet<'a>>(
 /// Verify an SSHSIG `signature` over `nonce` was made by `public_key` under the
 /// login namespace, using `ssh-keygen -Y verify` against a one-key allowed
 /// signers file.
-// r[impl web.auth.challenge] SSHSIG verification under the distinct git.ents.cloud namespace
+///
+/// ## Requirements
+///
+/// @relation(web.auth.challenge)
 fn verify_login_signature(public_key: &str, nonce: &str, signature: &str) -> Result<bool, String> {
     let dir = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
     let allowed = dir.path().join("allowed_signers");

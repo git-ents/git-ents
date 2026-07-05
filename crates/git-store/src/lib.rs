@@ -129,8 +129,7 @@ pub fn new_id<T: for<'a> Facet<'a>>(origin: Option<&str>, content: &T) -> Result
     }
 }
 
-// r[impl storage.meta-ref]
-// r[impl nonfunctional.object-store] - object IO is opened on the common git directory, never a receive-pack quarantine
+// @relation(storage.meta-ref, nonfunctional.object-store)
 /// A repository's typed `refs/meta/*` store.
 ///
 /// Refs are read and updated through the high-level [`gix`] API, while all
@@ -144,7 +143,7 @@ pub struct Store {
 }
 
 impl Store {
-    // r[impl nonfunctional.object-store] - opens the object database at `common_dir()/objects` explicitly
+    // @relation(nonfunctional.object-store)
     /// Open the typed store for the repository at `repo`.
     pub fn open(repo: &Path) -> Result<Self, Error> {
         let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
@@ -168,7 +167,10 @@ impl Store {
     /// this attempts a schema-aware structural merge of the two documents
     /// against their common base and retries, up to [`MAX_MERGE_RETRIES`]
     /// times, before giving up with [`Error::Conflict`].
-    // r[impl storage.concurrency] - CAS write, retries a structural merge on conflict
+    ///
+    /// ## Requirements
+    ///
+    /// @relation(storage.concurrency)
     pub fn store<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
@@ -192,7 +194,9 @@ impl Store {
         self.store_impl(refname, value, message, Some(author))
     }
 
-    // r[impl storage.concurrency] - CAS-and-merge retry loop
+    /// ## Requirements
+    ///
+    /// @relation(storage.concurrency)
     fn store_impl<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
@@ -234,7 +238,10 @@ impl Store {
     /// machine advancing twice from the same state, so it fails closed with
     /// [`Error::Conflict`] rather than merging — merging stale state could
     /// resurrect a dead outcome.
-    // r[impl storage.concurrency] - in-place state advance fails closed on a race instead of merging
+    ///
+    /// ## Requirements
+    ///
+    /// @relation(storage.concurrency)
     pub fn amend<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
@@ -941,7 +948,7 @@ mod tests {
         tags: BTreeMap<String, String>,
     }
 
-    // r[verify storage.concurrency] - non-overlapping struct fields merge cleanly
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn merge_disjoint_struct_fields_combine() {
         let dir = repo();
@@ -977,7 +984,7 @@ mod tests {
         );
     }
 
-    // r[verify storage.concurrency] - non-overlapping map entries merge cleanly
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn merge_disjoint_map_entries_combine() {
         let dir = repo();
@@ -1006,7 +1013,7 @@ mod tests {
         assert_eq!(merged.tags, entries(&[("x", "1"), ("y", "2")]));
     }
 
-    // r[verify storage.concurrency] - a genuine conflict fails cleanly instead of picking a winner
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn merge_same_scalar_changed_both_ways_conflicts() {
         let dir = repo();
@@ -1082,7 +1089,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Conflict)));
     }
 
-    // r[verify storage.concurrency] - CAS detects a moved ref
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn try_set_ref_conflicts_on_a_stale_expected() {
         let dir = repo();
@@ -1105,7 +1112,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Conflict)));
     }
 
-    // r[verify storage.concurrency] - no common ancestor cannot be merged
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn store_conflicts_on_a_fresh_ref_race_with_no_common_base() {
         let dir = repo();
@@ -1125,7 +1132,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Conflict)));
     }
 
-    // r[verify storage.concurrency] - a state advance fails closed rather than merging
+    // @relation(storage.concurrency, role=Verifies)
     #[test]
     fn amend_fails_closed_on_a_race_instead_of_merging() {
         let dir = repo();
