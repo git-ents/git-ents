@@ -40,8 +40,14 @@ pub struct Resolved {
     _staging: Option<TempDir>,
 }
 
+/// Every recipe `resolve` knows, for `git ents toolchain recipes` and
+/// `resolve`'s own error message — a plain list rather than a trait registry,
+/// since each recipe is one function with its own selector semantics, not a
+/// uniform interface worth abstracting over for a list of one.
+pub const RECIPES: &[&str] = &["rustup"];
+
 /// Resolve `recipe` against `spec` (a recipe-specific selector, e.g. a
-/// rustup toolchain name). The only recipe today is `rustup`.
+/// rustup toolchain name). See [`RECIPES`] for what's known.
 ///
 /// `embed` forces the old behavior of staging and importing `bin`'s actual
 /// bytes; by default the recipe instead points at its distributor's own
@@ -51,9 +57,18 @@ pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String
     match recipe {
         "rustup" => rustup(spec, embed),
         other => Err(format!(
-            "unknown toolchain recipe {other:?} (known: rustup)"
+            "unknown toolchain recipe {other:?} (known: {})",
+            RECIPES.join(", ")
         )),
     }
+}
+
+/// `<recipe> <spec>`, recorded as [`git_toolchain::Toolchain::recipe`] — the
+/// provenance a `--from` import leaves behind, distinct from `Resolved`
+/// itself since only the recipe name and selector (not the resolved bytes)
+/// are worth keeping once the import is written.
+pub fn describe(recipe: &str, spec: &str) -> String {
+    format!("{recipe} {spec}")
 }
 
 /// Resolve a rustup-managed toolchain named `spec` (e.g. `stable`,

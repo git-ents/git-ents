@@ -271,6 +271,16 @@ enum ToolchainAction {
     },
     /// List the toolchains configured on a remote.
     List,
+    /// List the recipes `--from` accepts.
+    Recipes,
+    /// Show a remote's toolchain `name`'s past imports, newest first: when,
+    /// what recipe (if any) produced it, and its version — the ref's own
+    /// commit log, not a separate audit trail.
+    Log {
+        /// Name (`toolchains/<name>`) to show import history for.
+        #[facet(args::positional)]
+        name: String,
+    },
     /// Export a remote's toolchain `name` to a local directory. Read-only:
     /// fetches the toolchain's tree but never pushes.
     Export {
@@ -491,6 +501,8 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
             name, bin, src, license, version, platform, from, spec, embed, remote,
         ),
         ToolchainAction::List => toolchain_list(remote),
+        ToolchainAction::Recipes => toolchain_recipes(),
+        ToolchainAction::Log { name } => toolchain_log(&name, remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
         ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
     }
@@ -516,6 +528,9 @@ fn toolchain_import(
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Toolchain name")?;
 
+    let recipe_desc = from
+        .as_deref()
+        .map(|from| registry::describe(from, spec.as_deref().unwrap_or("stable")));
     let recipe = from
         .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable"), embed))
         .transpose()?;
@@ -565,6 +580,7 @@ fn toolchain_import(
             &license,
             &version,
             &platform,
+            recipe_desc.as_deref(),
         ),
         registry::Bin::Components(components) => git_toolchain::import_downloaded(
             &repo,
@@ -574,6 +590,7 @@ fn toolchain_import(
             &license,
             &version,
             &platform,
+            recipe_desc.as_deref(),
         ),
     }
     .map_err(|error| error.to_string())?;
@@ -599,10 +616,36 @@ fn toolchain_list(remote: &str) -> Result<(), String> {
                 format!("{} components", components.len())
             }
         };
+        let recipe = toolchain.recipe.as_deref().unwrap_or("hand-supplied");
         println!(
-            "{name}  {bin}  {}  {}  {}",
+            "{name}  {bin}  {}  {}  {}  {recipe}",
             toolchain.version, toolchain.platform, toolchain.license
         );
+    }
+    Ok(())
+}
+
+/// Print every recipe `git ents toolchain import --from` accepts.
+fn toolchain_recipes() -> Result<(), String> {
+    for recipe in registry::RECIPES {
+        println!("{recipe}");
+    }
+    Ok(())
+}
+
+/// Print `name`'s import history on `remote`, newest first: when, its
+/// version, and the recipe (if any) that produced it — read from
+/// `refs/meta/toolchains/<name>`'s own commit log via
+/// `git_toolchain::history`, not a separate audit trail.
+fn toolchain_log(name: &str, remote: &str) -> Result<(), String> {
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
+    let repo = repo()?;
+    let history = git_toolchain::history(&repo, name).map_err(|error| error.to_string())?;
+    for (seconds, toolchain) in history {
+        let when = ago(seconds);
+        let recipe = toolchain.recipe.as_deref().unwrap_or("hand-supplied");
+        println!("{when}  {}  {recipe}", toolchain.version);
     }
     Ok(())
 }

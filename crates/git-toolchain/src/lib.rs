@@ -79,6 +79,12 @@ pub struct Toolchain {
     /// standard platform identifier; there is no SPDX-equivalent registry
     /// for platforms.
     pub platform: String,
+    /// The recipe (and its selector) this import was derived from, e.g.
+    /// `"rustup stable"` — `None` when `bin`/`src`/metadata were supplied by
+    /// hand instead. Recorded here so the toolchain's current state names its
+    /// own origin; [`history`] additionally surfaces every past import's
+    /// recipe from the ref's commit log, not just the tip's.
+    pub recipe: Option<String>,
 }
 
 /// How a toolchain's `bin` is provisioned.
@@ -172,7 +178,10 @@ pub enum Error {
 /// to a commit over it. Returns the document's root tree object id.
 ///
 /// `license` MUST be a valid SPDX license expression, `version` a valid
-/// semver version, and `platform` a valid target triple.
+/// semver version, and `platform` a valid target triple. `recipe`, if given,
+/// is recorded on the [`Toolchain`] document and in the import's commit
+/// message as this import's provenance (see [`Toolchain::recipe`]).
+#[expect(clippy::too_many_arguments, reason = "one flag per import field")]
 pub fn import(
     repo: &Path,
     name: &str,
@@ -181,6 +190,7 @@ pub fn import(
     license: &str,
     version: &str,
     platform: &str,
+    recipe: Option<&str>,
 ) -> Result<ObjectId, Error> {
     if !git_store::ref_segment_ok(name) {
         return Err(Error::InvalidName(name.to_owned()));
@@ -203,6 +213,7 @@ pub fn import(
         license: license.to_owned(),
         version: version.to_owned(),
         platform: platform.to_owned(),
+        recipe: recipe.map(str::to_owned),
     };
     store_toolchain(repo, name, toolchain, &odb)
 }
@@ -213,6 +224,7 @@ pub fn import(
 /// document. `src_dir`, if given, is still captured as a `RawTree` the usual
 /// way — provenance-only content with no natural external origin to point at
 /// instead.
+#[expect(clippy::too_many_arguments, reason = "one flag per import field")]
 pub fn import_downloaded(
     repo: &Path,
     name: &str,
@@ -221,6 +233,7 @@ pub fn import_downloaded(
     license: &str,
     version: &str,
     platform: &str,
+    recipe: Option<&str>,
 ) -> Result<ObjectId, Error> {
     if !git_store::ref_segment_ok(name) {
         return Err(Error::InvalidName(name.to_owned()));
@@ -240,6 +253,7 @@ pub fn import_downloaded(
         license: license.to_owned(),
         version: version.to_owned(),
         platform: platform.to_owned(),
+        recipe: recipe.map(str::to_owned),
     };
     store_toolchain(repo, name, toolchain, &odb)
 }
@@ -280,11 +294,11 @@ fn store_toolchain(
 ) -> Result<ObjectId, Error> {
     let oid = facet_git_tree::serialize_into(&toolchain, odb)?;
     let store = Store::open(repo)?;
-    store.store_tree(
-        &toolchain_ref(name),
-        oid,
-        &format!("git-toolchain: import {name}"),
-    )?;
+    let message = match &toolchain.recipe {
+        Some(recipe) => format!("git-toolchain: import {name} via {recipe}"),
+        None => format!("git-toolchain: import {name}"),
+    };
+    store.store_tree(&toolchain_ref(name), oid, &message)?;
     Ok(oid)
 }
 
@@ -312,6 +326,17 @@ pub fn list(repo: &Path) -> Result<Vec<(String, Toolchain)>, Error> {
         out.push((name.to_owned(), toolchain));
     }
     Ok(out)
+}
+
+/// Toolchain `name`'s past imports, newest first, as `(committer unix
+/// seconds, document)` pairs — one entry per commit on
+/// `refs/meta/toolchains/<name>`, each document's own [`Toolchain::recipe`]
+/// naming what produced it. The commit *is* the audit trail: no separate
+/// provenance log is kept, since every [`import`]/[`import_downloaded`] call
+/// already lands as a new commit on this ref.
+pub fn history(repo: &Path, name: &str) -> Result<Vec<(u64, Toolchain)>, Error> {
+    let store = Store::open(repo)?;
+    Ok(store.history(&toolchain_ref(name))?)
 }
 
 /// Recreate the toolchain `name`'s `bin` (and `src`, if present) directory
@@ -776,6 +801,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
         let second = import(
@@ -786,6 +812,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
         assert_eq!(first, second);
@@ -805,6 +832,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
         let toolchain = resolve(repo_dir.path(), "gcc").unwrap();
@@ -831,6 +859,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
         let toolchain = resolve(repo_dir.path(), "gcc").unwrap();
@@ -857,6 +886,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -891,6 +921,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -948,6 +979,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -972,6 +1004,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         );
         assert!(matches!(result, Err(Error::NoComponents)));
     }
@@ -991,6 +1024,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -1013,6 +1047,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -1035,6 +1070,7 @@ mod tests {
             "not a license",
             VERSION,
             PLATFORM,
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidLicense(_, _))));
     }
@@ -1052,6 +1088,7 @@ mod tests {
             "MIT",
             "not-semver",
             PLATFORM,
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidVersion(_, _))));
     }
@@ -1069,6 +1106,7 @@ mod tests {
             "MIT",
             VERSION,
             "not a platform!!",
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidPlatform(_))));
     }
@@ -1088,6 +1126,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         );
         assert!(matches!(result, Err(Error::EmptyBin(_))));
     }
@@ -1108,6 +1147,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
         import(
@@ -1118,6 +1158,7 @@ mod tests {
             "Apache-2.0",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -1142,6 +1183,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         )
         .unwrap();
 
@@ -1162,6 +1204,7 @@ mod tests {
             "MIT",
             VERSION,
             PLATFORM,
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName(_))));
     }
