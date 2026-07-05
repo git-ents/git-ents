@@ -10,7 +10,6 @@ mod markdown;
 /// MIME-keyed document rendering (HTML and plain-text), shared by the web
 /// UI and the `git-ents` CLI, which embeds this crate as a library.
 pub mod render;
-mod verify;
 mod web;
 
 use std::net::SocketAddr;
@@ -119,7 +118,7 @@ fn env_var(key: &str) -> Option<String> {
 /// wins over the hardcoded default.
 pub fn run(args: Args) -> ExitCode {
     if let Some(Command::PreReceive) = args.command {
-        return match verify::pre_receive() {
+        return match git_signed_push::pre_receive() {
             Ok(()) => ExitCode::SUCCESS,
             Err(reason) => {
                 eprintln!("error: {reason}");

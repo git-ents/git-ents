@@ -1511,6 +1511,7 @@ dependencies = [
  "git-comment",
  "git-ents-core",
  "git-member",
+ "git-signed-push",
  "git-store",
  "git-toolchain",
  "gix-actor",
@@ -1536,6 +1537,16 @@ dependencies = [
  "gix",
  "iddqd",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "git-signed-push"
+version = "0.0.0"
+dependencies = [
+ "git-ents-core",
+ "git-member",
+ "git-store",
+ "tempfile",
 ]
 
 [[package]]

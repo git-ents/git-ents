@@ -27,8 +27,8 @@ renames, or removes a requirement or its implementation.
 |`members.allowed-signers` |`git-member/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
 |`revocations.ref` |`git-member/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
 |`revocations.ca` |`git-member/src/members.rs` (`without_revoked`, CA branch untouched) |`members::without_revoked_leaves_ca_members_untouched`
-|`auth.bootstrap` |`git-ents-server/src/verify.rs` (`pre_receive`, empty-members early return) |`pre_receive` integration tests (bootstrap case)
-|`auth.signed-push` |`git-ents-server/src/verify.rs` (`verify_certificate`) |`pre_receive::rejects_an_unsigned_push_when_signers_exist`, `rejects_a_push_signed_by_an_unknown_key`
+|`auth.bootstrap` |`git-signed-push/src/lib.rs` (`pre_receive`, empty-members early return) |`pre_receive` integration tests (bootstrap case)
+|`auth.signed-push` |`git-signed-push/src/lib.rs` (`verify_certificate`) |`pre_receive::rejects_an_unsigned_push_when_signers_exist`, `rejects_a_push_signed_by_an_unknown_key`
 |`auth.nonce` |`git-ents-server/src/http.rs` (`backend_config_injects_nonce_seed_and_hooks_path`) |`http::tests::backend_config_injects_nonce_seed_and_hooks_path`
 |`auth.client-setup` |`git-ents/src/main.rs` (`setup`, `ensure_key`) | _(manual/CLI UX, no automated test)_
 |`cli.remote-admin` |`git-ents/src/main.rs` (`sync`, `push_signed`) | _(manual/CLI UX, no automated test)_
@@ -71,8 +71,8 @@ renames, or removes a requirement or its implementation.
 |`nonfunctional.no-unsafe` |workspace-wide (`#![forbid(unsafe_code)]`) |`cargo clippy --workspace --all-targets`
 |`nonfunctional.object-store` |`git-store/src/lib.rs` (`Store::open`, common-dir odb) | _(see the module's own doc comment; exercised by hook integration tests)_
 |`compat.git` |`git-ents-server/src/http.rs`, `web/git.rs` (subprocess invocations) | _(implicit in all integration tests)_
-|`compat.ssh-keygen` |`git-ents-server/src/verify.rs` (`verify_certificate`), `web/write.rs` (`verify_login_signature`) |`pre_receive::*`, `web_edit::*`
-|`compat.openssh-signed-push` |`git-ents-server/src/verify.rs` (`GIT_PUSH_CERT`, `GIT_PUSH_CERT_NONCE_STATUS`) |`pre_receive::rejects_a_push_signed_by_an_expired_key`
+|`compat.ssh-keygen` |`git-signed-push/src/lib.rs` (`verify_certificate`), `web/write.rs` (`verify_login_signature`) |`pre_receive::*`, `web_edit::*`
+|`compat.openssh-signed-push` |`git-signed-push/src/lib.rs` (`GIT_PUSH_CERT`, `GIT_PUSH_CERT_NONCE_STATUS`) |`pre_receive::rejects_a_push_signed_by_an_expired_key`
 |`compat.sprite` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`) | _(requires a live Sprite; not covered by unit tests)_
 |`compat.cgi` |`git-ents-server/src/http.rs` (`backend`, CGI env vars) |`server::push_then_clone_round_trip`
 |`compat.edition` |workspace `Cargo.toml` (`edition = "2024"`, `publish = false`) | _(build-time)_
