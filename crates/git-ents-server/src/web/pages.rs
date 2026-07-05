@@ -165,7 +165,7 @@ async fn readme(repo: &Path, tree: &[Entry]) -> Option<(String, String)> {
     let entry = tree.iter().find(|e| {
         let name = e.filename.to_str_lossy();
         !e.mode.is_tree()
-            && (crate::asciidoc::is_asciidoc(&name) || crate::markdown::is_markdown(&name))
+            && is_doc(&name)
             && name
                 .rsplit_once('.')
                 .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"))
@@ -181,10 +181,11 @@ async fn readme(repo: &Path, tree: &[Entry]) -> Option<(String, String)> {
 /// renders (AsciiDoc via acdc, Markdown via pulldown-cmark), or `None` when it
 /// is not one or fails to render.
 fn doc_html(name: &str, text: &str) -> Option<String> {
-    if crate::asciidoc::is_asciidoc(name) {
-        return crate::asciidoc::to_html(text);
+    match crate::render::mime_for_name(name) {
+        "text/asciidoc" => crate::asciidoc::to_html(text),
+        "text/markdown" => Some(crate::markdown::to_html(text)),
+        _ => None,
     }
-    crate::markdown::is_markdown(name).then(|| crate::markdown::to_html(text))
 }
 
 /// The clone URL for `rel`, using the request host when known.
@@ -588,7 +589,7 @@ pub(super) async fn blob_page(
 /// Whether `name` is a prose format the forge renders as a document, and so
 /// gets the rendered/source toggle.
 fn is_doc(name: &str) -> bool {
-    crate::asciidoc::is_asciidoc(name) || crate::markdown::is_markdown(name)
+    crate::render::mime_for_name(name) != "text/plain"
 }
 
 /// Render text file `source` with a line-number gutter — each number a
@@ -636,13 +637,15 @@ fn is_binary(bytes: &[u8]) -> bool {
 }
 
 /// A comment as a file view shows it: who wrote it and when, where its anchor
-/// lands on `HEAD`, and its body.
+/// lands on `HEAD`, and its body, rendered as AsciiDoc (a comment carries no
+/// filename to infer a MIME type from, so it gets the forge's default prose
+/// treatment — see [`crate::render::DEFAULT_PROSE_MIME`]).
 struct FileComment {
     author: String,
     seconds: i64,
     lines: Option<LineRange>,
     outdated: bool,
-    body: String,
+    body_html: String,
 }
 
 /// The comments whose anchors project onto `path` at `HEAD`, read off the
@@ -679,7 +682,7 @@ async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
                     .map_or(0, |p| i64::try_from(p.created.seconds).unwrap_or(i64::MAX)),
                 lines,
                 outdated,
-                body: comment.body,
+                body_html: crate::render::to_html(crate::render::DEFAULT_PROSE_MIME, &comment.body),
             });
         }
         out
@@ -712,7 +715,7 @@ fn comments_card(comments: &[FileComment], form: Option<Markup>) -> Markup {
                         }
                         @if comment.outdated { span.chip { "outdated" } }
                     }
-                    p.comment-body { (comment.body) }
+                    div.comment-body { (PreEscaped(&comment.body_html)) }
                 }
             }
             @if let Some(form) = form { (form) }

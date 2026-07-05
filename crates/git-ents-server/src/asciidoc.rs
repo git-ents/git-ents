@@ -60,6 +60,27 @@ pub(crate) fn to_html(source: &str) -> Option<String> {
     })
 }
 
+/// Render AsciiDoc `source` to plain text via acdc's `cat`-like terminal
+/// converter — the same parser [`to_html`] uses, feeding a converter meant
+/// for TTY output (a shell, `git ents comment show`) instead of a browser.
+pub(crate) fn to_text(source: &str) -> Option<String> {
+    let parsed = acdc_parser::parse(source, &ParseOptions::default()).ok()?;
+    let doc = parsed.document();
+    let processor =
+        acdc_converters_terminal::Processor::new(ConvertOptions::default(), doc.attributes.clone());
+    let mut output = Vec::new();
+    let source = WarningSource::new("terminal");
+    let mut warnings = Vec::new();
+    let mut diagnostics = Diagnostics::new(&source, &mut warnings);
+    processor
+        .write_to(doc, &mut output, None, None, &mut diagnostics)
+        .ok()?;
+    for warning in &warnings {
+        eprintln!("asciidoc text render: {warning}");
+    }
+    String::from_utf8(output).ok()
+}
+
 /// CSS for the `.terminal-view` player acdc's HTML converter emits, vendored
 /// here because embedded-fragment output carries no `<head>` to link or inline
 /// it from (see [`to_html`]'s doctitle note for the same embedded-mode gap).

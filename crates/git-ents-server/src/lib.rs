@@ -7,6 +7,9 @@ mod asciidoc;
 mod checks;
 mod http;
 mod markdown;
+/// MIME-keyed document rendering (HTML and plain-text), shared by the web
+/// UI and the `git-ents` CLI, which embeds this crate as a library.
+pub mod render;
 mod verify;
 mod web;
 

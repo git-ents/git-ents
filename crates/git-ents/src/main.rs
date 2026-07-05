@@ -817,7 +817,11 @@ fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
         }
     }
     println!();
-    for line in comment.body.lines() {
+    let rendered = git_ents_server::render::to_text(
+        git_ents_server::render::DEFAULT_PROSE_MIME,
+        &comment.body,
+    );
+    for line in rendered.lines() {
         println!("  {line}");
     }
     Ok(())
