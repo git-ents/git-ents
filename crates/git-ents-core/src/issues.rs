@@ -29,7 +29,7 @@ use std::path::Path;
 
 use facet::Facet;
 
-use crate::component;
+use git_store::component;
 
 // @relation(issues.ref)
 /// The namespace under which issues are recorded: one ref,

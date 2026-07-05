@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use git_ents_core::component::Component;
+use git_store::component::Component;
 use maud::{Markup, html};
 
 use super::render::Render;
@@ -38,7 +38,7 @@ pub(super) async fn load<T: Loadable>(repo: &Path) -> Result<Vec<T>, String> {
 }
 
 /// A [`Loadable`] component whose items also render as a generic [`card`]:
-/// identity metadata and a [`Render`] impl (both from `git_ents_core::component`),
+/// identity metadata and a [`Render`] impl (both from `git_store::component`),
 /// plus a title and what the card shows when there are no items yet.
 pub(super) trait WebComponent: Loadable + Component + Render {
     /// The card title.

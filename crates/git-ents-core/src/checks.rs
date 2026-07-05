@@ -26,7 +26,7 @@ use std::path::Path;
 use facet::Facet;
 use gix::ObjectId;
 
-use crate::component;
+use git_store::component;
 
 /// The ref whose tree holds the configured check set.
 pub const CHECKS_REF: &str = "refs/meta/checks";

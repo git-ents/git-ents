@@ -11,7 +11,7 @@ use std::path::Path;
 
 use facet::Facet;
 
-use crate::component;
+use git_store::component;
 
 // @relation(account.ref)
 /// The ref whose tree holds the account profile, and whose mere presence marks a

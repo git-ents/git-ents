@@ -1214,7 +1214,7 @@ pub(super) async fn settings_page(
     auth: Option<&super::Auth>,
     editing: bool,
 ) -> Markup {
-    let members = component::load::<git_ents_core::members::Member>(repo).await;
+    let members = component::load::<git_member::members::Member>(repo).await;
     let checks = component::load::<git_ents_core::checks::Check>(repo).await;
     let config = load_repo_config(repo).await;
     repo_shell(

@@ -16,6 +16,7 @@ git-anchor = { workspace = true }
 git-comment = { workspace = true }
 git-ents-core = { workspace = true }
 git-ents-server = { workspace = true }
+git-member = { workspace = true }
 git-store = { workspace = true }
 git-toolchain = { workspace = true }
 inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }

@@ -19,14 +19,14 @@ renames, or removes a requirement or its implementation.
 |`namespace.url` |`README.adoc`/deployment config | _(documentation only)_
 |`namespace.path` |`git-ents-server/src/http.rs` (segment validation) |`http::tests::validates_segments`, `extracts_repo_path`
 |`namespace.auto-create` |`git-ents-server/src/http.rs` (`backend` init lock, `reconcile_head`) |`server::rejects_colliding_pushes`
-|`members.ref` |`git-ents/src/members.rs` (`MEMBER_NS`, `load_all`/`store`) |`members::load_all_unions_every_member_ref`
-|`members.trust` |`git-ents/src/members.rs` (`Trust`) |`members::store_then_load_round_trips_a_{member,ca_member,webauthn_member}`
-|`members.provenance` |`git-ents/src/members.rs` (`Provenance`); `git-ents-server/src/web/write.rs` (`require_admin_registered`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`, `web_edit::a_self_attested_member_is_refused_a_settings_edit`
-|`members.account` |`git-ents/src/members.rs` (`Member.account`) |`members::store_then_load_round_trips_a_member`
-|`members.window` |`git-ents/src/members.rs` (`Member::validate`, `valid_timestamp`) |`members::validate_rejects_*`, `store_rejects_a_member_with_an_inverted_window`
-|`members.allowed-signers` |`git-ents/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
-|`revocations.ref` |`git-ents/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
-|`revocations.ca` |`git-ents/src/members.rs` (`without_revoked`, CA branch untouched) |`members::without_revoked_leaves_ca_members_untouched`
+|`members.ref` |`git-member/src/members.rs` (`MEMBER_NS`, `load_all`/`store`) |`members::load_all_unions_every_member_ref`
+|`members.trust` |`git-member/src/members.rs` (`Trust`) |`members::store_then_load_round_trips_a_{member,ca_member,webauthn_member}`
+|`members.provenance` |`git-member/src/members.rs` (`Provenance`); `git-ents-server/src/web/write.rs` (`require_admin_registered`) |`members::loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered`, `web_edit::a_self_attested_member_is_refused_a_settings_edit`
+|`members.account` |`git-member/src/members.rs` (`Member.account`) |`members::store_then_load_round_trips_a_member`
+|`members.window` |`git-member/src/members.rs` (`Member::validate`, `valid_timestamp`) |`members::validate_rejects_*`, `store_rejects_a_member_with_an_inverted_window`
+|`members.allowed-signers` |`git-member/src/members.rs` (`allowed_signers`, `member_lines`) |`members::renders_a_wildcard_allowed_signers_file`, `renders_the_validity_window_as_comma_joined_options`
+|`revocations.ref` |`git-member/src/revocations.rs` |`revocations::store_then_load_round_trips_the_revocations`
+|`revocations.ca` |`git-member/src/members.rs` (`without_revoked`, CA branch untouched) |`members::without_revoked_leaves_ca_members_untouched`
 |`auth.bootstrap` |`git-ents-server/src/verify.rs` (`pre_receive`, empty-members early return) |`pre_receive` integration tests (bootstrap case)
 |`auth.signed-push` |`git-ents-server/src/verify.rs` (`verify_certificate`) |`pre_receive::rejects_an_unsigned_push_when_signers_exist`, `rejects_a_push_signed_by_an_unknown_key`
 |`auth.nonce` |`git-ents-server/src/http.rs` (`backend_config_injects_nonce_seed_and_hooks_path`) |`http::tests::backend_config_injects_nonce_seed_and_hooks_path`
@@ -41,7 +41,7 @@ renames, or removes a requirement or its implementation.
 |`cli.key-resolution` |`git-ents/src/main.rs` (`fingerprint`, MD5 colon form) | _(manual/CLI UX, no automated test)_
 |`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
 |`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
-|`config.ref` |`git-ents/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
+|`config.ref` |`git-ents-core/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
 |`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`, `order`) |`checks::store_then_load_round_trips_the_check_set`, `store_then_load_round_trips_image_and_depends`, `order_runs_dependencies_first`, `order_rejects_a_cycle`, `order_rejects_an_unknown_dependency`, `order_rejects_self_and_duplicate_edges`, `order_rejects_an_empty_check`
 |`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
 |`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-ents`)_

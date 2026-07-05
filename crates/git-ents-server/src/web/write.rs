@@ -213,8 +213,8 @@ pub(super) fn logout(sessions: &Sessions, cookie: Option<&str>) {
 ///
 /// @relation(web.auth.edit)
 fn require_admin_registered(store: &git_store::Store, username: &str) -> Result<(), String> {
-    use git_ents_core::members::Provenance;
-    let member = git_ents_core::members::load_with(store, username)
+    use git_member::members::Provenance;
+    let member = git_member::members::load_with(store, username)
         .map_err(|e| format!("could not read member: {e}"))?
         .ok_or_else(|| "your web key is not a member of this repository".to_owned())?;
     match member.provenance {
@@ -512,7 +512,7 @@ pub(super) fn member_for_public_key_with(
     public_key: &str,
 ) -> Option<String> {
     let wanted = normalize_key(public_key);
-    let members = git_ents_core::members::load_all_with(store).ok()?;
+    let members = git_member::members::load_all_with(store).ok()?;
     members.into_iter().find_map(|member| {
         member
             .keys()

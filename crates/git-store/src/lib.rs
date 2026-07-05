@@ -28,6 +28,7 @@ use gix::objs::{Commit, FindExt as _, Write as _};
 use gix::refs::Target;
 use gix::refs::transaction::PreviousValue;
 
+pub mod component;
 mod merge;
 
 /// The author and committer identity stamped on every write, fixed so a write

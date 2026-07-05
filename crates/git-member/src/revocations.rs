@@ -28,7 +28,7 @@ use std::path::Path;
 
 use facet::Facet;
 
-use crate::component;
+use git_store::component;
 
 // @relation(revocations.ref)
 /// The ref whose tree holds the revocation list — the deny overlay on the trust

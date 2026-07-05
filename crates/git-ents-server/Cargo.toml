@@ -20,6 +20,7 @@ form_urlencoded = { workspace = true }
 getrandom = { workspace = true }
 git-anchor = { workspace = true }
 git-comment = { workspace = true }
+git-member = { workspace = true }
 git-store = { workspace = true }
 git-toolchain = { workspace = true }
 gix-actor = { workspace = true }

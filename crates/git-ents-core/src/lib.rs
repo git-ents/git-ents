@@ -3,11 +3,8 @@
 
 pub mod account;
 pub mod checks;
-pub mod component;
 pub mod config;
 pub mod issues;
-pub mod members;
-pub mod revocations;
 #[cfg(test)]
 mod testutil;
 

@@ -8,7 +8,7 @@
 //! code comments at `refs/meta/comments/<id>`, and the client setup that
 //! produces the signed pushes the server requires. The member commands read
 //! and write a remote's set by fetching the `refs/meta/member/*` refs into the
-//! local repository, editing them through [`git_ents_core::members`], and
+//! local repository, editing them through [`git_member::members`], and
 //! pushing them back.
 
 mod debug_session;
@@ -26,9 +26,9 @@ use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
 use git_ents_core::account::{self, Account};
 use git_ents_core::checks::{self, CHECKS_REF, Check};
-use git_ents_core::component::{self, Component, MapDocument};
-use git_ents_core::members::{self, MEMBER_NS, Member, Trust, member_ref};
-use git_ents_core::revocations::{self, REVOKED_REF, Revocation};
+use git_member::members::{self, MEMBER_NS, Member, Trust, member_ref};
+use git_member::revocations::{self, REVOKED_REF, Revocation};
+use git_store::component::{self, Component, MapDocument};
 use git_toolchain::TOOLCHAINS_NS;
 
 /// Helpful guardians of your git trees.

@@ -1471,6 +1471,7 @@ dependencies = [
  "git-comment",
  "git-ents-core",
  "git-ents-server",
+ "git-member",
  "git-store",
  "git-toolchain",
  "inquire",
@@ -1488,7 +1489,6 @@ dependencies = [
  "facet",
  "git-store",
  "gix",
- "iddqd",
  "thiserror 2.0.18",
 ]
 
@@ -1510,6 +1510,7 @@ dependencies = [
  "git-anchor",
  "git-comment",
  "git-ents-core",
+ "git-member",
  "git-store",
  "git-toolchain",
  "gix-actor",
@@ -1523,6 +1524,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "git-member"
+version = "0.0.0"
+dependencies = [
+ "facet",
+ "git-ents-core",
+ "git-store",
+ "gix",
+ "iddqd",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

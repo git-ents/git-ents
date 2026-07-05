@@ -16,7 +16,7 @@ use maud::{Markup, PreEscaped, html};
 use git_ents_core::checks::{Check, Run, RunOutcome, Status};
 use git_ents_core::config::{Config, RoleRules};
 use git_ents_core::issues::Issue;
-use git_ents_core::members::Member;
+use git_member::members::Member;
 
 use super::component::{Loadable, WebComponent};
 use crate::asciidoc;
@@ -145,7 +145,7 @@ impl Render for Member {
 
 impl Loadable for Member {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents_core::members::load_all(repo).map_err(|err| err.to_string())
+        git_member::members::load_all(repo).map_err(|err| err.to_string())
     }
 }
 

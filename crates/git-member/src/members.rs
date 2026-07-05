@@ -38,7 +38,7 @@ use std::path::Path;
 
 use facet::Facet;
 
-use crate::component;
+use git_store::component;
 
 // @relation(members.ref)
 /// The namespace whose refs hold the member set — the push trust root. One
@@ -78,13 +78,13 @@ pub struct Member {
     #[facet(default)]
     pub provenance: Provenance,
     /// The `@`-mentioned account this member is, by its stable
-    /// [`crate::account::genesis`] hash — `None` until an admin links one.
+    /// [`git_ents_core::account::genesis`] hash — `None` until an admin links one.
     /// Plain `Option`, which `facet-git-tree` auto-defaults on an absent
     /// entry, so a member ref written before this field existed keeps
     /// loading unchanged.
     pub account: Option<String>,
     /// The member's role, matched against `refs/meta/config`'s
-    /// [`crate::config::Config::roles`] to gate which refs they may push to.
+    /// [`git_ents_core::config::Config::roles`] to gate which refs they may push to.
     /// `None` (or a role absent from that map) permits every ref — role
     /// rules are opt-in gating layered on top of the default-allow-all rule.
     /// Plain `Option`, so a member ref written before this field existed

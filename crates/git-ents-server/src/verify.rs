@@ -15,8 +15,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use git_ents_core::config;
-use git_ents_core::members::{self, Member};
-use git_ents_core::revocations;
+use git_member::members::{self, Member};
+use git_member::revocations;
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the
@@ -62,7 +62,7 @@ pub fn pre_receive() -> Result<(), String> {
         let config =
             config::load_with(&store).map_err(|e| format!("could not read configuration: {e}"))?;
         for ref_name in &ref_updates {
-            if !config::ref_allowed(&config, member.role.as_deref(), ref_name) {
+            if !git_member::ref_allowed(&config, member.role.as_deref(), ref_name) {
                 return Err(format!(
                     "{} (role {:?}) is not permitted to push to {ref_name:?}",
                     member.principal, member.role
