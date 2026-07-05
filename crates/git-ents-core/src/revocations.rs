@@ -30,6 +30,7 @@ use facet::Facet;
 
 use crate::component;
 
+// r[impl revocations.ref]
 /// The ref whose tree holds the revocation list — the deny overlay on the trust
 /// set.
 pub const REVOKED_REF: &str = "refs/meta/revoked";
@@ -134,6 +135,7 @@ mod tests {
         }
     }
 
+    // r[verify revocations.ref]
     #[test]
     fn store_then_load_round_trips_the_revocations() {
         let repo = unique_repo();
@@ -167,6 +169,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify storage.meta-ref] - hand-built fixture load test for the Revocation document
     #[test]
     fn loads_the_on_disk_revoked_format() {
         // A fixture written as the real `revoked/<fingerprint>/reason` subtree

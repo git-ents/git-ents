@@ -13,10 +13,12 @@ use facet::Facet;
 
 use crate::component;
 
+// r[impl account.ref]
 /// The ref whose tree holds the account profile, and whose mere presence marks a
 /// repository as an account repo.
 pub const ACCOUNT_REF: &str = "refs/meta/account";
 
+// r[impl account.ref]
 /// A repository's account profile, stored at [`ACCOUNT_REF`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Facet)]
 pub struct Account {
@@ -64,6 +66,7 @@ pub fn is_account_repo(repo: &Path) -> Result<bool, git_store::Error> {
 /// when the repo is not (yet) an account repo. Mirrors the genesis-key idiom
 /// `issues::new_id` uses: an identifier derived from content, never a stored
 /// field.
+// r[impl account.genesis]
 pub fn genesis(repo: &Path) -> Result<Option<String>, git_store::Error> {
     git_store::Store::open(repo)?
         .history::<Account>(ACCOUNT_REF)?
@@ -96,6 +99,7 @@ mod tests {
         }
     }
 
+    // r[verify account.ref]
     #[test]
     fn store_then_load_round_trips_the_account() {
         let repo = unique_repo();
@@ -120,6 +124,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify storage.meta-ref] - hand-built fixture load test for the Account document
     #[test]
     fn loads_the_on_disk_account_format() {
         // A fixture written as the real on-disk layout — `username`,

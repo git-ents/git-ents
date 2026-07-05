@@ -109,6 +109,7 @@ pub struct LineRange {
 /// Where in the repository something was attached — authoritative at creation
 /// and never mutated afterwards. Projection onto other commits is always a
 /// read-time view derived from this record.
+// r[impl comments.anchor]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Anchor {
     /// The commit the anchor was created against.
@@ -123,6 +124,7 @@ pub struct Anchor {
 }
 
 /// Where an [`Anchor`] sits on a target commit, as computed by [`project`].
+// r[impl comments.projection]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Projection {
     /// The target tree holds the anchor's exact blob at its exact path; the
@@ -151,6 +153,7 @@ pub enum Projection {
 /// `revision` in `repo`, resolving the revision to a full commit id and
 /// recording the file's blob id. Fails when the path is not a file at that
 /// commit or the range does not fit it.
+// r[impl comments.anchor] - validates path and line range at creation
 pub fn capture(
     repo: &Path,
     revision: &str,
@@ -187,6 +190,7 @@ pub fn capture(
 /// The exact text of `anchor`'s lines — the whole file for a whole-file
 /// anchor — derived at read time from the content-addressed blob the anchor
 /// names, so it can never disagree with what was anchored.
+// r[impl comments.anchor] - text derived at read time, never stored redundantly
 pub fn snippet(repo: &Path, anchor: &Anchor) -> Result<String, Error> {
     let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
     let blob = ObjectId::try_from(&anchor.blob)
@@ -225,6 +229,7 @@ fn lines_of(data: &[u8], path: &str, range: LineRange) -> Result<String, Error> 
 /// target's with rename tracking to find where the file went, and the line
 /// range is mapped through the blob diff's hunks — shifted past edits that
 /// land entirely outside it, [`Projection::Outdated`] when an edit touches it.
+// r[impl comments.projection]
 pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection, Error> {
     let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
     let anchor_blob = ObjectId::try_from(&anchor.blob)
@@ -369,6 +374,7 @@ fn read_blob(repo: &gix::Repository, id: ObjectId) -> Result<Vec<u8>, Error> {
 /// the range — including an insertion strictly inside it — means the anchored
 /// region itself changed, reported as `None` (outdated) rather than guessed
 /// at.
+// r[impl comments.projection] - line-range shifting through blob diff hunks
 fn map_range(old: &[u8], new: &[u8], range: LineRange) -> Option<LineRange> {
     // Work in 0-based half-open line coordinates, as the hunks do. Everything
     // stays unsigned: the shift is tallied as lines added and lines removed
@@ -426,6 +432,7 @@ mod tests {
         Some(LineRange { start, end })
     }
 
+    // r[verify comments.anchor]
     #[test]
     fn capture_records_the_commit_and_blob_and_snippet_derives_the_text() {
         let dir = repo();
@@ -440,6 +447,7 @@ mod tests {
         assert_eq!(snippet(dir.path(), &anchor).unwrap(), "line 3\nline 4\n");
     }
 
+    // r[verify comments.anchor]
     #[test]
     fn capture_rejects_a_missing_path_and_an_oversized_range() {
         let dir = repo();
@@ -456,6 +464,7 @@ mod tests {
         ));
     }
 
+    // r[verify comments.projection]
     #[test]
     fn unchanged_file_projects_as_current() {
         let dir = repo();
@@ -472,6 +481,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn an_edit_above_the_range_shifts_it() {
         let dir = repo();
@@ -492,6 +502,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn an_edit_inside_the_range_is_outdated() {
         let dir = repo();
@@ -511,6 +522,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn a_pure_rename_relocates_with_the_same_lines() {
         let dir = repo();
@@ -530,6 +542,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn a_rename_with_an_edit_above_relocates_and_shifts() {
         let dir = repo();
@@ -551,6 +564,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn a_deleted_file_projects_as_deleted() {
         let dir = repo();
@@ -568,6 +582,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn a_whole_file_anchor_survives_a_modification() {
         let dir = repo();
@@ -589,6 +604,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn projection_works_backwards_onto_an_ancestor() {
         let dir = repo();
@@ -610,6 +626,7 @@ mod tests {
         );
     }
 
+    // r[verify comments.projection]
     #[test]
     fn map_range_handles_edges() {
         let old = b"a\nb\nc\nd\n".as_slice();

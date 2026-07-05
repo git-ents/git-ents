@@ -40,6 +40,7 @@ use facet::Facet;
 
 use crate::component;
 
+// r[impl members.ref]
 /// The namespace whose refs hold the member set — the push trust root. One
 /// `refs/meta/member/<username>` ref per person.
 pub const MEMBER_NS: &str = "refs/meta/member";
@@ -50,6 +51,11 @@ pub fn member_ref(username: &str) -> String {
     format!("{MEMBER_NS}/{username}")
 }
 
+// r[impl members.ref]
+// r[impl members.trust]
+// r[impl members.provenance]
+// r[impl members.account]
+// r[impl members.window]
 /// One member: a person named by their `refs/meta/member/<principal>` ref, the
 /// window their trust holds within, and the keys (or, later, CA) it rests on.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -93,6 +99,7 @@ pub struct Member {
 /// Whether a member was admin-registered or self-attested via web onboarding.
 /// Defaults to [`Provenance::AdminRegistered`] so a member ref written before
 /// this field existed loads unchanged.
+// r[impl members.provenance] - loads before the field existed as admin-registered
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Facet)]
 #[repr(u8)]
 pub enum Provenance {
@@ -120,6 +127,7 @@ pub struct WebAuthnKey {
 /// keys, so rotation, expiry, and new devices cost zero downstream edits; it is
 /// a security win only when the CA lives off the device (hardware token,
 /// offline, or a remote issuer behind SSO).
+// r[impl members.trust] - the three mutually exclusive trust bases
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Trust {
@@ -235,6 +243,7 @@ impl Member {
     /// [`store`] checks this before every write, so it holds regardless of
     /// which caller builds the member (the CLI today, an admin web action
     /// later).
+    // r[impl members.window] - a window must be well-formed and not inverted
     pub fn validate(&self) -> Result<(), String> {
         for bound in [&self.valid_after, &self.valid_before] {
             if let Some(value) = bound
@@ -341,6 +350,8 @@ pub fn store(repo: &Path, member: &Member) -> Result<(), git_store::Error> {
 /// drops out entirely, so a push it would have authorized fails closed. A member
 /// resting on a CA is untouched — a compromised CA is revoked by removing its
 /// member ref, since a CA is named by a ref rather than listed by fingerprint.
+// r[impl revocations.ref] - subtracts every revoked fingerprint from the trust set
+// r[impl revocations.ca] - a CA-trusted member is left untouched; revocation list is leaf-key-only
 #[must_use]
 pub fn without_revoked(members: Vec<Member>, revoked: &BTreeSet<String>) -> Vec<Member> {
     members
@@ -369,6 +380,7 @@ pub fn without_revoked(members: Vec<Member>, revoked: &BTreeSet<String>) -> Vec<
 /// `allowed_signers` options so git enforces expiry: out-of-window keys are not
 /// accepted. Options are comma-joined, the syntax OpenSSH requires for more than
 /// one.
+// r[impl members.allowed-signers]
 #[must_use]
 pub fn allowed_signers(members: &[Member]) -> String {
     members.iter().flat_map(member_lines).collect::<String>()
@@ -437,6 +449,7 @@ mod tests {
             .collect()
     }
 
+    // r[verify members.ref]
     #[test]
     fn store_then_load_round_trips_a_member() {
         let repo = unique_repo();
@@ -484,6 +497,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify storage.meta-ref] - hand-built fixture load test for the Member document
+    // r[verify members.provenance]
     #[test]
     fn loads_the_on_disk_member_format_with_no_provenance_entry_as_admin_registered() {
         // A fixture written as the real `member/<username>` layout — a `principal`
@@ -512,6 +527,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify members.trust] - WebAuthn credential set round trip
     #[test]
     fn loads_a_hand_built_webauthn_fixture() {
         // A hand-built `trust/WebAuthn/<credential_id>/{cose_key,label}`
@@ -543,6 +559,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify members.trust] - WebAuthn authorizes web sign-in only, never allowed_signers/push
     #[test]
     fn store_then_load_round_trips_a_webauthn_member() {
         let repo = unique_repo();
@@ -565,6 +582,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify members.allowed-signers] - wildcard principal, namespaces="git"
     #[test]
     fn renders_a_wildcard_allowed_signers_file() {
         let member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
@@ -574,6 +592,7 @@ mod tests {
         );
     }
 
+    // r[verify members.allowed-signers] - validity window as comma-joined options
     #[test]
     fn renders_the_validity_window_as_comma_joined_options() {
         let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
@@ -587,6 +606,7 @@ mod tests {
         );
     }
 
+    // r[verify members.trust] - certificate authority trust basis
     #[test]
     fn store_then_load_round_trips_a_ca_member() {
         let repo = unique_repo();
@@ -599,6 +619,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify revocations.ref]
     #[test]
     fn without_revoked_drops_revoked_keys_and_emptied_members() {
         let alice = Member::with_keys(
@@ -617,6 +638,7 @@ mod tests {
         );
     }
 
+    // r[verify revocations.ca]
     #[test]
     fn without_revoked_leaves_ca_members_untouched() {
         let member = Member::with_ca("alice".to_owned(), KEY_A.to_owned());
@@ -627,6 +649,7 @@ mod tests {
         );
     }
 
+    // r[verify members.allowed-signers] - a pinned CA renders as a cert-authority line
     #[test]
     fn renders_a_pinned_ca_as_a_cert_authority_line() {
         let mut member = Member::with_ca("alice".to_owned(), KEY_A.to_owned());
@@ -637,6 +660,7 @@ mod tests {
         );
     }
 
+    // r[verify members.window]
     #[test]
     fn validate_rejects_a_malformed_timestamp() {
         let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
@@ -644,6 +668,7 @@ mod tests {
         assert!(member.validate().is_err());
     }
 
+    // r[verify members.window]
     #[test]
     fn validate_rejects_an_inverted_window() {
         let mut member = Member::with_keys("alice".to_owned(), keys(&[("aa:bb", KEY_A)]));
@@ -660,6 +685,7 @@ mod tests {
         member.validate().unwrap();
     }
 
+    // r[verify members.window]
     #[test]
     fn store_rejects_a_member_with_an_inverted_window() {
         let repo = unique_repo();

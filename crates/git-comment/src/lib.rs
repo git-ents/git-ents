@@ -28,12 +28,17 @@ use facet::Facet;
 use git_anchor::{Anchor, Projection};
 use git_store::Provenance;
 
+// r[impl comments.ref]
 /// The namespace under which comments are recorded: one ref,
 /// `refs/meta/comments/<id>`, per comment.
 pub const COMMENTS_NS: &str = "refs/meta/comments";
 
 /// One comment stored at `refs/meta/comments/<id>`. Author and timestamp are
 /// deliberately absent: they live on the ref's commits (see [`provenance`]).
+// r[impl comments.ref]
+// r[impl comments.authorship] - body/anchor/issue only, author and timestamps deliberately absent
+// r[impl comments.anchor] - carries the anchor a comment was written against
+// r[impl comments.projection] - the anchor is retained regardless of projection outcome, so the comment is never lost
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Comment {
     /// The comment's body text.
@@ -62,6 +67,8 @@ pub fn load(repo: &Path, id: &str) -> Result<Option<Comment>, git_store::Error> 
 /// Write `comment` to `refs/meta/comments/<id>` in `repo` as a new commit
 /// authored by `author` (a `(name, email)` pair), so the ref's commit chain is
 /// the comment's edit history and carries its authorship.
+// r[impl comments.ref]
+// r[impl comments.authorship] - stamps the acting author on the commit, not the document tree
 pub fn store(
     repo: &Path,
     id: &str,
@@ -84,6 +91,7 @@ pub fn list(repo: &Path) -> Result<Vec<(String, Comment)>, git_store::Error> {
 
 /// Who created and who last updated the comment at `id`, recovered from its
 /// ref's commit chain, or `None` when no such comment exists.
+// r[impl comments.authorship] - recovers the creator and last editor from the commit chain
 pub fn provenance(repo: &Path, id: &str) -> Result<Option<Provenance>, git_store::Error> {
     git_store::Store::open(repo)?.item_provenance(COMMENTS_NS, id)
 }
@@ -91,6 +99,7 @@ pub fn provenance(repo: &Path, id: &str) -> Result<Option<Provenance>, git_store
 /// Where `comment`'s anchor sits on `target` (a revision in `repo`): still
 /// [`Projection::Current`], relocated to a new path or shifted lines, outdated
 /// because the anchored region was edited, or gone with its file.
+// r[impl comments.projection]
 pub fn project(
     repo: &Path,
     comment: &Comment,
@@ -129,6 +138,7 @@ mod tests {
 
     const AUTHOR: (&str, &str) = ("alice", "alice@example.com");
 
+    // r[verify comments.ref]
     #[test]
     fn store_then_load_round_trips_a_comment() {
         let dir = repo();
@@ -173,6 +183,7 @@ mod tests {
         assert_ne!(a_id, new_id(None, &b).unwrap());
     }
 
+    // r[verify comments.authorship]
     #[test]
     fn provenance_comes_from_the_commits_not_the_document() {
         let dir = repo();
@@ -191,6 +202,8 @@ mod tests {
         assert!(provenance.created.seconds > 0);
     }
 
+    // r[verify comments.anchor]
+    // r[verify comments.projection]
     #[test]
     fn a_stored_comment_projects_onto_the_commit_it_was_written_against() {
         let dir = repo();
@@ -223,6 +236,8 @@ mod tests {
         );
     }
 
+    // r[verify comments.anchor] - on-disk anchor shape (commit/path/blob/lines)
+    // r[verify storage.meta-ref] - hand-built fixture load test for the Comment document
     #[test]
     fn loads_the_on_disk_comment_format() {
         // A fixture written as the real on-disk layout — a `body` blob, an

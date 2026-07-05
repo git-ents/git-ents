@@ -29,6 +29,7 @@ pub fn mime_for_name(name: &str) -> &'static str {
 /// Render `source` (declared or inferred as `mime`) to an embedded HTML
 /// fragment. Unrecognized MIME types fall through to an escaped `<pre>`
 /// block rather than an error.
+// r[impl web.render-registry] - HTML path shared by the web UI
 pub fn to_html(mime: &str, source: &str) -> String {
     match mime {
         "text/asciidoc" => asciidoc::to_html(source),
@@ -41,6 +42,7 @@ pub fn to_html(mime: &str, source: &str) -> String {
 /// Render `source` (declared or inferred as `mime`) to plain text, for
 /// terminal output. Unrecognized MIME types fall through to `source`
 /// verbatim.
+// r[impl web.render-registry] - plain-text path shared by the CLI
 pub fn to_text(mime: &str, source: &str) -> String {
     match mime {
         "text/asciidoc" => asciidoc::to_text(source),

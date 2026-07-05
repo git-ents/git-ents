@@ -67,6 +67,7 @@ pub struct Args {
     pub checks_queue: Option<PathBuf>,
 }
 
+// r[impl server.embeddable] - hooks are subcommands of the server, not separate programs
 /// Subcommands that run instead of serving HTTP.
 #[derive(Facet, Debug)]
 #[repr(u8)]
@@ -112,6 +113,8 @@ fn env_var(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
+// r[impl server.embeddable] - shared entry point run by both the standalone binary and `git ents server`
+// r[impl deploy.fly] - env-var-first config, since that is how this server is configured on Fly.io
 /// Run the server: dispatch `pre-receive`/`post-receive`, or serve HTTP.
 /// `args`' flags win over their matching environment variable, which in turn
 /// wins over the hardcoded default.
@@ -185,11 +188,14 @@ async fn serve(args: Args) -> ExitCode {
         state.live_runs.clone(),
     ));
 
+    // r[impl protocol.routing] - one listener serves both the git wire protocol and the web UI, routed by path
+    // r[impl deploy.health] - `/healthz` is wired ahead of the catch-all so it never touches a repository
     // The git smart-HTTP protocol streams whole packfiles through the request
     // body, so the default 2 MiB cap would reject any non-trivial push.
     let app = Router::new()
         .route("/healthz", get(http::health))
         .route("/", get(http::get_request))
+        // r[impl checks.debug] debug shell brokered over WebSocket at /_debug/<repo>
         .route("/_debug/{*path}", get(web::handshake))
         .route("/{*path}", get(http::get_request).post(http::post_request))
         .layer(DefaultBodyLimit::disable())

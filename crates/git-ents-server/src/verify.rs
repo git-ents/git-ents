@@ -21,11 +21,14 @@ use git_ents_core::revocations;
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the
 /// environment git populates for the hook.
+// r[impl auth.signed-push]
+// r[impl compat.openssh-signed-push] - reads GIT_PUSH_CERT / GIT_PUSH_CERT_NONCE_STATUS, the env vars git populates for `pre-receive`
 pub fn pre_receive() -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| format!("cannot resolve repository: {e}"))?;
     let store = git_store::Store::open(&repo).map_err(|e| format!("cannot open store: {e}"))?;
     let members = members::load_all_with(&store)
         .map_err(|e| format!("could not read authorized signers: {e}"))?;
+    // r[impl auth.bootstrap]
     if members.is_empty() {
         // No trust list pushed yet: stay open so the first signer can be added.
         // Revocation is keyed on member refs existing, so revoking every member's
@@ -35,6 +38,7 @@ pub fn pre_receive() -> Result<(), String> {
     }
     let revoked = revocations::fingerprints_with(&store)
         .map_err(|e| format!("could not read revocations: {e}"))?;
+    // r[impl auth.signed-push] trust set is the live member set minus revoked fingerprints
     let authorized = members::without_revoked(members, &revoked);
     let ref_updates = read_ref_updates()?;
 
@@ -43,6 +47,7 @@ pub fn pre_receive() -> Result<(), String> {
         .ok_or_else(|| {
             "this repository requires a signed push: rerun with `git push --signed`".to_owned()
         })?;
+    // r[impl auth.signed-push] nonce status must be OK
     if env("GIT_PUSH_CERT_NONCE_STATUS").as_deref() != Some("OK") {
         return Err("push certificate nonce was missing or stale".to_owned());
     }
@@ -94,6 +99,8 @@ fn identify_signer<'a>(authorized: &'a [Member], certificate: &str) -> Option<&'
 /// Split the certificate into its signed payload and SSH signature, then accept
 /// it only when `ssh-keygen -Y verify` trusts the signature against one of the
 /// authorized keys.
+// r[impl auth.signed-push] SSH signature block + ssh-keygen -Y verify against the trust set
+// r[impl compat.ssh-keygen] - `ssh-keygen -Y verify` against a runtime-written `allowed_signers` file
 fn verify_certificate(authorized: &[Member], certificate: &str) -> Result<(), String> {
     const MARKER: &str = "-----BEGIN SSH SIGNATURE-----";
     let split = certificate
@@ -153,6 +160,7 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
+// r[impl compat.git] - invokes `git cat-file` as an external subprocess
 /// Read the blob `oid` from `repo` as text.
 fn cat_blob(repo: &Path, oid: &str) -> Result<String, String> {
     let output = Command::new("git")

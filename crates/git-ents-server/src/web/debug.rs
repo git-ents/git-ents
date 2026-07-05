@@ -30,6 +30,7 @@ const INITIAL_SIZE: PtySize = PtySize {
 
 /// Upgrade an authenticated member's request into an interactive shell in
 /// `repo_path`'s checks Sprite.
+// r[impl checks.debug] brokered over WebSocket at /_debug/<repo>; refuses without a signed-in session
 pub(crate) async fn handshake(
     State(state): State<AppState>,
     Path(repo_path): Path<String>,
@@ -90,6 +91,7 @@ pub(crate) async fn handshake(
 /// pseudo-TTY, but the broker allocates its *own* local pty for the `sprite
 /// exec --tty` process so a resize control frame (see below) has something to
 /// apply to — plain pipes have no window size to change.
+// r[impl checks.debug] interactive read-write shell in the Sprite; server holds only the SPRITES_TOKEN credential
 async fn relay(mut socket: WebSocket, sprite: String) {
     let pair = match native_pty_system().openpty(INITIAL_SIZE) {
         Ok(pair) => pair,
@@ -175,6 +177,7 @@ async fn relay(mut socket: WebSocket, sprite: String) {
 
 /// Parse a resize control frame, `"<cols> <rows>"`, as sent by the CLI on
 /// connect and on every local `SIGWINCH`.
+// r[impl checks.debug] terminal resize forwarded as control frames
 fn parse_resize(text: &str) -> Option<PtySize> {
     let (cols, rows) = text.split_once(' ')?;
     Some(PtySize {

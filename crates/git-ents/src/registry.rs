@@ -74,6 +74,7 @@ pub const RECIPES: &[RecipeInfo] = &[RecipeInfo {
 /// bytes; by default the recipe instead points at its distributor's own
 /// hosted, hash-verified archives (see [`Bin::Components`]), sparing the
 /// repository the toolchain's own bytes.
+// r[impl cli.toolchains] - `import --from <recipe> --spec <name>`
 pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String> {
     match recipe {
         "rustup" => rustup(spec, embed),
@@ -128,6 +129,7 @@ pub fn describe(recipe: &str, spec: &str) -> String {
 /// `src` is `<sysroot>/lib/rustlib/src/rust`, unstaged, when the `rust-src`
 /// component is installed, else omitted, regardless of `embed`. Rust's own
 /// toolchain is dual-licensed `MIT OR Apache-2.0`.
+// r[impl cli.toolchains] - `rustup` recipe: hosted archives by default, `--embed` for local bytes
 fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
     let toolchain_arg = format!("+{spec}");
     let sysroot = rustc(&toolchain_arg, &["--print", "sysroot"])?;

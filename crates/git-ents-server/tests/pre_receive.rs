@@ -220,6 +220,9 @@ fn push(work: &Path, server: &Path, signed: bool) -> bool {
         .success()
 }
 
+// r[verify auth.signed-push]
+// r[verify compat.ssh-keygen]
+// r[verify compat.openssh-signed-push]
 #[test]
 fn accepts_a_push_signed_by_an_authorized_key() {
     let base = unique_dir("accept");
@@ -234,6 +237,8 @@ fn accepts_a_push_signed_by_an_authorized_key() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+// r[verify auth.signed-push]
+// r[verify compat.ssh-keygen]
 #[test]
 fn rejects_a_push_signed_by_an_unknown_key() {
     let base = unique_dir("unknown");
@@ -249,6 +254,8 @@ fn rejects_a_push_signed_by_an_unknown_key() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+// r[verify auth.signed-push]
+// r[verify compat.openssh-signed-push]
 #[test]
 fn rejects_an_unsigned_push_when_signers_exist() {
     let base = unique_dir("unsigned");
@@ -326,6 +333,7 @@ fn rejects_a_push_signed_before_a_keys_window_opens() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+// r[verify auth.signed-push] trust set excludes revoked fingerprints
 #[test]
 fn rejects_a_push_signed_by_a_revoked_key() {
     // The key is a valid, in-window member, but its fingerprint is on the
@@ -344,6 +352,7 @@ fn rejects_a_push_signed_by_a_revoked_key() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+// r[verify auth.bootstrap]
 #[test]
 fn accepts_any_push_before_signers_are_configured() {
     let base = unique_dir("bootstrap");

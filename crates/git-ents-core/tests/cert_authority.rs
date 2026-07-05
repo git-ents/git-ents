@@ -22,6 +22,7 @@ use git_ents_core::members::{Member, allowed_signers};
 /// The principal the CA certifies and the verifier checks — the pusher identity.
 const PRINCIPAL: &str = "tester@example.com";
 
+// r[verify members.trust] - a pinned CA's certs verify; an unpinned CA's do not
 #[test]
 fn a_cert_from_the_pinned_ca_verifies_and_an_unpinned_one_does_not() {
     let Some(agent) = Agent::start() else {

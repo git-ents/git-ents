@@ -31,6 +31,8 @@ use super::{RepoMeta, Tab, component, not_found, repo_shell};
 /// notice instead — a cap on what one page can cost. 2 MiB comfortably covers
 /// real source files while ruling out the multi-hundred-MiB objects that would
 /// exhaust the server.
+// r[impl web.syntax-highlight] - the 2 MiB truncation cap on blob views
+// r[impl nonfunctional.memory-cap] - no single request renders more than 2 MiB of object data
 const MAX_RENDER_BYTES: usize = 2 * 1024 * 1024;
 
 /// Render an Askama tab-body template into [`Markup`] the Maud page shell can
@@ -270,6 +272,7 @@ fn collect_rows<'a>(
 /// client JavaScript, expanding a folder or opening a file is a link to
 /// `/<repo>/files/<path>`; the tree is rendered already expanded along the
 /// selected path.
+// r[impl web.tabs] - Files tab: browsable file tree with blob/comments pane
 pub(super) async fn files_page(
     repo: &Path,
     meta: &RepoMeta,
@@ -523,6 +526,8 @@ pub(super) enum BlobView {
 /// [`BlobView::Source`], with a toggle between the two; everything else is
 /// syntax-highlighted source when the language is recognized and the file is
 /// text.
+// r[impl web.tabs] - Files tab: blob view
+// r[impl web.syntax-highlight] - toggle between rendered document and highlighted source
 pub(super) async fn blob_page(
     repo: &Path,
     meta: &RepoMeta,
@@ -595,6 +600,7 @@ fn is_doc(name: &str) -> bool {
 /// Render text file `source` with a line-number gutter — each number a
 /// self-linking `#L<n>` anchor — highlighting via `arborium` when the filename
 /// maps to a known grammar.
+// r[impl web.syntax-highlight] - self-linking `#L<n>` gutter anchors
 fn blob_body(name: &str, source: &str) -> Markup {
     let lines = source.lines().count().max(1);
     let highlighted = highlight(name, source);
@@ -619,6 +625,7 @@ fn blob_body(name: &str, source: &str) -> Markup {
 /// (in which case the caller renders escaped plain text). The highlighter is
 /// built and used synchronously so its non-`Send` grammar store is never held
 /// across an `.await`.
+// r[impl web.syntax-highlight] - compile-time language registry (`arborium`)
 fn highlight(name: &str, source: &str) -> Option<String> {
     let language = arborium::detect_language(name)?;
     let config = Config {
@@ -652,6 +659,7 @@ struct FileComment {
 /// async runtime since git-comment reads the object database synchronously.
 /// Comments that fail to project (say, an anchor commit the repository no
 /// longer has) are skipped rather than failing the page.
+// r[impl web.comments] - projects comment anchors onto the viewed revision, flagging outdated ones
 async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
     let repo = repo.to_owned();
     let path = path.to_owned();
@@ -695,6 +703,7 @@ async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
 /// when the viewer may comment; nothing when there are neither. A
 /// line-anchored comment links its range to the gutter's `#L<n>` anchors; an
 /// outdated one is flagged instead, since its lines no longer exist.
+// r[impl web.comments] - lists a file's anchored comments under its blob view
 fn comments_card(comments: &[FileComment], form: Option<Markup>) -> Markup {
     if comments.is_empty() && form.is_none() {
         return html! {};
@@ -726,6 +735,7 @@ fn comments_card(comments: &[FileComment], form: Option<Markup>) -> Markup {
 /// The add-comment form under a file view, shown when a signed-in member views
 /// a server that can land edits; `None` otherwise, since a submit would only
 /// fail. The comment anchors to `HEAD`'s blob at `path`.
+// r[impl web.comments] - a signed-in member can add a comment from the file view
 fn comment_form(
     rel: &str,
     path: &str,
@@ -749,6 +759,7 @@ fn comment_form(
 }
 
 /// A single commit: its metadata and a colorized unified diff.
+// r[impl web.tabs] - Commits: commit history with diff views
 pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Response {
     if sha.is_empty() || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return not_found().into_response();
@@ -807,6 +818,7 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
 }
 
 /// The Releases tab: tags presented as a changelog timeline, newest first.
+// r[impl web.tabs] - Releases: git tags browsable by version
 pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let releases = releases(repo).await;
     repo_shell(
@@ -855,6 +867,7 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 /// check, its latest status against the current commit, linked to its recorded
 /// terminal session when it has one; Recent runs and Configuration below it are
 /// the full history and the raw set, as before.
+// r[impl web.tabs] - Checks: configured check set and recorded runs with per-check outcomes
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let rel = &meta.rel;
     let checks = component::load::<git_ents_core::checks::Check>(repo).await;
@@ -1103,6 +1116,7 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_ents_core::checks::CommitRuns>
 /// `refs/meta/issues/<id>`, split into open and closed, with the filter chips
 /// derived from the labels that exist. Issue creation is a write path that does
 /// not exist yet, so the "New issue" button stays disabled.
+// r[impl web.tabs] - Issues: issue list with open/closed filter and per-issue detail
 pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let tpl = match component::load::<git_ents_core::issues::Issue>(repo).await {
         Err(err) => IssuesTemplate {
@@ -1156,6 +1170,7 @@ struct IssuesTemplate {
 /// feature and check status. The General fields are editable in place by a
 /// signed-in member when `editing` is set (the server has a signing key and the
 /// gate); everything else is read-only.
+// r[impl web.tabs] - Settings: repository Config fields, editable by signed-in members
 pub(super) async fn settings_page(
     repo: &Path,
     meta: &RepoMeta,

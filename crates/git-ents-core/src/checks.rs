@@ -35,6 +35,7 @@ pub const CHECKS_REF: &str = "refs/meta/checks";
 /// identity, so it is not duplicated inside the body. `pub` only because it
 /// is [`component::MapDocument::Body`] for [`Check`]; nothing outside this
 /// module constructs one directly.
+// r[impl checks.definition]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct CheckBody {
     /// The shell command run for the check (e.g. `cargo fmt --check`), or
@@ -136,6 +137,8 @@ pub fn store(repo: &Path, checks: &[Check]) -> Result<(), git_store::Error> {
 /// toolchain actually exists is checked server-side at job time, not here —
 /// unlike `depends`, `toolchains` cross-references a different ref
 /// namespace this function has no set of configured names to check against.
+// r[impl checks.definition] static DAG validation: cycles, dangling deps, self edges, no-command-no-deps, rejected images
+// r[impl checks.toolchains] toolchain name must be a valid ref-path segment at write time
 pub fn order(checks: &[Check]) -> Result<Vec<&Check>, String> {
     let mut by_name: std::collections::BTreeMap<&str, &Check> = std::collections::BTreeMap::new();
     for check in checks {
@@ -221,6 +224,7 @@ pub const RUNS_NS: &str = "refs/meta/runs";
 /// A check run's status, progressing `Queued` → `Running` → a terminal
 /// outcome. Closed set — the only values a run legitimately takes, in place
 /// of a `String` that every caller had to trust held one of five values.
+// r[impl checks.outcomes] status progression queued->running->pass/fail/error/skipped
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Status {
@@ -255,6 +259,7 @@ impl std::fmt::Display for Status {
 /// One check's on-disk outcome. The map key (the check's name) is not
 /// duplicated inside it. Optional fields absent from an older record load as
 /// unset, so a run recorded before a field existed still loads.
+// r[impl checks.outcomes] optional metadata fields; name is the map key, not stored redundantly
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 struct Outcome {
     /// `queued`, `running`, then `pass`, `fail`, or `error`.
@@ -312,6 +317,7 @@ pub struct CommitRuns {
 /// Record a run of `outcomes` for `commit` in `repo`, as a new commit on
 /// `refs/meta/runs/<commit>`, parented on the prior run so the ref's commit
 /// chain is the run history. The commit's date is the run time.
+// r[impl checks.outcomes] one ref per commit at refs/meta/runs/<commit>; commit chain is history; commit date is run time
 pub fn record(
     repo: &Path,
     commit: ObjectId,
@@ -334,6 +340,7 @@ pub fn record(
 ///
 /// When no run has been recorded yet the update starts one, so a worker that
 /// advances a run is self-healing even if the `queued` record never landed.
+// r[impl checks.outcomes] progresses a run's status in place (queued->running->terminal)
 pub fn update_run(
     repo: &Path,
     commit: ObjectId,
@@ -454,6 +461,7 @@ mod tests {
         }
     }
 
+    // r[verify checks.definition]
     #[test]
     fn store_then_load_round_trips_the_check_set() {
         let repo = unique_repo();
@@ -545,6 +553,7 @@ mod tests {
         }
     }
 
+    // r[verify checks.outcomes]
     #[test]
     fn record_then_runs_round_trips_a_run() {
         let repo = unique_repo();
@@ -567,6 +576,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify checks.outcomes]
     #[test]
     fn recording_a_commit_again_appends_a_run() {
         let repo = unique_repo();
@@ -595,6 +605,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify checks.outcomes]
     #[test]
     fn round_trips_an_outcomes_duration_and_recording() {
         let repo = unique_repo();
@@ -612,6 +623,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify checks.outcomes]
     #[test]
     fn update_run_advances_in_place_rather_than_appending() {
         let repo = unique_repo();
@@ -628,6 +640,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify checks.outcomes]
     #[test]
     fn displays_lowercase_status_words() {
         assert_eq!(Status::Queued.to_string(), "queued");
@@ -635,6 +648,7 @@ mod tests {
         assert_eq!(Status::Skipped.to_string(), "skipped");
     }
 
+    // r[verify checks.definition]
     #[test]
     fn store_then_load_round_trips_image_and_depends() {
         let repo = unique_repo();
@@ -655,6 +669,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // r[verify checks.definition]
     #[test]
     fn order_runs_dependencies_first() {
         let checks = vec![
@@ -670,6 +685,7 @@ mod tests {
         assert_eq!(names, vec!["fmt", "test", "ci"]);
     }
 
+    // r[verify checks.definition] rejects a dependency cycle
     #[test]
     fn order_rejects_a_cycle() {
         let checks = vec![
@@ -682,6 +698,7 @@ mod tests {
         assert!(err.contains('a') && err.contains('b'));
     }
 
+    // r[verify checks.definition] rejects a dangling dependency
     #[test]
     fn order_rejects_an_unknown_dependency() {
         let checks = vec![dependent("test", "cargo nextest run", &["fmt"])];
@@ -689,6 +706,7 @@ mod tests {
         assert!(err.contains("unknown check fmt"), "unexpected error: {err}");
     }
 
+    // r[verify checks.definition] rejects self and duplicate edges
     #[test]
     fn order_rejects_self_and_duplicate_edges() {
         let selfish = vec![dependent("a", "true", &["a"])];
@@ -700,6 +718,7 @@ mod tests {
         assert!(order(&doubled).unwrap_err().contains("twice"));
     }
 
+    // r[verify checks.definition] rejects a check with neither a command nor dependencies
     #[test]
     fn order_rejects_an_empty_check() {
         let checks = vec![composite("hollow", &[])];
@@ -710,6 +729,7 @@ mod tests {
         );
     }
 
+    // r[verify checks.toolchains]
     #[test]
     fn order_accepts_a_valid_toolchain_name() {
         let checks = vec![toolchained("build", "make", &["gcc-12"])];
@@ -723,6 +743,7 @@ mod tests {
         );
     }
 
+    // r[verify checks.toolchains]
     #[test]
     fn order_rejects_an_invalid_toolchain_name() {
         let checks = vec![toolchained("build", "make", &["not/valid"])];
@@ -730,6 +751,7 @@ mod tests {
         assert!(err.contains("invalid toolchain"), "unexpected error: {err}");
     }
 
+    // r[verify checks.toolchains]
     #[test]
     fn store_then_load_round_trips_toolchains() {
         let repo = unique_repo();

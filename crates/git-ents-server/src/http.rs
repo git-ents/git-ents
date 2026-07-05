@@ -19,11 +19,13 @@ use crate::AppState;
 
 const CGI_HEADER_SEP: &[u8] = b"\r\n\r\n";
 
+// r[impl deploy.health]
 /// A liveness probe (and the `/` root) that does not touch git.
 pub async fn health() -> &'static str {
     "ok"
 }
 
+// r[impl protocol.routing] - dispatches a GET to the web UI or the git backend by path/query
 /// Serve a GET: the HTML web UI for browser requests, or `git http-backend` for
 /// a git wire-protocol read (the ref advertisement or a dumb-HTTP object fetch).
 pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: HeaderMap) -> Response {
@@ -53,6 +55,7 @@ pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: Heade
     .await
 }
 
+// r[impl protocol.routing] - dispatches a POST to the web UI or the git backend by path
 /// Serve a POST: always a git smart-HTTP RPC (`git-upload-pack` for fetch or
 /// `git-receive-pack` for push). The browser UI never POSTs, so there is no web
 /// branch here.
@@ -86,11 +89,16 @@ pub async fn post_request(
     .await
 }
 
+// r[impl protocol.routing]
 /// Whether a POST is a git smart-HTTP RPC rather than a browser form submission.
 fn is_git_post(path_info: &str) -> bool {
     path_info.ends_with("/git-upload-pack") || path_info.ends_with("/git-receive-pack")
 }
 
+// r[impl protocol.git] - delegates the git wire protocol to `git http-backend` as a CGI subprocess
+// r[impl compat.git] - invokes `git http-backend` as an external subprocess, GIT_PROJECT_ROOT on PATH
+// r[impl compat.cgi] - populates the CGI environment before spawning `git http-backend`
+// r[impl nonfunctional.concurrency] - writes stdin and drains stdout concurrently to avoid deadlock
 /// Hand a git wire-protocol request to `git http-backend` and reply with its
 /// output. A receive-pack request (push) auto-creates its bare repository before
 /// the backend runs and reconciles `HEAD` after a successful push.
@@ -222,6 +230,8 @@ async fn backend(
     build_response(&stdout)
 }
 
+// r[impl compat.git] - overrides passed via GIT_CONFIG_* rather than `git -c` so they reach receive-pack/pre-receive
+// r[impl auth.nonce]
 /// The `git` config overrides applied to every backend invocation. Empty until
 /// push authentication is wired: a seed enables the signed-push nonce, and the
 /// hooks directory points the backend at the `pre-receive` verifier.
@@ -241,6 +251,7 @@ fn backend_config(state: &AppState) -> Vec<(&'static str, &str)> {
     overrides
 }
 
+// r[impl compat.cgi] - parses the CGI response format (header block, blank line, body) into HTTP
 /// Translate a CGI response (header block, blank line, body) into HTTP.
 fn build_response(stdout: &[u8]) -> Response {
     let (header_block, body) = match find_subsequence(stdout, CGI_HEADER_SEP) {
@@ -282,6 +293,7 @@ fn build_response(stdout: &[u8]) -> Response {
 /// Shared by the push gateway and the web UI's routing/discovery.
 pub(crate) const MAX_REPO_DEPTH: usize = 3;
 
+// r[impl protocol.routing] - browse routes win over dumb-HTTP path heuristics, service requests never stolen
 /// Whether a GET should be answered with the HTML web UI rather than handed to
 /// `git http-backend`.
 ///
@@ -298,6 +310,7 @@ fn is_web_get(path: &str, query: &str) -> bool {
     !is_wire || (is_browse && !is_service_request(path, query))
 }
 
+// r[impl protocol.routing]
 /// Whether `path`/`query` is an unambiguous smart-HTTP service request (the
 /// ref advertisement or an upload-pack/receive-pack RPC).
 fn is_service_request(path: &str, query: &str) -> bool {
@@ -325,6 +338,8 @@ fn query_service(query: &str) -> Option<&str> {
         .find_map(|pair| pair.strip_prefix("service="))
 }
 
+// r[impl namespace.auto-create] - serializes creation behind `init_lock` so concurrent first pushes cannot race
+// r[impl storage.bare] - creates the bare repo automatically on first push
 /// Ensure `repo` exists as a bare repository, creating it on first push.
 ///
 /// Holds [`AppState::init_lock`] across the whole check-and-create so two
@@ -360,6 +375,7 @@ async fn ensure_repo(state: &AppState, repo: &Path) -> Result<(), Response> {
     })
 }
 
+// r[impl namespace.path] - refuses a path nested inside an existing repository
 /// The ancestor of `repo` (below `data_dir`) that is itself a bare repository,
 /// if any. Used to refuse creating a repository inside another one.
 fn enclosing_repo(data_dir: &Path, repo: &Path) -> Option<PathBuf> {
@@ -383,6 +399,7 @@ pub(crate) fn is_bare_repo(path: &Path) -> bool {
     path.join("HEAD").is_file() && path.join("objects").is_dir()
 }
 
+// r[impl namespace.path] - one to three segments, rejected before `git http-backend` is invoked
 /// The target repository of a push, as a validated path relative to the data
 /// directory, or `None` if the request does not name an acceptable repository.
 ///
@@ -406,6 +423,7 @@ fn repo_path(path_info: &str) -> Option<PathBuf> {
     Some(segments.into_iter().collect())
 }
 
+// r[impl namespace.path] - ASCII alphanumerics plus `.`, `_`, `-`; no leading `.`, no separator
 /// Whether a single path component is a safe repository/namespace name.
 ///
 /// Rejecting any leading `.` rules out `.`, `..`, and hidden directories; the
@@ -419,6 +437,8 @@ pub(crate) fn valid_segment(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+// r[impl namespace.auto-create] - `git init --bare` + `http.receivepack = true` on first push
+// r[impl compat.git] - invokes `git init --bare` as an external subprocess
 /// Create a bare repo that accepts pushes over smart-HTTP.
 async fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
     let init = Command::new("git")
@@ -450,6 +470,8 @@ async fn init_bare_repo(repo: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// r[impl namespace.auto-create] - adopts a pushed branch (preferring main, then master) so a fresh clone checks out content
+// r[impl compat.git] - invokes `git for-each-ref`/`git symbolic-ref` as external subprocesses
 /// Point `HEAD` at a real branch when it dangles after a push.
 ///
 /// Best-effort: the push already succeeded, so failures here are ignored.
@@ -561,6 +583,7 @@ mod tests {
     #[case("a/b", false)]
     #[case("a b", false)]
     #[case("a%2eb", false)]
+    // r[verify namespace.path]
     fn validates_segments(#[case] segment: &str, #[case] expected: bool) {
         assert_eq!(valid_segment(segment), expected);
     }
@@ -579,11 +602,13 @@ mod tests {
         }
     }
 
+    // r[verify auth.nonce]
     #[test]
     fn backend_config_is_empty_without_authentication() {
         assert!(backend_config(&state(None, None)).is_empty());
     }
 
+    // r[verify auth.nonce]
     #[test]
     fn backend_config_injects_nonce_seed_and_hooks_path() {
         assert_eq!(
@@ -605,6 +630,7 @@ mod tests {
     #[case("/../etc/git-receive-pack", None)]
     #[case("/.ssh/git-receive-pack", None)]
     #[case("/git-receive-pack", None)]
+    // r[verify namespace.path]
     fn extracts_repo_path(#[case] path: &str, #[case] expected: Option<&str>) {
         assert_eq!(repo_path(path).as_deref(), expected.map(Path::new));
     }
@@ -617,6 +643,7 @@ mod tests {
     #[case("/repo.git/info/refs", "x=service=git-receive-pack", false)]
     #[case("/repo.git/info/refs", "a=b&service=git-receive-pack", true)]
     #[case("/repo.git/objects/info/packs", "", false)]
+    // r[verify protocol.routing]
     fn detects_pushes(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
         assert_eq!(is_receive_pack(path, query), expected);
     }
@@ -638,6 +665,7 @@ mod tests {
     #[case("/repo/info/refs", "service=git-upload-pack", false)]
     #[case("/repo/git-upload-pack", "", false)]
     #[case("/repo/objects/12/abcdef", "", false)]
+    // r[verify protocol.routing]
     fn routes_browser_gets(#[case] path: &str, #[case] query: &str, #[case] expected: bool) {
         assert_eq!(is_web_get(path, query), expected);
     }
