@@ -1,189 +1,201 @@
-= git-ents abstractions
-:toc:
+= git-ents Abstractions
 
-What this codebase has settled on as its load-bearing abstractions, and the
-command surface those abstractions imply. The framing rule: an abstraction
-earns a place here only if it already carries weight in more than one crate
-or command — nothing speculative.
+What this codebase has settled on as its load-bearing abstractions, and the command surface those abstractions imply.
 
-== The abstractions
+*Rule:* An abstraction belongs here only if it already carries weight in multiple crates or commands. Nothing speculative.
 
-=== 1. The meta-ref
+'''
 
-One entity (or one small set) per ref under `refs/meta/*`:
-`member/<username>`, `account`, `checks`, `toolchains/<name>`,
-`comments/<id>`, `revoked`, `config`.
+== 1. Meta-refs
 
-The meta-ref is simultaneously the unit of:
+Each entity (or small collection of entities) lives in its own ref under `refs/meta/*`:
 
-* *storage* — the ref points at a commit whose tree is the entity;
-* *sync* — fetch or push exactly the entities you care about;
-* *authorization* — pre-receive rules match on refnames, so roles gate
-  entity kinds naturally;
-* *history* — the ref's commit log is the entity's audit trail, free.
+* `refs/meta/member/*`
+* `refs/meta/account`
+* `refs/meta/reactions/*`
+* `refs/meta/results/*`
+* `refs/meta/toolchains/*`
+* `refs/meta/comments/*`
+* `refs/meta/config`
 
-Decomposed refs, aggregated views: writes touch one narrow ref (no merge
-conflicts between two people editing different members), reads fan in
-(`members list` walks `refs/meta/member/*`).
+A meta-ref is simultaneously the unit of:
 
-=== 2. The typed tree (`git-store` + facet)
+* *Storage* — the ref points to a commit whose tree is the entity.
+* *Synchronization* — fetch or push only the entities you care about.
+* *Authorization* — pre-receive rules gate access by refname.
+* *History* — the ref's commit history is the audit trail.
 
-A Rust struct annotated with `#[derive(Facet)]` *is* the schema; facet-git-tree
-maps it to/from a git tree. No serialization format to version separately —
-but the flip side is the struct is the on-disk format, so changing one is a
-migration, not a refactor.
+*Granularity rule:* one ref per independently-authored entity (members, comments, reactions, results); one ref for repo-global state (account, config). Entities that different actors write concurrently must not share a ref — writes stay conflict-free, and reads aggregate many refs into a single view.
 
-Everything else builds on this: members, checks, comments, toolchains, and
-accounts are all just typed trees behind meta-refs.
+'''
 
-=== 3. The anchor (`git-anchor`)
+== 2. Typed trees (git-store + Facet)
 
-A durable pointer into content: a blob (and optionally a line range) *at a
-commit*. Because the anchor names the commit, it never dangles; because it
-can be projected onto a newer commit, a comment placed on last month's code
-finds its lines in today's. This is the abstraction that makes review data
-storable forever while the code underneath keeps moving.
+A Rust struct annotated with `#[derive(Facet)]` is the storage schema. `facet-git-tree` maps directly between the struct and a Git tree.
 
-=== 4. The signed push (the only write path)
+There is no separate serialization format to version. The tradeoff: changing the struct is a storage migration, not merely a refactor.
 
-There is exactly one way to mutate a repository, including its metadata: a
-real `git push` carrying a signed-push certificate, verified by `pre-receive`
-against the member refs. The web UI has no side door — a browser edit becomes
-a real push signed by the server's own key, whose public half must itself be
-a member. Auth state *is* repository state: no sessions database, no tokens
-table, revocation is a ref update.
+Everything else — members, accounts, comments, reactions, toolchains — is a typed tree stored behind a meta-ref.
 
-=== 5. The check (and the toolchain that feeds it)
+'''
 
-A check is data (`refs/meta/checks`), not configuration living outside the
-repo. `post-receive` enqueues; a worker runs checks asynchronously in a
-Sprite; nothing ever blocks a push. A check's toolchains are git trees
-(`refs/meta/toolchains/<name>`) extracted into the Sprite and activated via
-`PATH` — the repository carries its own CI environment, with `recipe`
-provenance and the ref log as the audit trail of who put which compiler
-there.
+== 3. Anchors (git-anchor)
 
-=== 6. The rendering registry
+An anchor is a durable pointer into source code: blob, optional line range, specific commit.
 
-Documents render by MIME type through one lookup table
-(`git-ents-server/src/render.rs`), to HTML for the web UI or plain text for
-the CLI. A table rather than a trait hierarchy because MIME is an open
-namespace: unknown types fall through to passthrough instead of refusing to
-render. The CLI and the web UI show the *same* comment body because they call
-the same function.
+Durability requires reachability. The meta-ref commit that stores an anchor carries the anchored commit as a second parent, so the anchored objects are reachable from `refs/meta/*` and survive branch deletion, force-push, and gc — no gc special-casing. An anchor never dangles because the meta-ref abstraction itself keeps it alive.
 
-=== 7. The embeddable server
+Because anchors can be projected onto newer commits, comments follow code as it evolves. Anchors are independent of comments; other tooling (reviews, TODOs, blame overlays) can reuse them.
 
-`git-ents-server` is a library first. `git ents server` and the standalone
-binary are the same code; the hooks (`pre-receive`, `post-receive`) are
-subcommands of it, not separate programs. This is the hinge for hackability:
-anyone who can run the CLI can run the forge.
+'''
 
-== The command surface
+== 4. Signed pushes
 
-The abstractions map onto git subcommands. The umbrella porcelain is
-`git ents`; the primitives underneath deserve to graduate into standalone
-`git-$cmd` extensions (their crates already exist with exactly those names),
-so a hacker can compose them without buying the whole forge.
+There is exactly one write path: `git push`.
 
-=== Primitives (hackable pieces)
+Every mutation — including metadata — is a signed push certificate verified by pre-receive against the member refs. Edits made through the web UI become real pushes signed by the server's own key, whose public key must appear in the member database. The reactions worker writes results the same way, with its own member key: no privileged write path exists.
 
-[source,console]
+Authentication state is repository state: no session database, no token table. Revocation is a member-ref update; a revoked member's key must never validate again, which is why revocation is a state on the member entity rather than deletion (deletion would leave old signatures unverifiable rather than explicitly rejected).
+
+Authorization is pre-receive rules keyed on refname. `refs/meta/reactions/*` is admin-writable only — reactions schedule code execution, so authoring one requires more trust than pushing a branch. This rule must exist explicitly; it is not the default.
+
+'''
+
+== 5. Reactions
+
+*Pushes are the only write; reactions are the only side effect.*
+
+A reaction is repository data under `refs/meta/reactions/<name>`: a trigger (refspec pattern), declared toolchains, a command, and a results ref.
+
+[source,rust]
 ----
-$ git store show refs/meta/checks          # <1>
-$ git store show refs/meta/member/joey     # any typed tree, pretty-printed
-
-$ git anchor resolve <comment-id>          # <2>
-$ git anchor project <comment-id> HEAD     # where do those lines live now?
-
-$ git comment add --file src/lib.rs --lines 40-52 -m "why saturating_add?"
-$ git comment show <id>                    # body rendered as AsciiDoc text
-
-$ git toolchain import rustup:1.88-aarch64-apple-darwin
-$ git toolchain view rust-1.88             # provenance + on-disk footprint
-$ git toolchain log rust-1.88              # the ref log as audit trail
-----
-<1> `git store` is the escape hatch: render *any* meta-ref via the
-    compile-time facet walk, including kinds `git ents` has no verb for yet.
-    This is what makes bring-your-own-schema real rather than aspirational.
-<2> Anchors resolve and project independently of comments, so other tools
-    (reviews, TODO trackers, blame overlays) can reuse them.
-
-=== The porcelain
-
-[source,console]
-----
-$ git ents setup                  # sign-my-pushes client config
-$ git ents members list|add|remove|revoke|unrevoke|check
-$ git ents account create|link
-$ git ents checks list|add|run|debug
-$ git ents toolchain …            # same verbs as git toolchain, plus sync
-$ git ents comment …              # same verbs as git comment, plus sync
-$ git ents login                  # sign a challenge, like the web UI does
-$ git ents server                 # the whole forge, embedded
+#[derive(Facet)]
+struct Reaction {
+    trigger: RefPattern,           // e.g. "refs/heads/*"
+    toolchains: Vec<ToolchainRef>, // e.g. ["rust-1.88"]
+    run: Command,
+    results: RefName,              // e.g. "refs/meta/results/<name>/*"
+}
 ----
 
-The porcelain's added value over the primitives is exactly one thing:
-*remotes*. `git ents comment show` fetches `refs/meta/comments/*` from
-`--remote` first; `git comment show` would read only what is already local.
-Primitive = local plumbing, porcelain = synced workflow.
+Pipeline invariants:
+
+. `post-receive` matches `(refname, old, new)` against all `refs/meta/reactions/*`; matches enqueue `(reaction, refname, new_oid)`. That tuple is the dedup key — the queue is at-least-once, and git's content addressing makes idempotency nearly free.
+. Pushes are never blocked; the durable enqueue is the entire synchronous cost.
+. A worker dequeues, materializes declared toolchains from `refs/meta/toolchains/*`, and executes inside a Fly.io Sprite (hosted) or directly on the host (local).
+. Results are written back only via signed push to the reaction's results ref — one ref per tested commit (`refs/meta/results/<reaction>/<short-oid>`), so concurrent results never conflict.
+
+CI checks are the first shipped reaction: trigger on branch pushes, run a command, publish results. Future instances (comment notifications, member-cache rebuilds, ATProto mirroring) are registrations, not subsystems.
+
+Sprites bound the runtime blast radius; the admin-only write rule on `refs/meta/reactions/*` bounds who can schedule execution at all. Both are required in hosted mode.
+
+'''
+
+== 6. Toolchains
+
+Toolchains live under `refs/meta/toolchains/*` as Git trees. The worker extracts a declared toolchain into the execution environment and activates it through `PATH`.
+
+The repository carries its own execution environment, with provenance and audit history. Toolchains are a resource reactions declare, not a trigger; they keep their own subcommand only because import/activation logic is nontrivial.
+
+'''
+
+== Command surface
+
+Primitives are local plumbing; `git ents` adds exactly one capability: remote synchronization. Every primitive has a synced `git ents` variant that fetches the relevant `refs/meta/*` first.
+
+=== Primitive commands
+
+----
+git store show refs/meta/member/joey
+git store show refs/meta/reactions/ci
+
+git anchor resolve
+git anchor project HEAD
+
+git comment add --file src/lib.rs --lines 40-52 -m "why saturating_add?"
+git comment show
+
+git reaction list
+git reaction add ci --on 'refs/heads/*' --toolchain rust-1.88 -- cargo test
+git reaction show ci [<commit>]     # definition + results for a commit
+git reaction run ci [--at <commit>] # local execution: same toolchain
+                                    # materialization, same sandbox path,
+                                    # queue skipped — nothing else differs
+git reaction log ci                 # results ref history
+
+git toolchain import rustup:1.88-aarch64-apple-darwin
+git toolchain view rust-1.88
+git toolchain log rust-1.88
+----
+
+`git store` is the generic escape hatch — it pretty-prints any typed meta-ref, including schemas `git ents` doesn't yet know about.
+
+`git reaction run` is the correctness anchor: local and hosted execution share the identical materialization and sandbox path, or the abstraction is decoration.
+
+=== Porcelain commands
+
+----
+git ents setup
+git ents members list|add|remove|revoke|unrevoke|check
+git ents account create|link
+git ents reaction ...
+git ents toolchain ...
+git ents comment ...
+git ents login
+git ents serve | server
+----
+
+'''
 
 == Local server vs. hosted server
 
-The same binary serves two shapes, and the difference should stay this small:
+The same binary supports two deployment modes.
 
-[cols="1,2,2"]
+[cols="1,1,1",options="header"]
 |===
-| | local (`git ents serve`) | hosted (`git-ents-server` on Fly.io)
+| | Local (`git ents serve`) | Hosted (`git-ents-server`)
 
-| repositories
-| *real* (non-bare) repos — your working checkouts
-| bare repos under `/data/repos`
+| Repositories
+| Real working repositories
+| Bare repositories
 
-| discovery
-| a directory of checkouts, or the current repo
-| created on first push
+| Discovery
+| Current repo or directory scan
+| Created on first push
 
-| auth
-| signed pushes *optional* by default (loopback, it is your machine);
-  `--require-signatures` to rehearse the hosted gate
-| signed pushes required (`CERT_NONCE_SEED` set)
+| Auth
+| Signed pushes optional by default
+| Signed pushes required
 
-| checks
-| run directly on the host (you already trust your machine)
-| run in a Fly.io Sprite (isolation)
+| Reactions
+| Execute directly on the host
+| Execute inside a Fly.io Sprite
 
-| purpose
-| hack on the forge, browse your own repos, demo to a friend on LAN
-| be the forge
+| Purpose
+| Personal forge, development, demos
+| Production forge
 |===
 
-Proposed UX for the local shape:
-
-[source,console]
 ----
-$ cd ~/code/my-project
-$ git ents serve                  # serve *this* checkout on :8080
-serving my-project at http://localhost:8080/my-project
+cd ~/code/my-project
+git ents serve
+# serving my-project at http://localhost:8080/my-project
 
-$ git ents serve ~/code           # serve every repo found one level down
-serving 12 repos at http://localhost:8080/
+git ents serve ~/code
+# serving 12 repos at http://localhost:8080/
 ----
 
-Two wrinkles the local shape must own, because real repos differ from bare
-ones in exactly these ways:
+=== Local server behavior
 
-* *Push-to-checked-out-branch.* A bare repo accepts any push; a real repo
-  refuses pushes to the checked-out branch. The local server sets
-  `receive.denyCurrentBranch=updateInstead` on the repos it serves, so a
-  push updates the working tree too — which is the behavior a hacker
-  actually wants from a local forge.
-* *Meta-refs vs. working tree.* Pushes to `refs/meta/*` never touch the
-  working tree, so metadata (comments, members, checks) flows identically
-  in both shapes. This is not a coincidence; it falls out of abstraction 1,
-  and it is the reason the local/hosted split can stay a deployment detail
-  rather than a fork in the data model.
+Working repositories normally reject pushes to the checked-out branch. The local server enables `receive.denyCurrentBranch=updateInstead` so pushes also update the working tree. Known edge: `updateInstead` fails on a dirty worktree, so branch-push behavior is not perfectly identical to hosted mode — metadata pushes are.
 
-`git ents server` (the current command) remains the hosted shape verbatim —
-hooks, queue, bare repos. `serve` is the porcelain verb for "this machine,
-these checkouts, low ceremony."
+Pushes to `refs/meta/*` never touch the working tree, so comments, members, reactions, and toolchains behave identically in local and hosted deployments. The deployment model stays an implementation detail of the data model.
+
+'''
+
+== Implementation notes (not abstractions)
+
+Kept out of the list above per the admission rule:
+
+* *Rendering registry* — documents render by MIME type through one lookup table (HTML for web, plain text for CLI; unknown types pass through). Both interfaces call the same renderer.
+* *Embeddable server* — `git-ents-server` is a library first; `git ents serve`, the standalone binary, and the hooks (`pre-receive`/`post-receive` as subcommands) are thin wrappers over one implementation.
