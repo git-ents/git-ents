@@ -889,19 +889,20 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
     )
 }
 
-/// The Checks tab. The check set lives on `refs/meta/checks` (managed with
-/// `git ents checks`); each push queues them and a worker runs them in a Sprite.
-/// "Checks on HEAD" mirrors a GitHub PR checks list — one row per configured
-/// check, its latest status against the current commit, linked to its recorded
-/// terminal session when it has one; Recent runs and Configuration below it are
-/// the full history and the raw set, as before.
+/// The Checks tab. The effect set lives one ref per effect under
+/// `refs/meta/effects` (managed with `git ents checks`); each push queues them
+/// and a worker runs them in a Sprite. "Checks on HEAD" mirrors a GitHub PR
+/// checks list — one row per configured effect, its latest status against the
+/// current commit, linked to its recorded terminal session when it has one;
+/// Recent runs and Configuration below it are the full history and the raw
+/// set, as before.
 ///
 /// ## Requirements
 ///
 /// @relation(web.tabs)
 pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
     let rel = &meta.rel;
-    let checks = component::load::<git_ents_core::checks::Check>(repo).await;
+    let checks = component::load::<git_effect::Effect>(repo).await;
     let runs = load_runs(repo).await;
     let head = git_output(repo, &["rev-parse", "HEAD"])
         .await
@@ -923,9 +924,9 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
         html! {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
-                "Checks are configured on " code { "refs/meta/checks" }
+                "Checks are configured on " code { "refs/meta/effects/<name>" }
                 " (" code { "git ents checks list" } ") and run in a Sprite after each push; "
-                "each run is recorded under " code { "refs/meta/runs/<commit>" } "."
+                "each run is recorded under " code { "refs/meta/results/<effect>/<commit>" } "."
             }
             div.card {
                 div.card-header { "Checks on HEAD" }
@@ -933,7 +934,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
                     Err(err) => div.card-row.muted { "Could not read checks: " (err) }
                     Ok(checks) if checks.is_empty() => {
                         div.card-row.muted {
-                            "No checks configured on " code { "refs/meta/checks" } "."
+                            "No effects configured on " code { "refs/meta/effects" } "."
                         }
                     }
                     Ok(checks) => {
@@ -979,8 +980,8 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
 fn head_check_row(
     rel: &str,
     head: &str,
-    check: &git_ents_core::checks::Check,
-    head_run: Option<&git_ents_core::checks::Run>,
+    check: &git_effect::Effect,
+    head_run: Option<&git_effect::Run>,
 ) -> Markup {
     let outcome =
         head_run.and_then(|run| run.results.iter().find(|result| result.name == check.name));
@@ -999,7 +1000,7 @@ async fn latest_outcome(
     repo: &Path,
     commit_oid: ObjectId,
     name: &str,
-) -> Option<git_ents_core::checks::RunOutcome> {
+) -> Option<git_effect::RunOutcome> {
     load_runs(repo)
         .await
         .ok()?
@@ -1021,7 +1022,7 @@ pub(super) async fn check_recording_page(
     meta: &RepoMeta,
     commit: &str,
     name: &str,
-    live_runs: &crate::checks::LiveRegistry,
+    live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
         return not_found().into_response();
@@ -1036,7 +1037,7 @@ pub(super) async fn check_recording_page(
         let key = (repo.to_owned(), commit_oid, name.to_owned());
         let fragment_url = format!("/{rel}/checks/{commit}/{name}/live");
         let initial =
-            super::render::live_fragment_body(crate::checks::live_snapshot(live_runs, &key));
+            super::render::live_fragment_body(git_effect::engine::live_snapshot(live_runs, &key));
         html! {
             p.shell-note {
                 "This check is still " (outcome.status.to_string()) "; the view below updates live."
@@ -1074,13 +1075,13 @@ pub(super) async fn check_live_fragment(
     repo: &Path,
     commit: &str,
     name: &str,
-    live_runs: &crate::checks::LiveRegistry,
+    live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
         return not_found().into_response();
     };
     let key = (repo.to_owned(), commit_oid, name.to_owned());
-    let recording = crate::checks::live_snapshot(live_runs, &key);
+    let recording = git_effect::engine::live_snapshot(live_runs, &key);
     let done = recording.is_none();
     let body = super::render::live_fragment_body(recording).into_string();
     let header = if done { "done" } else { "running" };
@@ -1135,9 +1136,9 @@ fn sanitize_filename(s: &str) -> String {
 }
 
 /// Load the recorded runs off the async runtime, like [`component::load`].
-async fn load_runs(repo: &Path) -> Result<Vec<git_ents_core::checks::CommitRuns>, String> {
+async fn load_runs(repo: &Path) -> Result<Vec<git_effect::CommitRuns>, String> {
     let repo = repo.to_owned();
-    tokio::task::spawn_blocking(move || git_ents_core::checks::runs(&repo))
+    tokio::task::spawn_blocking(move || git_effect::runs(&repo))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
@@ -1215,7 +1216,7 @@ pub(super) async fn settings_page(
     editing: bool,
 ) -> Markup {
     let members = component::load::<git_member::members::Member>(repo).await;
-    let checks = component::load::<git_ents_core::checks::Check>(repo).await;
+    let checks = component::load::<git_effect::Effect>(repo).await;
     let config = load_repo_config(repo).await;
     repo_shell(
         meta,
@@ -1251,7 +1252,7 @@ pub(super) async fn settings_page(
                 (component::card(&members))
 
                 p.shell-note {
-                    "Commands on " code { "refs/meta/checks" } " run against each push "
+                    "Commands on " code { "refs/meta/effects/*" } " run against each push "
                     "(" code { "git ents checks list" } ")."
                 }
                 (component::card(&checks))

@@ -417,7 +417,7 @@ async fn route(
     host: Option<&str>,
     session: Option<write::SessionSnapshot>,
     editing: bool,
-    live_runs: &crate::checks::LiveRegistry,
+    live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let meta = gather_meta(repo, rel).await;
     match rest.split_first() {

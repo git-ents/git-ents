@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/git-anchor",
     "crates/git-comment",
+    "crates/git-effect",
     "crates/git-ents",
     "crates/git-ents-core",
     "crates/git-ents-server",
@@ -55,6 +56,7 @@ facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
 form_urlencoded = "1"
 git-anchor = { path = "crates/git-anchor" }
 git-comment = { path = "crates/git-comment" }
+git-effect = { path = "crates/git-effect" }
 git-ents-core = { path = "crates/git-ents-core" }
 git-ents-server = { path = "crates/git-ents-server" }
 git-member = { path = "crates/git-member" }

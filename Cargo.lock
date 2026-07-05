@@ -1458,6 +1458,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-effect"
+version = "0.0.0"
+dependencies = [
+ "facet",
+ "git-store",
+ "git-toolchain",
+ "gix-hash",
+ "portable-pty",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "git-ents"
 version = "0.0.0"
 dependencies = [
@@ -1469,6 +1483,7 @@ dependencies = [
  "futures-util",
  "git-anchor",
  "git-comment",
+ "git-effect",
  "git-ents-core",
  "git-ents-server",
  "git-member",
@@ -1509,6 +1524,7 @@ dependencies = [
  "getrandom 0.4.3",
  "git-anchor",
  "git-comment",
+ "git-effect",
  "git-ents-core",
  "git-member",
  "git-signed-push",

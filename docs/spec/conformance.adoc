@@ -42,11 +42,11 @@ renames, or removes a requirement or its implementation.
 |`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
 |`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
 |`config.ref` |`git-ents-core/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
-|`checks.definition` |`git-ents/src/checks.rs` (`load`/`store`, `CHECKS_REF`, `order`) |`checks::store_then_load_round_trips_the_check_set`, `store_then_load_round_trips_image_and_depends`, `order_runs_dependencies_first`, `order_rejects_a_cycle`, `order_rejects_an_unknown_dependency`, `order_rejects_self_and_duplicate_edges`, `order_rejects_an_empty_check`
-|`checks.post-receive` |`git-ents-server/src/checks.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
-|`checks.worker` |`git-ents-server/src/checks.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`checks::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-ents`)_
-|`checks.sandbox` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
-|`checks.outcomes` |`git-ents/src/checks.rs` (`Status`, `record`/`update_run`); `git-ents-server/src/checks.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`checks::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_log_url`
+|`checks.definition` |`git-effect/src/definition.rs` (`load`/`store`, `EFFECTS_NS`, `order`) |`definition::tests::store_then_load_round_trips_an_effect`, `store_then_load_round_trips_image_and_depends`, `order_runs_dependencies_first`, `order_rejects_a_cycle`, `order_rejects_an_unknown_dependency`, `order_rejects_self_and_duplicate_edges`, `order_rejects_an_empty_effect`
+|`checks.post-receive` |`git-effect/src/engine.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
+|`checks.worker` |`git-effect/src/engine.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`engine::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-effect`)_
+|`checks.sandbox` |`git-effect/src/engine.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
+|`checks.outcomes` |`git-effect/src/results.rs` (`Status`, `record`/`update_run`); `git-effect/src/engine.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`results::tests::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_recording`
 |`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`checks debug`) | _(requires a live Sprite; manually verified)_
 |`issues.ref` |`git-ents/src/issues.rs` (`Issue`, `State`) |`issues::store_then_load_round_trips_an_issue`
 |`issues.id` |`git-ents/src/issues.rs` (`new_id`, `promote`) |`issues::new_id_hashes_its_own_content_with_no_origin`, `promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref`
@@ -64,16 +64,16 @@ renames, or removes a requirement or its implementation.
 |`web.auth.session` |`git-ents-server/src/web/write.rs` (`Session`, `csrf_ok`, `logout`) |`web_edit::an_edit_without_a_valid_csrf_token_is_refused`
 |`web.auth.edit` |`git-ents-server/src/web/write.rs` (`edit_config`, `signed_edit`, `require_admin_registered`) |`web_edit::a_member_edits_settings_through_the_browser`, `a_self_attested_member_is_refused_a_settings_edit`
 |`web.auth.webauthn-onboarding` | _Planned — see the requirement's note_ | —
-|`nonfunctional.push-latency` |`git-ents-server/src/checks.rs` (`post_receive` returns after `enqueue`) | _(structural; see `checks.post-receive`)_
+|`nonfunctional.push-latency` |`git-effect/src/engine.rs` (`post_receive` returns after `enqueue`) | _(structural; see `checks.post-receive`)_
 |`nonfunctional.memory-cap` |`git-ents-server/src/web/git.rs` (`capped_read`, `capped_read_bytes`) |`web::git::tests::capped_read_*`
-|`nonfunctional.concurrency` |`git-ents-server/src/http.rs` (`backend`, concurrent stdin/stdout); `checks.rs` (`spawn_blocking`) |`server::responds_to_requests`
+|`nonfunctional.concurrency` |`git-ents-server/src/http.rs` (`backend`, concurrent stdin/stdout); `git-effect/src/engine.rs` (`spawn_blocking`) |`server::responds_to_requests`
 |`nonfunctional.no-panic` |workspace-wide clippy lint configuration (`#![forbid(clippy::unwrap_used, ...)]`) |`cargo clippy --workspace --all-targets`
 |`nonfunctional.no-unsafe` |workspace-wide (`#![forbid(unsafe_code)]`) |`cargo clippy --workspace --all-targets`
 |`nonfunctional.object-store` |`git-store/src/lib.rs` (`Store::open`, common-dir odb) | _(see the module's own doc comment; exercised by hook integration tests)_
 |`compat.git` |`git-ents-server/src/http.rs`, `web/git.rs` (subprocess invocations) | _(implicit in all integration tests)_
 |`compat.ssh-keygen` |`git-signed-push/src/lib.rs` (`verify_certificate`), `web/write.rs` (`verify_login_signature`) |`pre_receive::*`, `web_edit::*`
 |`compat.openssh-signed-push` |`git-signed-push/src/lib.rs` (`GIT_PUSH_CERT`, `GIT_PUSH_CERT_NONCE_STATUS`) |`pre_receive::rejects_a_push_signed_by_an_expired_key`
-|`compat.sprite` |`git-ents-server/src/checks.rs` (`ensure_auth`, `ensure_sprite`) | _(requires a live Sprite; not covered by unit tests)_
+|`compat.sprite` |`git-effect/src/engine.rs` (`ensure_auth`, `ensure_sprite`) | _(requires a live Sprite; not covered by unit tests)_
 |`compat.cgi` |`git-ents-server/src/http.rs` (`backend`, CGI env vars) |`server::push_then_clone_round_trip`
 |`compat.edition` |workspace `Cargo.toml` (`edition = "2024"`, `publish = false`) | _(build-time)_
 |`deploy.fly` |`.config/fly.toml` | _(deployment-time)_

@@ -146,7 +146,7 @@ async fn backend(
         .env("REQUEST_METHOD", method.as_str())
         // Hand the `post-receive` hook the queue it drops jobs into; it inherits
         // this through the receive-pack process tree git spawns.
-        .env(crate::checks::QUEUE_ENV, &state.checks_queue)
+        .env(git_effect::engine::QUEUE_ENV, &state.checks_queue)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Surface backend diagnostics in the server's own logs rather than
@@ -591,7 +591,7 @@ mod tests {
             sessions: crate::web::new_sessions(),
             challenges: crate::web::new_challenges(),
             web_signing_key: None,
-            live_runs: crate::checks::new_live_registry(),
+            live_runs: git_effect::engine::new_live_registry(),
         }
     }
 

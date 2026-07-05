@@ -72,10 +72,13 @@ pub(crate) async fn handshake(
             .into_response();
     }
 
-    let sprite = crate::checks::sprite_name(&repo);
+    let sprite = git_effect::engine::sprite_name(&repo);
     let ready = tokio::task::spawn_blocking({
         let sprite = sprite.clone();
-        move || crate::checks::ensure_auth().and_then(|()| crate::checks::ensure_sprite(&sprite))
+        move || {
+            git_effect::engine::ensure_auth()
+                .and_then(|()| git_effect::engine::ensure_sprite(&sprite))
+        }
     })
     .await;
     if !matches!(ready, Ok(Ok(()))) {

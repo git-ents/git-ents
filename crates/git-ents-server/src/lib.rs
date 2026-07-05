@@ -4,7 +4,6 @@
 //! subcommand, alongside the standalone `git-ents-server` binary.
 
 mod asciidoc;
-mod checks;
 mod http;
 mod markdown;
 /// MIME-keyed document rendering (HTML and plain-text), shared by the web
@@ -92,7 +91,7 @@ pub(crate) struct AppState {
     /// bundled `pre-receive` verifier.
     pub(crate) hooks_dir: Option<PathBuf>,
     /// Directory the `post-receive` hook queues pushes into and the check
-    /// worker drains; passed down to the hook via [`checks::QUEUE_ENV`].
+    /// worker drains; passed down to the hook via [`git_effect::engine::QUEUE_ENV`].
     pub(crate) checks_queue: PathBuf,
     /// In-memory web sessions: a browser's signed-in public key, held for the
     /// life of the process and never persisted.
@@ -104,7 +103,7 @@ pub(crate) struct AppState {
     pub(crate) web_signing_key: Option<PathBuf>,
     /// Live output for checks the worker currently has running, polled by the
     /// Checks tab's live view.
-    pub(crate) live_runs: checks::LiveRegistry,
+    pub(crate) live_runs: git_effect::engine::LiveRegistry,
 }
 
 /// The non-empty value of the environment variable `key`, or `None`.
@@ -130,8 +129,8 @@ pub fn run(args: Args) -> ExitCode {
     if let Some(Command::PostReceive) = args.command {
         // A post-receive failure cannot undo the push; report and exit clean so
         // a runner hiccup never looks like a rejected push.
-        if let Err(reason) = checks::post_receive() {
-            eprintln!("checks: {reason}");
+        if let Err(reason) = git_effect::engine::post_receive() {
+            eprintln!("effects: {reason}");
         }
         return ExitCode::SUCCESS;
     }
@@ -177,11 +176,11 @@ async fn serve(args: Args) -> ExitCode {
         sessions: web::new_sessions(),
         challenges: web::new_challenges(),
         web_signing_key,
-        live_runs: checks::new_live_registry(),
+        live_runs: git_effect::engine::new_live_registry(),
     };
 
-    // Drain queued pushes and run their checks for the life of the server.
-    tokio::spawn(checks::worker(
+    // Drain queued pushes and run their effects for the life of the server.
+    tokio::spawn(git_effect::engine::worker(
         state.checks_queue.clone(),
         state.live_runs.clone(),
     ));

@@ -2,8 +2,9 @@
 //!
 //! It carries `git ents members` for managing the repository members recorded
 //! one-ref-per-person at `refs/meta/member/<username>`, `git ents account` for
-//! the account identity at `refs/meta/account`, `git ents checks` for the check
-//! set, `git ents toolchain` for the toolchains stored as git trees at
+//! the account identity at `refs/meta/account`, `git ents checks` for the
+//! effect set at one-ref-per-effect `refs/meta/effects/<name>`, `git ents
+//! toolchain` for the toolchains stored as git trees at
 //! `refs/meta/toolchains/<name>` (`git-toolchain`), `git ents comment` for the
 //! code comments at `refs/meta/comments/<id>`, and the client setup that
 //! produces the signed pushes the server requires. The member commands read
@@ -24,11 +25,10 @@ use facet_pretty::FacetPretty;
 use figue::{self as args, FigueBuiltins};
 use git_anchor::{LineRange, Projection};
 use git_comment::{COMMENTS_NS, Comment};
+use git_effect::Effect;
 use git_ents_core::account::{self, Account};
-use git_ents_core::checks::{self, CHECKS_REF, Check};
 use git_member::members::{self, MEMBER_NS, Member, Trust, member_ref};
 use git_member::revocations::{self, REVOKED_REF, Revocation};
-use git_store::component::{self, Component, MapDocument};
 use git_toolchain::TOOLCHAINS_NS;
 
 /// Helpful guardians of your git trees.
@@ -59,7 +59,7 @@ enum Top {
         #[facet(args::subcommand)]
         action: AccountAction,
     },
-    /// Manage the configured checks at `refs/meta/checks`.
+    /// Manage the configured checks at `refs/meta/effects/<name>`.
     Checks {
         #[facet(args::subcommand)]
         action: ChecksAction,
@@ -235,7 +235,7 @@ enum ChecksAction {
     /// `git ents login <remote>` first.
     Debug,
     /// Show recorded check runs (queued/running/pass/fail/error) from
-    /// `refs/meta/runs/*` on a remote, newest first.
+    /// `refs/meta/results/*` on a remote, newest first.
     Runs,
 }
 
@@ -476,7 +476,7 @@ fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
 /// @relation(cli.account-checks)
 fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
     match action {
-        ChecksAction::List => list::<Check>(remote),
+        ChecksAction::List => effect_list(remote),
         ChecksAction::Add {
             name,
             command,
@@ -484,7 +484,7 @@ fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
             depends,
             toolchains,
         } => add_check(name, command, image, depends, toolchains, remote),
-        ChecksAction::Remove { name } => remove::<Check>(&name, remote),
+        ChecksAction::Remove { name } => effect_remove(&name, remote),
         ChecksAction::Debug => checks_debug(remote),
         ChecksAction::Runs => checks_runs(remote),
     }
@@ -494,8 +494,8 @@ fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
 /// newest commit first, as `<commit>  <when>  <check>=<status> …`.
 fn checks_runs(remote: &str) -> Result<(), String> {
     let repo = repo()?;
-    sync_namespace(remote, checks::RUNS_NS)?;
-    let commits = checks::runs(&repo).map_err(|error| error.to_string())?;
+    sync_namespace(remote, git_effect::RESULTS_NS)?;
+    let commits = git_effect::runs(&repo).map_err(|error| error.to_string())?;
     if commits.is_empty() {
         println!("no check runs on {remote}");
         return Ok(());
@@ -952,54 +952,6 @@ fn short_id(id: &str) -> &str {
     id.get(..12).unwrap_or(id)
 }
 
-/// A `refs/meta/*` set the porcelain manages uniformly: a named ref synced from
-/// and pushed to a remote, holding entries the CLI lists and removes from. The
-/// check set runs through this; the member set is decomposed across
-/// `refs/meta/member/*` and handled on its own, and the revocation set's CLI
-/// needs more than these four methods (fingerprint validation, a
-/// lock-yourself-out confirmation) so it stays bespoke too. `REF`, `NOUN`,
-/// and the default [`load`](Set::load)/[`store`](Set::store) come from the
-/// item's own [`MapDocument`]/[`Component`] impls, so a `Set` impl needs only
-/// say how an entry lists and what its key is.
-trait Set: MapDocument + Component {
-    /// The line printed when the set is empty on `remote`.
-    fn empty_listing(remote: &str) -> String;
-    /// An item's key — its identity for removal and the left list column.
-    fn key(item: &Self) -> String;
-    /// The right list column for an item.
-    fn value(item: &Self) -> String;
-
-    /// The set's items.
-    fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        component::load_map(&git_store::Store::open(repo).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())
-    }
-
-    /// Replace the set with `items`.
-    fn store(repo: &Path, items: &[Self]) -> Result<(), String> {
-        component::store_map(
-            &git_store::Store::open(repo).map_err(|error| error.to_string())?,
-            items,
-            &format!("Update {}", Self::PLURAL),
-        )
-        .map_err(|error| error.to_string())
-    }
-}
-
-impl Set for Check {
-    fn empty_listing(remote: &str) -> String {
-        format!("no checks configured on {remote}")
-    }
-
-    fn key(item: &Check) -> String {
-        item.name.clone()
-    }
-
-    fn value(item: &Check) -> String {
-        item.pretty().to_string()
-    }
-}
-
 /// The trailing ` (after …, before …)` annotation for a member's validity
 /// window, or `""` when unbounded — so an expiry that has been set is visible at
 /// a glance rather than hidden in the stored `allowed_signers` options.
@@ -1019,46 +971,39 @@ fn window_suffix(member: &Member) -> String {
 }
 
 // @relation(cli.account-checks, cli.remote-admin)
-/// Print each entry of the set `S` on `remote` as `<key>  <value>`.
-fn list<S: Set>(remote: &str) -> Result<(), String> {
+/// Print every effect on `remote` as `<name>  <command>`.
+fn effect_list(remote: &str) -> Result<(), String> {
     let repo = repo()?;
-    sync(remote, S::REF)?;
-    let items = S::load(&repo)?;
-    if items.is_empty() {
-        println!("{}", S::empty_listing(remote));
+    sync_namespace(remote, git_effect::EFFECTS_NS)?;
+    let mut effects = git_effect::load_all(&repo).map_err(|error| error.to_string())?;
+    if effects.is_empty() {
+        println!("no checks configured on {remote}");
         return Ok(());
     }
-    for item in items {
-        println!("{}  {}", S::key(&item), S::value(&item));
+    effects.sort_by(|a, b| a.name.cmp(&b.name));
+    for effect in effects {
+        println!("{}  {}", effect.name, effect.pretty());
     }
     Ok(())
 }
 
 // @relation(cli.account-checks)
-/// Drop the entry keyed `key` from the set `S` on `remote` and push the update.
-fn remove<S: Set>(key: &str, remote: &str) -> Result<(), String> {
-    let repo = repo()?;
-    let expected = sync(remote, S::REF)?;
-    let before = S::load(&repo)?;
-    let count = before.len();
-    let after: Vec<S> = before
-        .into_iter()
-        .filter(|item| S::key(item) != key)
-        .collect();
-    if after.len() == count {
-        return Err(format!("no {} named {key} on {remote}", S::NOUN));
-    }
-    S::store(&repo, &after)?;
-    push_signed(remote, S::REF, expected.as_deref())?;
-    println!("removed {key}");
+/// Drop the effect named `name` on `remote` and push the update.
+fn effect_remove(name: &str, remote: &str) -> Result<(), String> {
+    let refname = git_effect::effect_ref(name);
+    let expected =
+        sync(remote, &refname)?.ok_or_else(|| format!("no check named {name} on {remote}"))?;
+    push_delete(remote, &refname, &expected)?;
+    println!("removed {name}");
     Ok(())
 }
 
-/// Add `name` running `command` to `remote`'s set, replacing any check already
-/// recorded under that name, and push the update. Prompts for any field left
-/// unset when run at an interactive terminal. The whole set is validated as a
-/// dependency graph (`checks::order`) before it is stored, so a cycle or a
-/// dangling dependency never lands on the remote.
+/// Add `name` running `command` to `remote`'s effect set, replacing any effect
+/// already recorded under that name, and push the update. Prompts for any
+/// field left unset when run at an interactive terminal. The whole set
+/// (fetched alongside `name`'s own ref) is validated as a dependency graph
+/// (`git_effect::order`) before it is stored, so a cycle or a dangling
+/// dependency never lands on the remote.
 ///
 /// ## Requirements
 ///
@@ -1090,19 +1035,22 @@ fn add_check(
         toolchains
     };
     let repo = repo()?;
-    let expected = sync(remote, CHECKS_REF)?;
-    let mut checks = checks::load(&repo).map_err(|error| error.to_string())?;
-    checks.retain(|check| check.name != name);
-    checks.push(Check {
+    let refname = git_effect::effect_ref(&name);
+    let expected = sync(remote, &refname)?;
+    sync_namespace(remote, git_effect::EFFECTS_NS)?;
+    let mut effects = git_effect::load_all(&repo).map_err(|error| error.to_string())?;
+    effects.retain(|effect| effect.name != name);
+    let effect = Effect {
         name: name.clone(),
         command,
         image,
         depends,
         toolchains,
-    });
-    let _ordered = checks::order(&checks)?;
-    checks::store(&repo, &checks).map_err(|error| error.to_string())?;
-    push_signed(remote, CHECKS_REF, expected.as_deref())?;
+    };
+    effects.push(effect.clone());
+    let _ordered = git_effect::order(&effects)?;
+    git_effect::store(&repo, &effect).map_err(|error| error.to_string())?;
+    push_signed(remote, &refname, expected.as_deref())?;
     println!("recorded check {name}");
     Ok(())
 }

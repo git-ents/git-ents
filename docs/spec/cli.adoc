@@ -66,7 +66,7 @@ confirmation, since it can lock the operator out of the remote.
 (<<account.ref>>) and print the account's genesis identity
 (<<account.genesis>>).
 `git ents checks` MUST provide `list`, `add`, and `remove` over the
-`refs/meta/checks` set (<<checks.definition>>).
+`refs/meta/effects/<name>` set (<<checks.definition>>).
 --
 
 [role="requirement", id="cli.toolchains"]

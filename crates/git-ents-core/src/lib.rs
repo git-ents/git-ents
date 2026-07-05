@@ -2,7 +2,6 @@
 //! `git_store`, common to the CLI porcelain and the server.
 
 pub mod account;
-pub mod checks;
 pub mod config;
 pub mod issues;
 #[cfg(test)]

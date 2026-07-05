@@ -13,7 +13,7 @@ use std::path::Path;
 use facet::{Def, Facet, Peek, Type, UserType};
 use maud::{Markup, PreEscaped, html};
 
-use git_ents_core::checks::{Check, Run, RunOutcome, Status};
+use git_effect::{Effect, Run, RunOutcome, Status};
 use git_ents_core::config::{Config, RoleRules};
 use git_ents_core::issues::Issue;
 use git_member::members::Member;
@@ -31,11 +31,11 @@ pub(super) trait Render: for<'a> Facet<'a> {
     }
 }
 
-/// A check's name is the key and its command the value — `(composite)` for a
-/// check with none — with its image, dependencies, and toolchains appended
-/// as ` · `-joined annotations rather than the raw `Option`/`Vec` the
-/// structural walk would print.
-impl Render for Check {
+/// An effect's name is the key and its command the value — `(composite)` for
+/// an effect with none — with its image, dependencies, and toolchains
+/// appended as ` · `-joined annotations rather than the raw `Option`/`Vec`
+/// the structural walk would print.
+impl Render for Effect {
     fn render(&self) -> Markup {
         let mut value = self
             .command
@@ -54,17 +54,17 @@ impl Render for Check {
     }
 }
 
-impl Loadable for Check {
+impl Loadable for Effect {
     fn load(repo: &Path) -> Result<Vec<Self>, String> {
-        git_ents_core::checks::load(repo).map_err(|err| err.to_string())
+        git_effect::load_all(repo).map_err(|err| err.to_string())
     }
 }
 
-impl WebComponent for Check {
+impl WebComponent for Effect {
     const TITLE: &'static str = "Checks";
 
     fn empty() -> Markup {
-        html! { div.card-row.muted { "No checks configured on " code { "refs/meta/checks" } "." } }
+        html! { div.card-row.muted { "No effects configured on " code { "refs/meta/effects" } "." } }
     }
 }
 

@@ -1,18 +1,18 @@
-//! Asynchronous check running: a `post-receive` hook that *queues* a push and a
-//! server-owned worker that runs the configured checks against it in a Fly.io
-//! [Sprite].
+//! Asynchronous effect running: a `post-receive` hook that *queues* a push and
+//! a server-owned worker that runs the configured effects against it in a
+//! Fly.io [Sprite].
 //!
-//! Checks run *after* the refs are in and off the push connection. The hook
+//! Effects run *after* the refs are in and off the push connection. The hook
 //! ([`post_receive`]) does almost nothing: it reads the pushed ref updates git
 //! feeds it on stdin and drops a job file into the shared queue directory, so
-//! the push returns immediately. The long-running server drains that queue from
-//! a dedicated worker ([`worker`]); for each job it loads the check set from
-//! `refs/meta/checks` and runs every check in a Sprite — a persistent,
-//! hardware-isolated sandbox. One Sprite is kept per repository so its
-//! filesystem (and any build cache a check leaves behind) survives between
-//! pushes; the pushed tree is synced into it before the checks run. Results are
-//! recorded as run refs (and surfaced on the Checks tab), and logged to the
-//! server's own output rather than relayed to the pusher.
+//! the push returns immediately. The long-running server drains that queue
+//! from a dedicated worker ([`worker`]); for each job it loads the effect set
+//! from [`crate::definition::EFFECTS_NS`] and runs every effect in a Sprite —
+//! a persistent, hardware-isolated sandbox. One Sprite is kept per repository
+//! so its filesystem (and any build cache an effect leaves behind) survives
+//! between pushes; the pushed tree is synced into it before the effects run.
+//! Results are recorded as run refs (and surfaced on the Checks tab), and
+//! logged to the server's own output rather than relayed to the pusher.
 //!
 //! The Sprite is driven through the `sprite` CLI. The CLI authenticates from a
 //! config file rather than the environment, so the worker first hands it the
@@ -30,10 +30,12 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use git_ents_core::checks::{self, Check, RunOutcome, Status};
 use gix_hash::ObjectId;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
+
+use crate::definition::{self, Effect};
+use crate::results::{self, RunOutcome, Status};
 
 /// Where the pushed tree is unpacked inside the Sprite.
 const WORKDIR: &str = "/work";
@@ -43,42 +45,44 @@ const WORKDIR: &str = "/work";
 /// cleared: the Sprite's persistent filesystem is the extract-once cache.
 const TOOLCHAINS_DIR: &str = "/toolchains";
 
-/// A currently-running check's growing asciicast v2 recording, keyed by the
-/// repository, the commit being checked, and the check's name.
-pub(crate) type LiveKey = (PathBuf, ObjectId, String);
+/// A currently-running effect's growing asciicast v2 recording, keyed by the
+/// repository, the commit being checked, and the effect's name.
+pub type LiveKey = (PathBuf, ObjectId, String);
 
-/// Live buffers for every check currently running, shared between the worker
-/// thread appending to a check's output as it arrives and the web layer
-/// polling it for a live view. A buffer exists only while its check is
+/// Live buffers for every effect currently running, shared between the
+/// worker thread appending to an effect's output as it arrives and the web
+/// layer polling it for a live view. A buffer exists only while its effect is
 /// running — [`live_start`] adds it, [`live_finish`] removes it once the
 /// result is recorded — so a lookup miss unambiguously means "not running"
 /// rather than "running with no output yet". Asciicast is the definitive log
 /// format end to end: the same string a live poll reads is, unmodified,
-/// what [`run_one`] hands back as the check's recorded `recording`.
-pub(crate) type LiveRegistry = Arc<StdMutex<HashMap<LiveKey, Arc<StdMutex<String>>>>>;
+/// what [`run_one`] hands back as the effect's recorded `recording`.
+pub type LiveRegistry = Arc<StdMutex<HashMap<LiveKey, Arc<StdMutex<String>>>>>;
 
-/// A fresh, empty [`LiveRegistry`] — one per server process, held on
-/// [`crate::AppState`].
-pub(crate) fn new_live_registry() -> LiveRegistry {
+/// A fresh, empty [`LiveRegistry`] — one per server process, held on the
+/// server's shared state.
+#[must_use]
+pub fn new_live_registry() -> LiveRegistry {
     Arc::new(StdMutex::new(HashMap::new()))
 }
 
-/// The text accumulated so far for a running check's live buffer, or `None`
-/// when no check is running under `key` (finished, or never started).
-pub(crate) fn live_snapshot(registry: &LiveRegistry, key: &LiveKey) -> Option<String> {
+/// The text accumulated so far for a running effect's live buffer, or `None`
+/// when no effect is running under `key` (finished, or never started).
+#[must_use]
+pub fn live_snapshot(registry: &LiveRegistry, key: &LiveKey) -> Option<String> {
     let buffer = lock(registry).get(key).cloned()?;
     Some(lock(&buffer).clone())
 }
 
 /// Register a fresh live buffer for `key`, returning the handle [`run_one`]
-/// appends to as the check's output arrives.
+/// appends to as the effect's output arrives.
 fn live_start(registry: &LiveRegistry, key: LiveKey) -> Arc<StdMutex<String>> {
     let buffer = Arc::new(StdMutex::new(String::new()));
     lock(registry).insert(key, Arc::clone(&buffer));
     buffer
 }
 
-/// Remove `key`'s live buffer once its check has settled — recorded results
+/// Remove `key`'s live buffer once its effect has settled — recorded results
 /// are read from the run ref from then on, not the live registry.
 fn live_finish(registry: &LiveRegistry, key: &LiveKey) {
     lock(registry).remove(key);
@@ -99,13 +103,14 @@ pub const QUEUE_ENV: &str = "GIT_ENTS_CHECKS_QUEUE";
 /// How often the worker scans the queue directory for new jobs.
 const POLL: Duration = Duration::from_secs(2);
 
-/// Queue the push git is reporting for asynchronous checking, returning `Ok(())`
-/// once the jobs are enqueued. The ref updates are read from the stdin git
-/// populates for a `post-receive` hook (`<old> <new> <ref>` lines).
+/// Queue the push git is reporting for asynchronous effect running, returning
+/// `Ok(())` once the jobs are enqueued. The ref updates are read from the
+/// stdin git populates for a `post-receive` hook (`<old> <new> <ref>` lines).
 ///
-/// The hook does no check work itself: it writes one job file per updated branch
-/// into the shared queue directory ([`QUEUE_ENV`]) and returns, so the push is
-/// never blocked on a Sprite. The server's [`worker`] picks the jobs up.
+/// The hook does no effect work itself: it writes one job file per updated
+/// branch into the shared queue directory ([`QUEUE_ENV`]) and returns, so the
+/// push is never blocked on a Sprite. The server's [`worker`] picks the jobs
+/// up.
 ///
 /// ## Requirements
 ///
@@ -122,14 +127,15 @@ pub fn post_receive() -> Result<(), String> {
         return Ok(());
     }
 
-    // An empty check set leaves nothing to queue.
-    let runnable = checks::load(&repo).map_err(|e| format!("could not read checks: {e}"))?;
+    // An empty effect set leaves nothing to queue.
+    let runnable =
+        definition::load_all(&repo).map_err(|e| format!("could not read effects: {e}"))?;
     if runnable.is_empty() {
         return Ok(());
     }
 
     let Some(queue) = std::env::var_os(QUEUE_ENV).map(PathBuf::from) else {
-        eprintln!("checks: {QUEUE_ENV} is not set; skipping asynchronous checks");
+        eprintln!("effects: {QUEUE_ENV} is not set; skipping asynchronous effects");
         return Ok(());
     };
 
@@ -139,14 +145,14 @@ pub fn post_receive() -> Result<(), String> {
         // tab the moment the push lands, before the worker picks it up; a
         // recording hiccup is reported but never fails the hook.
         let queued = statuses(&runnable, Status::Queued);
-        if let Err(e) = checks::record(&repo, update.new, &queued) {
+        if let Err(e) = results::record(&repo, update.new, &queued) {
             eprintln!(
-                "checks: could not record queued run for {}: {e}",
+                "effects: could not record queued run for {}: {e}",
                 update.new
             );
         }
         println!(
-            "checks: queued {} check(s) on {}",
+            "effects: queued {} effect(s) on {}",
             runnable.len(),
             update.ref_name
         );
@@ -154,13 +160,13 @@ pub fn post_receive() -> Result<(), String> {
     Ok(())
 }
 
-/// Every check's [`RunOutcome`] set to one shared `status` — the queued/running
-/// snapshot a run starts from before per-check results land.
-fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
-    checks
+/// Every effect's [`RunOutcome`] set to one shared `status` — the queued/running
+/// snapshot a run starts from before per-effect results land.
+fn statuses(effects: &[Effect], status: Status) -> Vec<RunOutcome> {
+    effects
         .iter()
-        .map(|check| RunOutcome {
-            name: check.name.clone(),
+        .map(|effect| RunOutcome {
+            name: effect.name.clone(),
             status,
             duration_secs: None,
             recording: None,
@@ -170,14 +176,14 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
 }
 
 /// Run the worker that drains the queue directory, running and recording the
-/// checks for each queued push. Runs for the life of the server; the blocking
+/// effects for each queued push. Runs for the life of the server; the blocking
 /// Sprite work is offloaded so it never stalls the async runtime.
 ///
 /// Jobs are processed per repository: each tick, every repository with pending
 /// jobs that is not already being worked gets its own blocking task that drains
-/// its jobs in order. Because a check can run up to [`CHECK_TIMEOUT`], serving
+/// its jobs in order. Because an effect can run up to [`CHECK_TIMEOUT`], serving
 /// all repositories from one queue scan would let a single slow repository stall
-/// every other repository's checks; isolating them by repository keeps a slow
+/// every other repository's effects; isolating them by repository keeps a slow
 /// repository's backlog from blocking the rest. Jobs for *one* repository stay
 /// serialized so concurrent runs never collide in its single Sprite.
 ///
@@ -186,7 +192,7 @@ fn statuses(checks: &[Check], status: Status) -> Vec<RunOutcome> {
 /// @relation(checks.worker, nonfunctional.concurrency)
 pub async fn worker(queue: PathBuf, live: LiveRegistry) {
     if let Err(e) = std::fs::create_dir_all(&queue) {
-        eprintln!("checks: could not create queue directory {queue:?}: {e}");
+        eprintln!("effects: could not create queue directory {queue:?}: {e}");
         return;
     }
     let inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -242,28 +248,29 @@ fn pending_jobs(queue: &Path) -> HashMap<PathBuf, Vec<(PathBuf, Job)>> {
 fn drain_repo(jobs: &[(PathBuf, Job)], live: &LiveRegistry) {
     for (path, job) in jobs {
         if let Err(e) = process_job(job, live) {
-            eprintln!("checks: {e}");
+            eprintln!("effects: {e}");
         }
         let _removed = std::fs::remove_file(path);
     }
 }
 
-/// Run the checks for one queued push in its repository's Sprite, advancing the
-/// recorded run as it goes: `running` while the Sprite is prepared, then each
-/// check flipped to its result as it finishes. Checks settle in the dependency
-/// order `checks::order` fixed at write time: a check whose dependency did not
-/// pass is recorded `skipped` without touching the Sprite, and a composite (no
-/// command) derives its status from its dependencies alone. An infra failure
-/// (an unreachable Sprite, a tree that will not sync, a check set that fails
-/// re-validation) finalizes the run as `error` rather than leaving it stuck at
-/// `running`, then returns `Err`. Returns `Ok` even when a check fails — a
-/// failing check is a recorded result, not an error.
+/// Run the effects for one queued push in its repository's Sprite, advancing
+/// the recorded run as it goes: `running` while the Sprite is prepared, then
+/// each effect flipped to its result as it finishes. Effects settle in the
+/// dependency order `definition::order` fixed at write time: an effect whose
+/// dependency did not pass is recorded `skipped` without touching the Sprite,
+/// and a composite (no command) derives its status from its dependencies
+/// alone. An infra failure (an unreachable Sprite, a tree that will not sync,
+/// an effect set that fails re-validation) finalizes the run as `error` rather
+/// than leaving it stuck at `running`, then returns `Err`. Returns `Ok` even
+/// when an effect fails — a failing effect is a recorded result, not an error.
 ///
 /// ## Requirements
 ///
 /// @relation(checks.worker)
 fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
-    let runnable = checks::load(&job.repo).map_err(|e| format!("could not read checks: {e}"))?;
+    let runnable =
+        definition::load_all(&job.repo).map_err(|e| format!("could not read effects: {e}"))?;
     if runnable.is_empty() {
         return Ok(());
     }
@@ -272,14 +279,14 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     // Re-validate defensively: the CLI rejects an invalid graph before it is
     // pushed, but a hand-crafted push could still land one. Indices into
     // `runnable`/`outcomes` rather than borrows, so outcomes stay mutable.
-    let ordered: Vec<usize> = match checks::order(&runnable) {
+    let ordered: Vec<usize> = match definition::order(&runnable) {
         Ok(ordered) => ordered
             .iter()
-            .filter_map(|check| runnable.iter().position(|c| c.name == check.name))
+            .filter_map(|effect| runnable.iter().position(|c| c.name == effect.name))
             .collect(),
         Err(e) => {
             finalize_error(&job.repo, job.new, &mut outcomes);
-            return Err(format!("invalid check set: {e}"));
+            return Err(format!("invalid effect set: {e}"));
         }
     };
     let sprite = sprite_name(&job.repo);
@@ -289,7 +296,7 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     }
 
     eprintln!(
-        "checks: running {} check(s) on {}",
+        "effects: running {} effect(s) on {}",
         runnable.len(),
         job.ref_name
     );
@@ -308,11 +315,11 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     };
 
     for index in ordered {
-        let Some(check) = runnable.get(index) else {
+        let Some(effect) = runnable.get(index) else {
             continue;
         };
         // Topological order guarantees every dependency settled already.
-        let deps: Vec<Status> = check
+        let deps: Vec<Status> = effect
             .depends
             .iter()
             .filter_map(|dep| {
@@ -323,12 +330,12 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
             })
             .collect();
         let all_pass = deps.iter().all(|status| *status == Status::Pass);
-        match &check.command {
+        match &effect.command {
             Some(command) if all_pass => {
-                let command = activate(command, &check.toolchains, &toolchain_dirs);
-                let key: LiveKey = (job.repo.clone(), job.new, check.name.clone());
+                let command = activate(command, &effect.toolchains, &toolchain_dirs);
+                let key: LiveKey = (job.repo.clone(), job.new, effect.name.clone());
                 let buffer = live_start(live, key.clone());
-                let result = run_one(&sprite, &check.name, &command, &buffer);
+                let result = run_one(&sprite, &effect.name, &command, &buffer);
                 live_finish(live, &key);
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = result.status;
@@ -338,7 +345,7 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
                 }
             }
             Some(_) => {
-                eprintln!("checks: SKIP {} (a dependency did not pass)", check.name);
+                eprintln!("effects: SKIP {} (a dependency did not pass)", effect.name);
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = Status::Skipped;
                 }
@@ -346,9 +353,9 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
             None => {
                 let status = derive_composite(&deps);
                 eprintln!(
-                    "checks: {} {} (composite)",
+                    "effects: {} {} (composite)",
                     status.to_string().to_uppercase(),
-                    check.name
+                    effect.name
                 );
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = status;
@@ -360,7 +367,7 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     Ok(())
 }
 
-/// A composite check's status, derived from its dependencies' settled
+/// A composite effect's status, derived from its dependencies' settled
 /// statuses: `pass` when everything passed, `fail` when anything failed or
 /// errored, `skipped` when nothing failed but something was skipped.
 ///
@@ -383,13 +390,13 @@ fn derive_composite(deps: &[Status]) -> Status {
 /// Advance the recorded run for `new` to `outcomes`; a recording hiccup is
 /// logged but never derails the worker.
 fn advance(repo: &Path, new: ObjectId, outcomes: &[RunOutcome]) {
-    if let Err(e) = checks::update_run(repo, new, outcomes) {
-        eprintln!("checks: could not record run for {new}: {e}");
+    if let Err(e) = results::update_run(repo, new, outcomes) {
+        eprintln!("effects: could not record run for {new}: {e}");
     }
 }
 
-/// Mark every check in `outcomes` `error` and record it — the terminal state for
-/// a run the worker could not carry out.
+/// Mark every effect in `outcomes` `error` and record it — the terminal state
+/// for a run the worker could not carry out.
 ///
 /// ## Requirements
 ///
@@ -457,8 +464,8 @@ struct Update<'a> {
 
 /// Parse git's `<old-oid> <new-oid> <ref>` stdin into the updates worth
 /// checking: branch updates with a real new tip. Deletions (a zero new oid) and
-/// the `refs/meta/*` control refs (auth, the check set itself) are skipped — the
-/// checks gate ordinary content, not the trust plumbing.
+/// the `refs/meta/*` control refs (auth, the effect set itself) are skipped —
+/// the effects gate ordinary content, not the trust plumbing.
 fn parse_updates(input: &str) -> Vec<Update<'_>> {
     input
         .lines()
@@ -480,13 +487,14 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
 /// A Sprite name derived from the repository directory, kept to the
 /// `[a-z0-9-]` a Sprite name allows so the same repo reuses the same sandbox.
 ///
-/// Shared with [`crate::web`]'s debug-session broker, which targets the same
-/// persistent per-repo Sprite a check run used.
+/// Shared with the web layer's debug-session broker, which targets the same
+/// persistent per-repo Sprite an effect run used.
 ///
 /// ## Requirements
 ///
 /// @relation(checks.sandbox)
-pub(crate) fn sprite_name(repo: &Path) -> String {
+#[must_use]
+pub fn sprite_name(repo: &Path) -> String {
     let stem = repo
         .file_name()
         .map(|name| name.to_string_lossy())
@@ -517,7 +525,7 @@ pub(crate) fn sprite_name(repo: &Path) -> String {
 /// ## Requirements
 ///
 /// @relation(checks.sandbox, compat.sprite)
-pub(crate) fn ensure_auth() -> Result<(), String> {
+pub fn ensure_auth() -> Result<(), String> {
     let token = std::env::var("SPRITES_TOKEN")
         .ok()
         .ok_or("SPRITES_TOKEN is not set in the hook environment")?;
@@ -543,7 +551,7 @@ pub(crate) fn ensure_auth() -> Result<(), String> {
 /// ## Requirements
 ///
 /// @relation(checks.sandbox, compat.sprite)
-pub(crate) fn ensure_sprite(sprite: &str) -> Result<(), String> {
+pub fn ensure_sprite(sprite: &str) -> Result<(), String> {
     let _existing = Command::new("sprite")
         .args(["create", "--skip-console", sprite])
         .output()
@@ -595,8 +603,8 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
 /// Resolve and extract every distinct toolchain named across `runnable`,
 /// returning each name's extracted `bin` directory inside the Sprite. A
 /// failed resolution (the named ref does not exist) is the one place
-/// `checks::order` could not have caught it, since `refs/meta/toolchains/*`
-/// is a different namespace than the check set itself.
+/// `definition::order` could not have caught it, since `refs/meta/toolchains/*`
+/// is a different namespace than the effect set itself.
 ///
 /// ## Requirements
 ///
@@ -604,11 +612,11 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
 fn resolve_toolchains(
     repo: &Path,
     sprite: &str,
-    runnable: &[Check],
+    runnable: &[Effect],
 ) -> Result<HashMap<String, String>, String> {
     let mut names: Vec<&str> = runnable
         .iter()
-        .flat_map(|check| check.toolchains.iter().map(String::as_str))
+        .flat_map(|effect| effect.toolchains.iter().map(String::as_str))
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -652,7 +660,7 @@ fn components_key(components: &[git_toolchain::Component]) -> String {
 
 /// Prefix `command` with a `PATH` export activating `toolchains`' extracted
 /// `bin` directories, declared order first (so the first-listed toolchain's
-/// `bin` wins on a name collision); a check with no toolchains is returned
+/// `bin` wins on a name collision); an effect with no toolchains is returned
 /// unchanged.
 ///
 /// ## Requirements
@@ -789,10 +797,10 @@ fn sync_downloaded_toolchain(
     }
 }
 
-/// How long a single check may run before the worker abandons it. A runaway
-/// check that outlived this — a hung build, a command blocked on input — is
+/// How long a single effect may run before the worker abandons it. A runaway
+/// effect that outlived this — a hung build, a command blocked on input — is
 /// killed and recorded `error` rather than wedging the worker (and with it every
-/// other repository's checks) on the one blocking-pool thread the queue drains
+/// other repository's effects) on the one blocking-pool thread the queue drains
 /// on.
 ///
 /// ## Requirements
@@ -800,7 +808,7 @@ fn sync_downloaded_toolchain(
 /// @relation(checks.outcomes)
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// The fixed size a check's recorded terminal session runs at. Nothing
+/// The fixed size an effect's recorded terminal session runs at. Nothing
 /// interactive ever attaches to it, so this only shapes the recording, not
 /// anyone's actual terminal.
 const CHECK_PTY_SIZE: PtySize = PtySize {
@@ -810,7 +818,7 @@ const CHECK_PTY_SIZE: PtySize = PtySize {
     pixel_height: 0,
 };
 
-/// A finished check run: its outcome, wall-clock duration, process exit code
+/// A finished effect run: its outcome, wall-clock duration, process exit code
 /// (when the command ran to completion), and the full terminal session as an
 /// asciicast v2 recording.
 struct RunResult {
@@ -820,15 +828,15 @@ struct RunResult {
     exit_code: Option<i32>,
 }
 
-/// Run one check in the Sprite's [`WORKDIR`], recording its terminal session —
+/// Run one effect in the Sprite's [`WORKDIR`], recording its terminal session —
 /// a real pty (`sprite exec --tty`), not a pipe, so the recording plays back
-/// exactly what a developer running the check by hand would see — and logging
+/// exactly what a developer running the effect by hand would see — and logging
 /// a `PASS`/`FAIL` line. `live` is appended to as output arrives, in the same
 /// asciicast v2 format as the final recording, so a browser can poll it for a
-/// live view of a check still in progress; it is what [`finish`] hands back
+/// live view of an effect still in progress; it is what [`finish`] hands back
 /// as the recorded `recording`, not a separate representation of the same
-/// output. Returns the check's outcome; a check that exceeds [`CHECK_TIMEOUT`]
-/// or cannot be captured is [`Status::Error`].
+/// output. Returns the effect's outcome; an effect that exceeds
+/// [`CHECK_TIMEOUT`] or cannot be captured is [`Status::Error`].
 ///
 /// ## Requirements
 ///
@@ -840,7 +848,7 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     let pair = match native_pty_system().openpty(CHECK_PTY_SIZE) {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!("checks: ERROR {name} (could not allocate a pty: {e})");
+            eprintln!("effects: ERROR {name} (could not allocate a pty: {e})");
             return finish(Status::Error, start, None, live);
         }
     };
@@ -851,17 +859,17 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("checks: ERROR {name} (could not run: {e})");
+            eprintln!("effects: ERROR {name} (could not run: {e})");
             return finish(Status::Error, start, None, live);
         }
     };
     // The child holds the slave now; drop ours so the master sees EOF when the
-    // check process actually exits rather than when this scope happens to end.
+    // effect process actually exits rather than when this scope happens to end.
     drop(pair.slave);
 
     let master = pair.master;
     let Ok(mut reader) = master.try_clone_reader() else {
-        eprintln!("checks: ERROR {name} (could not read the pty)");
+        eprintln!("effects: ERROR {name} (could not read the pty)");
         let _killed = child.kill();
         return finish(Status::Error, start, None, live);
     };
@@ -903,7 +911,7 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     drop(master);
 
     if timed_out {
-        eprintln!("checks: ERROR {name} (timed out after {CHECK_TIMEOUT:?})");
+        eprintln!("effects: ERROR {name} (timed out after {CHECK_TIMEOUT:?})");
         let _killed = child.kill();
         return finish(Status::Error, start, None, live);
     }
@@ -911,23 +919,23 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     let status = match child.wait() {
         Ok(status) => status,
         Err(e) => {
-            eprintln!("checks: ERROR {name} (could not wait on the sprite CLI: {e})");
+            eprintln!("effects: ERROR {name} (could not wait on the sprite CLI: {e})");
             return finish(Status::Error, start, None, live);
         }
     };
 
     let exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
     if status.success() {
-        eprintln!("checks: PASS {name}");
+        eprintln!("effects: PASS {name}");
         finish(Status::Pass, start, exit_code, live)
     } else {
-        eprintln!("checks: FAIL {name} ({command})");
+        eprintln!("effects: FAIL {name} ({command})");
         finish(Status::Fail, start, exit_code, live)
     }
 }
 
 /// Assemble a [`RunResult`] from `live`'s accumulated recording — used on
-/// every exit path, including the failure ones, so a check that errors out
+/// every exit path, including the failure ones, so an effect that errors out
 /// still keeps whatever terminal output it produced before that happened.
 fn finish(
     status: Status,
@@ -944,7 +952,7 @@ fn finish(
 }
 
 /// The asciicast v2 header line naming the terminal's fixed [`CHECK_PTY_SIZE`]
-/// — the first line of every check recording, live or finished (see
+/// — the first line of every effect recording, live or finished (see
 /// <https://docs.asciinema.org/manual/asciicast/v2/>).
 fn asciicast_header() -> String {
     format!(
@@ -994,12 +1002,12 @@ mod tests {
     #[test]
     fn parse_updates_keeps_content_branches_only() {
         let new = "1111111111111111111111111111111111111111";
+        let zero = "0".repeat(40);
         let input = format!(
             "{zero} {new} refs/heads/main\n\
              {new} {zero} refs/heads/old\n\
-             {new} {new} refs/meta/checks\n\
+             {new} {new} refs/meta/effects/fmt\n\
              {new} {new} refs/heads/feature\n",
-            zero = git_ents_core::ZERO_OID,
         );
         let updates = parse_updates(&input);
         let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
