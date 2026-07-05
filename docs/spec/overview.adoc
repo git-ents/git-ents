@@ -4,10 +4,25 @@ Joey Carpinelli <joseph.carpinelli@icloud.com>
 [abstract]
 `git-ents` is a Git forge: a self-hosted, membership-gated Git server with a
 browser UI, a CLI, asynchronous CI checks, an issue tracker, and anchored
-code comments, all stored as typed documents on git meta-refs.
-Every piece of state — members, configuration, checks, runs, issues, comments
-— lives in the repository itself, versioned and auditable, with no external
-database.
+code comments.
+Every piece of state — members, configuration, checks, runs, issues,
+comments — lives in the repository itself as typed documents on git
+meta-refs, versioned and auditable, with no external database.
+
+The spec is organized around the load-bearing abstractions (rationale in
+`docs/abstractions.adoc`), each a parent section with its dependent entities
+as children:
+
+* `meta-ref.adoc` — the meta-ref and the typed tree; the entities stored on
+  them (members, revocations, account, config, issues, comments).
+* `anchor.adoc` — durable pointers into content, and their projection.
+* `signed-push.adoc` — the only write path, for git and browser alike.
+* `checks.adoc` — checks and the toolchains that feed them.
+* `server.adoc` — the embeddable server: protocol, namespace, compatibility,
+  deployment, nonfunctional bounds.
+* `web.adoc` — the web UI and the rendering registry.
+* `cli.adoc` — the porcelain.
+* `conformance.adoc` — requirement → implementation → test map.
 
 [CAUTION]
 This specification is not yet stable and will grow as the project develops.

@@ -1,15 +1,18 @@
 == Client CLI
 
+The porcelain.
+Its added value over the underlying primitives is remotes: every command is
+a fetch, a typed edit, and a signed push — never a private API.
+
 [role="requirement", id="cli.remote-admin"]
 .Remote Administration Over Git
 --
 The `git-ents` CLI MUST administer a remote's trust and metadata refs as
 ordinary signed git pushes, with no separate admin API or server endpoint.
-A mutating command MUST fetch the relevant `refs/meta/*` ref(s) from the named
-remote (defaulting to `origin`) into the local clone, load the typed document,
-apply the change, store it, and push the updated ref back — signed per the
-client's git config, through the same `pre-receive` gate a content push
-traverses.
+A mutating command MUST fetch the relevant `refs/meta/*` ref(s) from the
+named remote (defaulting to `origin`), load the typed document, apply the
+change, store it, and push the updated ref back — signed per the client's
+git config, through the same `pre-receive` gate a content push traverses.
 A read-only command (`members list`, `members check`, `checks list`,
 `comment list`/`show`) MUST only fetch, never push.
 --
@@ -19,18 +22,19 @@ A read-only command (`members list`, `members check`, `checks list`,
 --
 A mutating command run at an interactive terminal MUST prompt for any
 required field left unset rather than fail.
-The same invocation without a TTY MUST fail with an error naming the missing
-field; it MUST NOT hang waiting for input.
+The same invocation without a TTY MUST fail with an error naming the
+missing field; it MUST NOT hang waiting for input.
 --
 
 [role="requirement", id="cli.compare-and-swap"]
 .Optimistic Concurrency
 --
 Every CLI push MUST be a compare-and-swap pinned to the ref tip observed at
-fetch time, expressed as `--force-with-lease=<ref>:<expected>` together with
-`--force-if-includes`, so a change made on the remote since the fetch is
-rejected rather than clobbered; a create pins the lease to the zero object id.
-This is the client-side counterpart to <<storage.concurrency>>.
+fetch time, expressed as `--force-with-lease=<ref>:<expected>` together
+with `--force-if-includes`, so a change made on the remote since the fetch
+is rejected rather than clobbered; a create pins the lease to the zero
+object id.
+The client-side counterpart to <<storage.concurrency>>.
 --
 
 [role="requirement", id="cli.members"]
@@ -38,19 +42,21 @@ This is the client-side counterpart to <<storage.concurrency>>.
 --
 The CLI MUST provide, under `git ents members`:
 
-* `list` — render the live member set, each key with its fingerprint, validity
-  window, and a flag when it appears on the revocation list.
-* `add` — authorize a leaf key or pin a certificate authority for a username,
-  with optional `valid-after` / `valid-before` window; adding a member MUST
-  create the ref when absent.
+* `list` — render the live member set, each key with its fingerprint,
+  validity window, and a flag when it appears on the revocation list.
+* `add` — authorize a leaf key or pin a certificate authority for a
+  username, with optional `valid-after` / `valid-before` window, creating
+  the ref when absent.
 * `remove` — delete the member's ref.
-* `revoke` / `unrevoke` — add or remove a fingerprint on `refs/meta/revoked`.
+* `revoke` / `unrevoke` — add or remove a fingerprint on
+  `refs/meta/revoked`.
 * `check` — report whether a key is a member of the remote and echo the
-  client's signing config (`gpg.format`, `user.signingkey`, `push.gpgSign`).
-* `setup` — configure signed pushes (see <<auth.client-setup>>).
+  client's signing config (`gpg.format`, `user.signingkey`,
+  `push.gpgSign`).
+* `setup` — configure signed pushes (<<auth.client-setup>>).
 
-Revoking the operator's own last authorizing key MUST prompt for confirmation
-before proceeding, since it can lock the operator out of the remote.
+Revoking the operator's own last authorizing key MUST prompt for
+confirmation, since it can lock the operator out of the remote.
 --
 
 [role="requirement", id="cli.account-checks"]
@@ -70,28 +76,26 @@ The CLI MUST provide, under `git ents toolchain`:
 
 * `import` — write a local `bin` directory (and, optionally, a `src`
   directory) plus a license, version, and platform to
-  `refs/meta/toolchains/<name>` on a remote and push it, creating the ref
-  when absent. `bin` MUST be non-empty; `license` MUST be a valid SPDX
-  license expression; `version` MUST be a valid semver version; `platform`
-  MUST be a valid target triple.
-* `import --from <recipe>` — derive `bin`/`src`/`license`/`version`/
-  `platform` from a local toolchain install instead of supplying them by
-  hand, via a named recipe (currently only `rustup`, selected further by
-  `--spec <name>`, e.g. `stable`); any of the fields also passed explicitly
-  override the recipe's value. By default a recipe capable of pointing at a
-  distributor's own hosted, hash-pinned archives (rust-lang's dist tarballs,
-  for `rustup`) records those as the toolchain's `bin` instead of importing
-  local bytes, sparing the repository the toolchain's own bytes; `--embed`
-  forces the recipe to import the local install's actual `bin` bytes
-  instead, as `import` without `--from` always does.
-* `list` — render every toolchain configured on a remote with its `bin`
-  (a tree id, or a component count when hosted externally), version,
-  platform, and license.
-* `export` — recreate a remote's named toolchain's `bin` (and `src`, if
-  present) under a local destination directory, restoring the executable bit
-  and symlinks — fetching and sha256-verifying `bin`'s components first when
-  hosted externally rather than embedded — and print the version, platform,
-  and license; read-only, per <<cli.remote-admin>>.
+  `refs/meta/toolchains/<name>` on a remote, creating the ref when absent.
+  `bin` MUST be non-empty; `license` MUST be a valid SPDX expression;
+  `version` MUST be valid semver; `platform` MUST be a valid target triple.
+* `import --from <recipe>` — derive the fields from a local toolchain
+  install via a named recipe (currently only `rustup`, selected further by
+  `--spec <name>`, e.g. `stable`); explicitly passed fields override the
+  recipe.
+  A recipe capable of pointing at a distributor's own hosted, hash-pinned
+  archives (rust-lang's dist tarballs, for `rustup`) records those as the
+  toolchain's `bin` by default, sparing the repository the bytes; `--embed`
+  forces importing the local install's actual `bin` bytes, as `import`
+  without `--from` always does.
+* `list` — render every toolchain on a remote with its `bin` (a tree id,
+  or a component count when hosted externally), version, platform, and
+  license.
+* `export` — recreate a remote toolchain's `bin` (and `src`, if present)
+  under a local destination, restoring the executable bit and symlinks —
+  fetching and sha256-verifying externally hosted components first — and
+  print the version, platform, and license; read-only, per
+  <<cli.remote-admin>>.
 * `remove` — delete the toolchain's ref on a remote.
 --
 
@@ -103,10 +107,10 @@ The CLI MUST provide, under `git ents comment`:
 * `add` — anchor a comment to a path, an optional 1-based inclusive line
   range, and a revision (defaulting to `HEAD`), optionally attached to an
   issue by its genesis id, and push it.
-* `list` / `show` — project each comment's anchor onto a chosen revision and
-  report its projection state (<<comments.projection>>); `show` MUST print
-  the anchored text derived from the blob, and both MUST report the author
-  recovered from the ref's commits (<<comments.authorship>>).
+* `list` / `show` — project each comment's anchor onto a chosen revision
+  and report its projection state (<<comments.projection>>); `show` MUST
+  print the anchored text derived from the blob, and both MUST report the
+  author recovered from the ref's commits (<<comments.authorship>>).
 * `remove` — delete the comment's ref.
 
 Comment commands MUST follow the same remote-administration flow as member
@@ -117,10 +121,9 @@ commands (<<cli.remote-admin>>, <<cli.compare-and-swap>>).
 .CLI Sign-In
 --
 `git ents login` MUST complete the same challenge–response sign-in the
-browser uses (<<web.auth.challenge>>) with no manual copy-and-paste: the CLI
-fetches a challenge from the remote, signs it with the client's configured
-signing key, submits the proof, and receives the same session a browser
-sign-in yields.
+browser uses (<<web.auth.challenge>>) with no manual copy-and-paste: fetch
+a challenge from the remote, sign it with the configured signing key,
+submit the proof, and receive the same session a browser sign-in yields.
 The server MUST expose the challenge and verify steps as plain-text
 endpoints suitable for non-browser clients.
 --
@@ -128,11 +131,11 @@ endpoints suitable for non-browser clients.
 [role="requirement", id="cli.key-resolution"]
 .Key Resolution and Fingerprints
 --
-The key a command operates on MUST default to `user.signingkey`, accepting an
-inline `key::` value, a `.pub` file, or a private key whose public half is
-derived with `ssh-keygen -y`; `members setup` MAY generate a new
+The key a command operates on MUST default to `user.signingkey`, accepting
+an inline `key::` value, a `.pub` file, or a private key whose public half
+is derived with `ssh-keygen -y`; `members setup` MAY generate a new
 `~/.ssh/id_ed25519` when none exists.
-A key's fingerprint MUST be the MD5 colon form, whose separators are safe as a
-ref-path/tree-entry segment, unlike the slashes a base64 SHA256 fingerprint
-would introduce.
+A key's fingerprint MUST be the MD5 colon form, whose separators are safe
+as a ref-path/tree-entry segment, unlike the slashes a base64 SHA256
+fingerprint would introduce.
 --

@@ -1,112 +1,115 @@
-== Checks
+== The Check
+
+A check is data (`refs/meta/checks`), not configuration living outside the
+repo; the toolchain that feeds it is a git tree
+(`refs/meta/toolchains/<name>`).
+The repository carries its own CI definition and environment, and nothing
+ever blocks a push.
 
 [role="requirement", id="checks.definition"]
 .Check Set Definition
 --
-The configured checks for a repository MUST be stored at `refs/meta/checks` as
-a map from check name to a check body holding an optional shell command, an
-optional sandbox image, an optional list of dependencies (names of sibling
-checks that must pass first), and an optional list of toolchain names
-(<<checks.toolchains>>).
-A check with no command is a composite: it runs nothing itself and derives its
-outcome from its dependencies alone.
+The configured checks for a repository MUST be stored at `refs/meta/checks`
+as a map from check name to a check body holding an optional shell command,
+an optional sandbox image, an optional list of dependencies (names of
+sibling checks that must pass first), and an optional list of toolchain
+names (<<checks.toolchains>>).
+A check with no command is a composite: it runs nothing itself and derives
+its outcome from its dependencies alone.
 A check's definition living on a meta ref means a branch under check cannot
 rewrite the check set that gates it.
 
 The dependency graph is fully static — no conditional edges, no runtime
-expansion — and MUST be validated when the set is written: a dependency naming
-no configured check, a duplicate or self edge, a check with neither a command
-nor dependencies, any dependency cycle, and a toolchain name that is not a
-valid ref-path segment MUST each be rejected before the set is stored. A check
-that sets an image MUST be rejected until the sandbox can honor one, rather
-than the image being silently ignored; the field is reserved in the format so
-honoring it later is not a data migration.
+expansion — and MUST be validated when the set is written: a dependency
+naming no configured check, a duplicate or self edge, a check with neither
+a command nor dependencies, any dependency cycle, and a toolchain name that
+is not a valid ref-path segment MUST each be rejected before the set is
+stored.
+A check that sets an image MUST be rejected until the sandbox can honor
+one; the field is reserved in the format so honoring it later is not a data
+migration.
 --
 
 [role="requirement", id="checks.toolchains"]
 .Check Toolchains
 --
 A check's optional list of toolchain names MUST each be a valid ref-path
-segment (<<storage.meta-ref>>'s collection-key rule), validated when the set
-is written; whether a named toolchain actually exists MUST be checked
-server-side at job time instead, since it names an entry in a different ref
-namespace (`refs/meta/toolchains/<name>`, `git-toolchain`) the check set
-itself does not enumerate.
+segment, validated when the set is written; whether a named toolchain
+actually exists MUST be checked server-side at job time instead, since it
+names an entry in a different ref namespace (`refs/meta/toolchains/<name>`,
+`git-toolchain`) the check set itself does not enumerate.
 --
 
 [role="requirement", id="checks.post-receive"]
 .Asynchronous Queuing
 --
 After a successful push is accepted by `pre-receive`, a `post-receive` hook
-MUST enqueue a check job for each updated branch whose new tip is non-zero and
-is not a `refs/meta/*` ref.
+MUST enqueue a check job for each updated branch whose new tip is non-zero
+and is not a `refs/meta/*` ref.
 The hook MUST record an initial run status of `queued` for each check
 immediately, so the UI reflects the job before the worker picks it up.
 The hook MUST NOT run checks itself; it MUST return as soon as jobs are
-enqueued, so the push is never blocked on check execution.
-Job files MUST be written to a tmp path and renamed into place so the worker
-never observes a partial file.
+enqueued.
+Job files MUST be written to a tmp path and renamed into place so the
+worker never observes a partial file.
 --
 
 [role="requirement", id="checks.worker"]
 .Check Worker
 --
 A persistent server-side worker MUST drain the job queue.
-Jobs MUST be grouped by repository; each repository's jobs MUST be processed
-serially to prevent concurrent runs from colliding in its sandbox.
-Separate repositories MUST be processed concurrently, so a slow repository's
-backlog does not block others.
+Jobs MUST be grouped by repository; each repository's jobs MUST be
+processed serially to prevent concurrent runs from colliding in its
+sandbox, while separate repositories MUST be processed concurrently.
 
-Within a job the checks MUST settle in topological dependency order, so every
-dependency's outcome is terminal before its dependents are reached.
+Within a job the checks MUST settle in topological dependency order, so
+every dependency's outcome is terminal before its dependents are reached.
 A check whose dependency did not pass MUST be recorded `skipped` without
-running; a composite's outcome is derived from its dependencies — `pass` when
-all passed, `fail` when any failed or errored, `skipped` otherwise.
-The worker MUST re-validate the dependency graph before running (a hand-crafted
-push can land a set the CLI would have rejected) and finalize the run as
-`error` when it is invalid.
+running; a composite's outcome is derived from its dependencies — `pass`
+when all passed, `fail` when any failed or errored, `skipped` otherwise.
+The worker MUST re-validate the dependency graph before running (a
+hand-crafted push can land a set the CLI would have rejected) and finalize
+the run as `error` when it is invalid.
 --
 
 [role="requirement", id="checks.sandbox"]
 .Sprite Sandbox
 --
-Each check MUST run inside a Fly.io Sprite: a persistent, hardware-isolated
-sandbox, one per repository, so build caches survive between pushes.
-Before running checks the worker MUST sync the pushed tree into the Sprite's
-work directory via `git archive` piped to `tar -x`.
-The worker MUST configure the `sprite` CLI from `SPRITES_TOKEN` before each
-run via `sprite auth setup`, so the credential stays current without restart.
+Each check MUST run inside a Fly.io Sprite: a persistent,
+hardware-isolated sandbox, one per repository, so build caches survive
+between pushes.
+Before running checks the worker MUST sync the pushed tree into the
+Sprite's work directory via `git archive` piped to `tar -x`, and MUST
+configure the `sprite` CLI from `SPRITES_TOKEN` via `sprite auth setup`.
 
 Before running a check that names a toolchain, the worker MUST resolve each
 distinct toolchain named across the job's checks (<<checks.toolchains>>) to
-its typed `bin` tree (`git-toolchain`'s `Toolchain::bin`, not the whole
-document) and extract that tree into the Sprite at a hash-keyed directory,
-skipping the extraction when that directory already exists — the Sprite's
-persistent filesystem is the cache, so the same toolchain is never
-re-extracted across pushes. A check's command MUST then run with each of its
-named toolchains' extracted `bin` directory prefixed onto `PATH`, in the
-order they are declared, so an earlier toolchain takes precedence over a
-later one on a name collision.
+its typed `bin` tree (`Toolchain::bin`, not the whole document) and extract
+it into the Sprite at a hash-keyed directory, skipping the extraction when
+that directory already exists — the Sprite's persistent filesystem is the
+cache.
+A check's command MUST then run with each of its named toolchains'
+extracted `bin` directory prefixed onto `PATH`, in declaration order, so an
+earlier toolchain wins a name collision.
 --
 
 [role="requirement", id="checks.outcomes"]
 .Run Recording
 --
-Run outcomes MUST be stored at `refs/meta/runs/<commit>`, one ref per checked
-commit.
-Each ref's commit chain is the run history; each commit's date is the run time,
-so no timestamp is duplicated in the document tree.
+Run outcomes MUST be stored at `refs/meta/runs/<commit>`, one ref per
+checked commit.
+Each ref's commit chain is the run history; each commit's date is the run
+time, so no timestamp is duplicated in the document tree.
 Outcome values progress: `queued` → `running` → `pass` / `fail` / `error` /
-`skipped` (a check whose dependency did not pass, per <<checks.worker>>).
-A run that cannot complete due to an infrastructure error (unreachable Sprite,
-failed sync) MUST be finalized as `error` rather than left stuck at `running`.
-A single check that exceeds a 30-minute timeout MUST be recorded `error` rather
-than blocking the worker thread indefinitely.
-A check definition and a run outcome MAY each carry additional metadata beyond
-a single command/outcome string (for example a run's duration and log URL).
-Optional fields absent from an older record MUST load as unset.
-A check/outcome name is the map key and MUST NOT be stored redundantly inside
-the record.
+`skipped` (per <<checks.worker>>).
+A run that cannot complete due to an infrastructure error MUST be finalized
+as `error` rather than left stuck at `running`; a single check exceeding a
+30-minute timeout MUST be recorded `error`.
+A check definition and a run outcome MAY each carry additional metadata (a
+run's duration and log URL); optional fields absent from an older record
+MUST load as unset.
+A check/outcome name is the map key and MUST NOT be stored redundantly
+inside the record.
 --
 
 [role="requirement", id="checks.debug"]
@@ -116,9 +119,8 @@ A signed-in member MUST be able to open an interactive, read-write shell in
 a repository's checks Sprite (`git ents checks debug`), brokered by the
 server over a WebSocket at the reserved path `/_debug/<repo>`.
 The server holds the only Fly credential (`SPRITES_TOKEN`); a member MUST
-NOT need one of their own.
-The broker MUST refuse the connection without a signed-in session.
+NOT need one of their own, and the broker MUST refuse the connection
+without a signed-in session.
 Local terminal resizes MUST be forwarded to the remote pseudo-terminal as
-control frames distinct from the byte stream, so the remote shell tracks the
-member's window size.
+control frames distinct from the byte stream.
 --

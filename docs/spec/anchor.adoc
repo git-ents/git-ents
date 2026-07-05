@@ -1,27 +1,9 @@
-== Comments
+== The Anchor
 
-[role="requirement", id="comments.ref"]
-.Comment Documents
---
-Each code comment MUST be stored at `refs/meta/comments/<id>` as a `Comment`
-document with fields: `body`, `anchor` (<<comments.anchor>>), and an
-optional `issue` cross-referencing an issue by its genesis id
-(<<issues.id>>); an absent `issue` means a free-standing comment.
-The identifier MUST follow the same genesis-key rule as an issue: the object
-id of the originating object, or of the comment's own initial content, and
-it is never renamed.
-One ref per comment keeps comments independently loadable and separately
-historied; the ref's commit chain is the comment's edit history.
---
-
-[role="requirement", id="comments.authorship"]
-.Authorship From the Commit Chain
---
-A comment's author and timestamps MUST NOT be stored in the document tree.
-The creator is the author of the ref's first commit and the last editor is
-the author of its tip commit; both MUST be recovered from the commit chain
-at read time.
---
+A durable pointer into content: a blob (and optionally a line range) at a
+commit.
+Anchors resolve and project independently of comments, so other tools
+(reviews, TODO trackers, blame overlays) can reuse them.
 
 [role="requirement", id="comments.anchor"]
 .Anchors

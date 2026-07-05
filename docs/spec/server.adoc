@@ -1,0 +1,214 @@
+== The Server
+
+`git-ents-server` is a library first: the standalone binary and
+`git ents server` are the same code, and the git hooks are its subcommands.
+Anyone who can run the CLI can run the forge.
+
+[role="requirement", id="server.embeddable"]
+.Embeddable Server
+--
+The server MUST be usable as a library: `git ents server` and the
+standalone `git-ents-server` binary MUST run the same code, and the
+`pre-receive` / `post-receive` hooks MUST be subcommands of the server, not
+separate programs.
+--
+
+[role="requirement", id="protocol.git"]
+.Git Remote Compatibility
+--
+The server MUST function as a full Git remote, supporting clone, fetch, and
+push via the standard Git smart-HTTP pack protocol without any special
+client configuration.
+The implementation MUST delegate the git wire protocol to
+`git http-backend` running as a CGI subprocess.
+--
+
+[role="requirement", id="protocol.routing"]
+.Request Routing
+--
+A single HTTP listener MUST serve both the git wire protocol and the
+browser web UI on the same port, routed by path and query:
+
+* Smart-HTTP service requests (`/info/refs?service=...`,
+  `/git-upload-pack`, `/git-receive-pack`) and dumb-HTTP object paths
+  (`/objects/...`) MUST be forwarded to `git http-backend`; so MUST POST
+  requests to the smart-HTTP RPC paths.
+* Browser tree/blob/commit browse paths (`/tree/`, `/blob/`, `/commit/`)
+  MUST be served by the web UI, even when a file path within them
+  resembles a dumb-HTTP git path (a file named `HEAD`, a directory named
+  `objects`).
+* Reserved top-level paths (`/login`, `/_debug`, `/healthz`) are served by
+  the web UI and shadow a repository of the same name.
+* All other requests MUST be served by the web UI.
+--
+
+=== Namespace
+
+[role="requirement", id="namespace.url"]
+.Service URL
+--
+The service URL MUST be `git-ents.sh/git-ents`.
+--
+
+[role="requirement", id="namespace.path"]
+.Repository Path Validation
+--
+A repository path MUST consist of one to three segments, each drawn from
+ASCII alphanumerics plus `.`, `_`, and `-`; no segment may be empty, begin
+with `.`, or contain a path separator.
+A path that would escape the data directory, nest inside an existing
+repository, or collide with a namespace directory that is not a bare
+repository MUST be rejected before `git http-backend` is invoked.
+--
+
+[role="requirement", id="namespace.auto-create"]
+.Automatic Repository Creation
+--
+Pushing to a previously unused name MUST create a new bare repository,
+initialized with `http.receivepack = true`.
+Two concurrent first pushes to the same name MUST NOT both initialize the
+same repository: creation MUST be serialized behind a per-server lock.
+After a successful push, if `HEAD` points at a branch that does not exist,
+the server MUST update `HEAD` to the pushed branch — preferring `main`,
+then `master`, then the first available — so a fresh clone always checks
+out content.
+--
+
+=== Compatibility
+
+[role="requirement", id="compat.git"]
+.Git Tooling
+--
+The server MUST invoke `git` (including `git http-backend`,
+`git receive-pack`, `git archive`, `git cat-file`, `git for-each-ref`,
+`git symbolic-ref`, and `git init --bare`) as external subprocesses; git
+MUST be present on `PATH` at runtime.
+Git config overrides MUST be passed via `GIT_CONFIG_COUNT` /
+`GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` rather than `git -c`, so they
+reach the `receive-pack` and `pre-receive` processes that
+`git http-backend` spawns, not merely the CGI wrapper process.
+--
+
+[role="requirement", id="compat.ssh-keygen"]
+.OpenSSH `ssh-keygen`
+--
+Push certificate verification and browser sign-in verification MUST use
+`ssh-keygen -Y verify` (OpenSSH on `PATH` at runtime) against an
+`allowed_signers` file written at runtime, in the OpenSSH format: one line
+per key, with a principal column, optional comma-joined options
+(`cert-authority`, `valid-after`, `valid-before`, `namespaces`), and the
+key material.
+--
+
+[role="requirement", id="compat.openssh-signed-push"]
+.Signed Push Protocol
+--
+Push signatures MUST use OpenSSH (`gpg.format = ssh`) push certificates.
+The server MUST read the pushed certificate's object ID from
+`GIT_PUSH_CERT` and its nonce status from `GIT_PUSH_CERT_NONCE_STATUS` —
+the environment variables git populates for the `pre-receive` hook — and
+MUST NOT assume any other delivery mechanism.
+--
+
+[role="requirement", id="compat.sprite"]
+.Sprite CLI
+--
+Asynchronous checks MUST be executed via the `sprite` CLI (`sprite auth
+setup`, `sprite create`, `sprite exec`), present on `PATH` at runtime when
+checks are configured.
+The CLI MUST be initialized per-push via `sprite auth setup --token` from
+the `SPRITES_TOKEN` environment variable, since it persists credentials to
+a config file rather than reading the token per invocation.
+--
+
+[role="requirement", id="compat.cgi"]
+.CGI Protocol
+--
+`git http-backend` is a CGI program.
+The server MUST populate the standard CGI environment variables
+(`PATH_INFO`, `QUERY_STRING`, `REQUEST_METHOD`, `CONTENT_TYPE`,
+`CONTENT_LENGTH`, `GIT_PROJECT_ROOT`, `GIT_HTTP_EXPORT_ALL`) before
+spawning it, and MUST parse the CGI response format (header block,
+`\r\n\r\n` separator, body) into an HTTP response.
+--
+
+[role="requirement", id="compat.edition"]
+.Rust Edition
+--
+All crates MUST target Rust edition 2024.
+The workspace MUST NOT be published to crates.io (`publish = false`).
+--
+
+=== Deployment
+
+[role="requirement", id="deploy.fly"]
+.Fly.io Deployment
+--
+The server MUST be deployable to Fly.io.
+Fly configuration MUST live at `.config/fly.toml` and all `fly`/`flyctl`
+invocations MUST pass `-c .config/fly.toml`.
+--
+
+[role="requirement", id="deploy.health"]
+.Health Check
+--
+The server MUST expose a liveness probe at `GET /healthz` returning `200`
+with body `ok` without touching any git repository, so the platform can
+route traffic before any repository exists.
+`GET /` itself is the web UI's repository index (<<web.index>>), not the
+probe.
+--
+
+=== Nonfunctional
+
+[role="requirement", id="nonfunctional.push-latency"]
+.Push Latency
+--
+A push MUST NOT block on check execution: the `post-receive` hook MUST
+return as soon as job files are written to the queue.
+--
+
+[role="requirement", id="nonfunctional.memory-cap"]
+.Per-Request Memory Cap
+--
+No single web request MAY read more than 2 MiB of git object data into
+memory for rendering.
+Output exceeding the limit MUST be truncated with a notice, not an error.
+--
+
+[role="requirement", id="nonfunctional.concurrency"]
+.Concurrency Model
+--
+The HTTP server MUST handle concurrent requests without blocking the async
+runtime on synchronous work; check jobs MUST run on blocking threads.
+The request body MUST be written to `git http-backend`'s stdin concurrently
+with draining its stdout — a sequential write-then-read deadlocks when
+`receive-pack` streams progress before consuming the full pack.
+--
+
+[role="requirement", id="nonfunctional.no-panic"]
+.No Panics
+--
+The implementation MUST NOT use `unwrap`, `expect`, unchecked
+indexing/slicing, or other constructs that can panic in production code
+paths.
+Any suppression of a panic-prevention lint MUST carry a documented reason
+(`#[expect(..., reason = "...")]`); silent `#[allow(...)]` is forbidden.
+--
+
+[role="requirement", id="nonfunctional.no-unsafe"]
+.No Unsafe Code
+--
+The implementation MUST NOT contain any `unsafe` code blocks.
+--
+
+[role="requirement", id="nonfunctional.object-store"]
+.Durable Object Store Reads
+--
+Meta-ref documents MUST be read and written against the repository's common
+object directory, never a receive-pack quarantine: inside a `pre-receive`
+or `post-receive` hook, git points the per-object-path environment
+variables at a quarantine holding only the incoming pack.
+All meta-ref access MUST open the object database at the common directory
+explicitly.
+--

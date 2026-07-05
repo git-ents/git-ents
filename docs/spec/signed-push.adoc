@@ -1,0 +1,124 @@
+== The Signed Push
+
+There is exactly one way to mutate a repository, including its metadata: a
+`git push` carrying a signed-push certificate, verified against the member
+refs.
+The web UI has no side door — a browser edit becomes a real push signed by
+the server's own key.
+Auth state is repository state: no sessions database, no tokens table;
+revocation is a ref update.
+
+[role="requirement", id="auth.bootstrap"]
+.Bootstrap Window
+--
+When no `refs/meta/member/*` refs exist the repository MUST accept any push
+without a signature, so the first member can be pushed in.
+Once at least one member ref exists the bootstrap window MUST close and all
+subsequent pushes MUST be signed.
+Revoking every member's keys — leaving the member refs present but all keys
+removed — MUST fail closed, not reopen the bootstrap window.
+--
+
+[role="requirement", id="auth.signed-push"]
+.Signed Push Verification
+--
+Every push to a repository whose member list is non-empty MUST carry a
+signed push certificate (`git push --signed`).
+The server MUST verify the certificate in a `pre-receive` hook before any
+ref is updated:
+
+. The push certificate nonce status (from `GIT_PUSH_CERT_NONCE_STATUS`)
+  MUST be `OK`.
+. The certificate MUST contain an SSH signature (an
+  `-----BEGIN SSH SIGNATURE-----` block).
+. The signature MUST verify against at least one authorized member key via
+  `ssh-keygen -Y verify -n git`.
+. The trust set fed to `ssh-keygen` MUST be the live member set minus any
+  revoked fingerprints.
+
+A push that fails any check MUST be rejected before any ref is updated.
+--
+
+[role="requirement", id="auth.nonce"]
+.Nonce Configuration
+--
+The server MUST configure `receive.certNonceSeed` on every
+`git http-backend` invocation when authentication is active, and
+`receive.certNonceSlop = 60` to tolerate the round-trip latency inherent in
+smart-HTTP, where the nonce is issued and verified by two separate
+`receive-pack` processes.
+--
+
+[role="requirement", id="auth.client-setup"]
+.Client-Side Setup
+--
+A CLI command (`git ents members setup`) MUST configure the client's local
+or global git config to sign pushes with an SSH key, using the key named by
+`user.signingkey` or a default `~/.ssh/id_ed25519`.
+--
+
+=== Web Sign-In
+
+[role="requirement", id="web.auth.challenge"]
+.Challenge–Response Sign-In
+--
+Browser sign-in MUST NOT require a private key to be transmitted.
+The server MUST issue a one-time nonce (challenge); the member MUST sign it
+locally with their web key using SSHSIG under the `git.ents.cloud`
+namespace (distinct from the git push namespace) and paste back the public
+key and signature.
+The server MUST verify the signature against the pasted key, and the key
+against the live member list for the repository being edited, before
+opening a session.
+A challenge MUST expire after 600 seconds and MUST be consumed on first use
+so it cannot be replayed.
+The sign-in page MUST point at `git ents login` (<<cli.login>>) as the
+preferred flow, keeping the manual signing instructions as the fallback.
+--
+
+[role="requirement", id="web.auth.session"]
+.Sessions and CSRF
+--
+A successful sign-in MUST issue a session cookie (`ents_session`) containing
+an unguessable random token.
+Each session MUST carry a separate CSRF token that state-changing POST
+requests MUST echo back.
+Sessions MUST be held only in server memory, storing only the member's
+public key and display label — no private key is ever held or transmitted,
+and no session state is persisted to disk.
+Signing out MUST drop the session from server memory and clear the cookie;
+the sign-out POST MUST itself carry the CSRF token.
+--
+
+[role="requirement", id="web.auth.edit"]
+.Authenticated Settings Edit
+--
+A settings edit MUST be landed as a real `git push --signed` onto
+`refs/meta/config`, signed with the server's own member key, through the
+same `pre-receive` gate a CLI push traverses.
+The commit's author MUST be the signed-in human (resolved from their
+session's public key to their member username); the committer MUST be the
+server identity.
+The edit MUST be staged on a throwaway ref, deleted whether or not the push
+succeeds.
+If the server has no signing key or nonce seed, the Settings tab MUST hide
+the edit controls rather than present a form that cannot succeed.
+--
+
+[role="requirement", id="web.auth.webauthn-onboarding"]
+.Passkey Onboarding
+--
+[NOTE]
+Planned, not yet implemented. `Trust::WebAuthn` and
+`Provenance::SelfAttestedWeb` exist and are exercised (a `WebAuthn` member
+never produces a push line; `require_admin_registered` refuses a
+self-attested member's edit), but no endpoint yet lets a new member create
+that ref by proving a passkey.
+
+A new member MAY onboard without a CLI by proving control of a passkey in
+the browser.
+The server MUST verify the attestation server-side and write the new member
+ref with `provenance` set to self-attested, recording the attestation
+evidence in the member ref's first commit as an audit record.
+The resulting member gets limited trust until an admin promotes them.
+--
