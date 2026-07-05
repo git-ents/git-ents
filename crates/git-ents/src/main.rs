@@ -298,6 +298,13 @@ enum ToolchainAction {
         #[facet(args::positional)]
         name: String,
     },
+    /// Show a remote's toolchain `name`: its recipe/version/platform
+    /// provenance and its on-disk footprint (`bin`/`src` byte sizes).
+    View {
+        /// Name (`toolchains/<name>`) to view.
+        #[facet(args::positional)]
+        name: String,
+    },
 }
 
 #[derive(Facet)]
@@ -505,6 +512,7 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
         ToolchainAction::Log { name } => toolchain_log(&name, remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
         ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
+        ToolchainAction::View { name } => toolchain_view(&name, remote),
     }
 }
 
@@ -663,6 +671,25 @@ fn toolchain_export(name: &str, dest: &str, remote: &str) -> Result<(), String> 
         "exported toolchain {name} to {dest} (version: {}, platform: {}, license: {})",
         toolchain.version, toolchain.platform, toolchain.license
     );
+    Ok(())
+}
+
+/// Show `remote`'s toolchain `name`: its recipe/version/platform provenance
+/// and its on-disk footprint, computed by walking the git trees backing
+/// `bin`/`src` (see `git_toolchain::disk_usage`).
+fn toolchain_view(name: &str, remote: &str) -> Result<(), String> {
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
+    let repo = repo()?;
+    let toolchain = git_toolchain::resolve(&repo, name).map_err(|error| error.to_string())?;
+    let usage = git_toolchain::disk_usage(&repo, name).map_err(|error| error.to_string())?;
+    let recipe = toolchain.recipe.as_deref().unwrap_or("hand-supplied");
+    println!(
+        "{name}  {}  {}  {}  {recipe}",
+        toolchain.version, toolchain.platform, toolchain.license
+    );
+    let printer = facet_pretty::PrettyPrinter::new().with_doc_comments(true);
+    println!("{}", usage.pretty_with(printer));
     Ok(())
 }
 

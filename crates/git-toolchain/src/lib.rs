@@ -38,6 +38,7 @@ use gix::ObjectId;
 use gix::bstr::ByteSlice as _;
 use gix::objs::tree::{Entry as TreeEntry, EntryKind, EntryMode};
 use gix::objs::{FindExt as _, Tree, WriteTo as _};
+use gix::prelude::HeaderExt as _;
 use gix_pack::data::input::Entry as PackEntry;
 use rayon::prelude::*;
 
@@ -376,6 +377,65 @@ pub fn export(repo: &Path, name: &str, dest: &Path) -> Result<Toolchain, Error> 
 pub fn remove(repo: &Path, name: &str) -> Result<(), Error> {
     let store = Store::open(repo)?;
     Ok(store.delete_ref(&toolchain_ref(name))?)
+}
+
+/// A toolchain's on-disk footprint, in bytes, summed from the git trees
+/// backing it — `bin`'s tree when [`Bin::Embedded`] (`None` for
+/// [`Bin::Downloaded`], since those bytes live at the distributor's archives,
+/// not in this repository), and `src`'s tree, if imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+pub struct Usage {
+    /// Total bytes across every blob in `bin`'s tree, or `None` when `bin` is
+    /// [`Bin::Downloaded`] and so has no locally-stored tree to size.
+    pub bin_bytes: Option<u64>,
+    /// Total bytes across every blob in `src`'s tree, or `None` when no `src`
+    /// was imported.
+    pub src_bytes: Option<u64>,
+}
+
+/// Toolchain `name`'s on-disk footprint: recursively sums blob sizes in
+/// `bin`'s tree (when [`Bin::Embedded`]) and `src`'s tree (if present), read
+/// from object headers rather than fully decoding each blob.
+pub fn disk_usage(repo: &Path, name: &str) -> Result<Usage, Error> {
+    let toolchain = resolve(repo, name)?;
+    let odb = odb_at(repo)?;
+    let bin_bytes = match &toolchain.bin {
+        Bin::Embedded(tree) => Some(tree_size(&odb, tree.oid())?),
+        Bin::Downloaded(_) => None,
+    };
+    let src_bytes = toolchain
+        .src
+        .as_ref()
+        .map(|tree| tree_size(&odb, tree.oid()))
+        .transpose()?;
+    Ok(Usage {
+        bin_bytes,
+        src_bytes,
+    })
+}
+
+/// Recursively sum the byte size of every blob under `tree`, reading each
+/// object's header (kind + size) rather than fully decoding its content —
+/// cheap even for large binaries.
+fn tree_size(odb: &gix::odb::Handle, tree: ObjectId) -> Result<u64, Error> {
+    let mut buf = Vec::new();
+    let tree_ref = odb
+        .find_tree(&tree, &mut buf)
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    let mut total = 0u64;
+    for entry in &tree_ref.entries {
+        let size = match entry.mode.kind() {
+            EntryKind::Tree => tree_size(odb, entry.oid.to_owned())?,
+            EntryKind::Link | EntryKind::BlobExecutable | EntryKind::Blob => odb
+                .header(entry.oid)
+                .map_err(|error| git_store::Error::Object(error.to_string()))?
+                .size(),
+            // A submodule gitlink: no blob of its own to size in this repo.
+            EntryKind::Commit => 0,
+        };
+        total = total.saturating_add(size);
+    }
+    Ok(total)
 }
 
 /// `refs/meta/toolchains/<name>`.
