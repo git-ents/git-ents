@@ -21,12 +21,15 @@
 //! objects are fine functionally; repacking the object database is an
 //! operational follow-up, not something this crate does.
 
+use std::collections::HashMap;
 use std::fs;
-use std::io::Write as _;
+use std::io::{Seek as _, SeekFrom, Write as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr as _;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Mutex, PoisonError};
 
 use facet::Facet;
 use facet_git_tree::RawTree;
@@ -34,7 +37,8 @@ use git_store::Store;
 use gix::ObjectId;
 use gix::bstr::ByteSlice as _;
 use gix::objs::tree::{Entry as TreeEntry, EntryKind, EntryMode};
-use gix::objs::{FindExt as _, Tree, Write as _};
+use gix::objs::{FindExt as _, Tree, WriteTo as _};
+use gix_pack::data::input::Entry as PackEntry;
 use rayon::prelude::*;
 
 /// The ref namespace holding toolchains, one ref per toolchain:
@@ -183,13 +187,15 @@ pub fn import(
     }
     validate_metadata(license, version, platform)?;
     let odb = odb_at(repo)?;
+    let collector = PackCollector::default();
 
-    let bin_tree = build_tree(&odb, bin_dir)?;
+    let bin_tree = build_tree(&collector, bin_dir)?;
     if bin_tree.entries.is_empty() {
         return Err(Error::EmptyBin(bin_dir.to_owned()));
     }
-    let bin = Bin::Embedded(RawTree::new(write_object(&odb, &bin_tree)?));
-    let src = import_src(&odb, src_dir)?;
+    let bin = Bin::Embedded(RawTree::new(write_tree(&collector, &bin_tree)?));
+    let src = import_src(&collector, src_dir)?;
+    collector.flush(repo)?;
 
     let toolchain = Toolchain {
         bin,
@@ -224,7 +230,9 @@ pub fn import_downloaded(
     }
     validate_metadata(license, version, platform)?;
     let odb = odb_at(repo)?;
-    let src = import_src(&odb, src_dir)?;
+    let collector = PackCollector::default();
+    let src = import_src(&collector, src_dir)?;
+    collector.flush(repo)?;
 
     let toolchain = Toolchain {
         bin: Bin::Downloaded(components),
@@ -252,11 +260,11 @@ fn validate_metadata(license: &str, version: &str, platform: &str) -> Result<(),
 /// Write `src_dir`, if given, as a `RawTree` — shared by [`import`] and
 /// [`import_downloaded`], since `src` is captured the same way regardless of
 /// how `bin` is provisioned.
-fn import_src(odb: &gix::odb::Handle, src_dir: Option<&Path>) -> Result<Option<RawTree>, Error> {
+fn import_src(collector: &PackCollector, src_dir: Option<&Path>) -> Result<Option<RawTree>, Error> {
     src_dir
         .map(|dir| -> Result<RawTree, Error> {
-            let tree = build_tree(odb, dir)?;
-            Ok(RawTree::new(write_object(odb, &tree)?))
+            let tree = build_tree(collector, dir)?;
+            Ok(RawTree::new(write_tree(collector, &tree)?))
         })
         .transpose()
 }
@@ -360,10 +368,109 @@ fn odb_at(repo: &Path) -> Result<gix::odb::Handle, Error> {
     Ok(gix::odb::at(opened.common_dir().join("objects")).map_err(|_io| git_store::Error::Odb)?)
 }
 
-fn write_object(odb: &gix::odb::Handle, tree: &Tree) -> Result<ObjectId, Error> {
-    Ok(odb
-        .write(tree)
-        .map_err(|error| git_store::Error::Object(error.to_string()))?)
+/// Accumulates every blob and tree object produced while walking a directory
+/// into a [`Tree`], deferring the actual object-database write until the
+/// whole walk is done so the result can land as a single pack (see
+/// [`PackCollector::flush`]) instead of one loose object per file.
+///
+/// Cheaply `Clone` (an `Arc`-backed handle to the same map), the same way
+/// `gix::odb::Handle` was before this replaced it — each parallel work item
+/// in [`build_tree`] gets its own clone.
+type CollectedObjects = HashMap<ObjectId, (gix::objs::Kind, Vec<u8>)>;
+
+#[derive(Clone, Default)]
+struct PackCollector(std::sync::Arc<Mutex<CollectedObjects>>);
+
+impl PackCollector {
+    /// Hash `data` and record it under its own object id, unless an object
+    /// with that id is already recorded — the same "already exists, skip
+    /// the write" behavior loose object writes have implicitly, since
+    /// identical file contents (e.g. duplicate license files) hash to the
+    /// same oid.
+    fn insert(&self, kind: gix::objs::Kind, data: Vec<u8>) -> Result<ObjectId, Error> {
+        let oid = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &data)
+            .map_err(|error| git_store::Error::Object(error.to_string()))?;
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(oid)
+            .or_insert((kind, data));
+        Ok(oid)
+    }
+
+    /// Write every collected object into `repo`'s object database as a
+    /// single pack: one sequential data-file write plus one index build,
+    /// rather than the tempfile-create, fan-out-directory-check, and rename
+    /// every loose object write pays individually (see `build_tree`'s doc
+    /// comment on why that per-object cost dominates a large import).
+    fn flush(self, repo: &Path) -> Result<(), Error> {
+        let objects = std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner));
+        if objects.is_empty() {
+            return Ok(());
+        }
+
+        let hash = gix::hash::Kind::Sha1;
+        let mut offset = 0u64;
+        let mut entries = Vec::with_capacity(objects.len());
+        for (kind, data) in objects.into_values() {
+            let object = gix::objs::Data {
+                kind,
+                object_hash: hash,
+                data: &data,
+            };
+            let entry = PackEntry::from_data_obj(&object, offset)
+                .map_err(|error| git_store::Error::Object(error.to_string()))?;
+            offset = offset
+                .checked_add(entry.bytes_in_pack())
+                .ok_or_else(|| git_store::Error::Object("pack too large".to_owned()))?;
+            entries.push(entry);
+        }
+
+        let pack_file = tempfile::tempfile().map_err(|error| Error::Io(repo.to_owned(), error))?;
+        let writer = gix_pack::data::input::EntriesToBytesIter::new(
+            entries
+                .into_iter()
+                .map(Ok::<_, gix_pack::data::input::Error>),
+            &pack_file,
+            gix_pack::data::Version::V2,
+            hash,
+        );
+        for entry in writer {
+            entry.map_err(|error| git_store::Error::Object(error.to_string()))?;
+        }
+        (&pack_file)
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| Error::Io(repo.to_owned(), error))?;
+
+        let opened = gix::open(repo).map_err(|error| git_store::Error::Open(Box::new(error)))?;
+        let pack_dir = opened.common_dir().join("objects").join("pack");
+        fs::create_dir_all(&pack_dir).map_err(|error| Error::Io(pack_dir.clone(), error))?;
+
+        let outcome = gix_pack::Bundle::write_to_directory(
+            &mut std::io::BufReader::new(&pack_file),
+            Some(&pack_dir),
+            &mut gix::progress::Discard,
+            &AtomicBool::new(false),
+            None::<gix::odb::Handle>,
+            gix_pack::bundle::write::Options {
+                object_hash: hash,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+
+        if let Some(keep_path) = outcome.keep_path {
+            fs::remove_file(&keep_path).map_err(|error| Error::Io(keep_path, error))?;
+        }
+        Ok(())
+    }
+}
+
+fn write_tree(collector: &PackCollector, tree: &Tree) -> Result<ObjectId, Error> {
+    let mut buf = Vec::with_capacity(2048);
+    tree.write_to(&mut buf)
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    collector.insert(gix::objs::Kind::Tree, buf)
 }
 
 /// Build `dir`'s tree bottom-up: a directory's own entries are all resolved
@@ -375,13 +482,12 @@ fn write_object(odb: &gix::odb::Handle, tree: &Tree) -> Result<ObjectId, Error> 
 /// of thousands of files) is dominated by per-object filesystem syscall
 /// overhead, not by hashing or compression (gix's loose-object writer already
 /// runs zlib at its fastest level); fanning the write out across every core
-/// is the lever that actually matters here. `gix::odb::Handle` holds
-/// `RefCell`s and so is `Send` but not `Sync` — it cannot be shared by
-/// reference across threads — but it is cheaply `Clone` (an `Arc`-backed
-/// handle to the same store), which is the intended way to use one per
-/// thread; each entry gets its own clone before the parallel fan-out so no
-/// two threads ever touch the same `Handle`.
-fn build_tree(odb: &gix::odb::Handle, dir: &Path) -> Result<Tree, Error> {
+/// is the lever that actually matters here. Object bytes are hashed and
+/// accumulated in a [`PackCollector`] rather than written to the object
+/// database as they're produced — [`PackCollector::flush`] writes them all
+/// as a single pack once the whole walk is done, since even parallel loose
+/// writes are still one tempfile-create/fan-out-check/rename apiece.
+fn build_tree(collector: &PackCollector, dir: &Path) -> Result<Tree, Error> {
     let read_dir = fs::read_dir(dir).map_err(|error| Error::Io(dir.to_owned(), error))?;
     let items = read_dir
         .collect::<Result<Vec<_>, _>>()
@@ -389,10 +495,10 @@ fn build_tree(odb: &gix::odb::Handle, dir: &Path) -> Result<Tree, Error> {
 
     let mut entries: Vec<TreeEntry> = items
         .into_iter()
-        .map(|item| (item, odb.clone()))
+        .map(|item| (item, collector.clone()))
         .collect::<Vec<_>>()
         .into_par_iter()
-        .map(|(item, odb)| -> Result<Option<TreeEntry>, Error> {
+        .map(|(item, collector)| -> Result<Option<TreeEntry>, Error> {
             let path = item.path();
             let name = item
                 .file_name()
@@ -401,7 +507,7 @@ fn build_tree(odb: &gix::odb::Handle, dir: &Path) -> Result<Tree, Error> {
             let file_type = item
                 .file_type()
                 .map_err(|error| Error::Io(path.clone(), error))?;
-            let Some((oid, mode)) = write_entry(&odb, &path, file_type)? else {
+            let Some((oid, mode)) = write_entry(&collector, &path, file_type)? else {
                 return Ok(None);
             };
             Ok(Some(TreeEntry {
@@ -422,16 +528,16 @@ fn build_tree(odb: &gix::odb::Handle, dir: &Path) -> Result<Tree, Error> {
 /// subdirectory — unrepresentable in a git tree, so skipped rather than
 /// written as a bare tree object.
 fn write_entry(
-    odb: &gix::odb::Handle,
+    collector: &PackCollector,
     path: &Path,
     file_type: fs::FileType,
 ) -> Result<Option<(ObjectId, EntryMode)>, Error> {
     if file_type.is_dir() {
-        let tree = build_tree(odb, path)?;
+        let tree = build_tree(collector, path)?;
         if tree.entries.is_empty() {
             return Ok(None);
         }
-        let oid = write_object(odb, &tree)?;
+        let oid = write_tree(collector, &tree)?;
         return Ok(Some((oid, EntryMode::from(EntryKind::Tree))));
     }
     if file_type.is_symlink() {
@@ -439,9 +545,7 @@ fn write_entry(
         let target = target
             .to_str()
             .ok_or_else(|| Error::NotUtf8(path.to_owned()))?;
-        let oid = odb
-            .write_buf(gix::objs::Kind::Blob, target.as_bytes())
-            .map_err(|error| git_store::Error::Object(error.to_string()))?;
+        let oid = collector.insert(gix::objs::Kind::Blob, target.as_bytes().to_vec())?;
         return Ok(Some((oid, EntryMode::from(EntryKind::Link))));
     }
     let bytes = fs::read(path).map_err(|error| Error::Io(path.to_owned(), error))?;
@@ -451,9 +555,7 @@ fn write_entry(
         .mode()
         & 0o111
         != 0;
-    let oid = odb
-        .write_buf(gix::objs::Kind::Blob, &bytes)
-        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    let oid = collector.insert(gix::objs::Kind::Blob, bytes)?;
     let kind = if executable {
         EntryKind::BlobExecutable
     } else {

@@ -60,6 +60,7 @@ gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-object = "0.61"
 gix-odb = "0.81"
+gix-pack = "0.71"
 gix-actor = "0.41"
 gix-date = "0.15"
 iddqd = "0.4"
