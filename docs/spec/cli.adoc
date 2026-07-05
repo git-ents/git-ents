@@ -13,7 +13,7 @@ A mutating command MUST fetch the relevant `refs/meta/*` ref(s) from the
 named remote (defaulting to `origin`), load the typed document, apply the
 change, store it, and push the updated ref back — signed per the client's
 git config, through the same `pre-receive` gate a content push traverses.
-A read-only command (`members list`, `members check`, `checks list`,
+A read-only command (`members list`, `members check`, `effect list`,
 `comment list`/`show`) MUST only fetch, never push.
 --
 
@@ -60,13 +60,13 @@ confirmation, since it can lock the operator out of the remote.
 --
 
 [role="requirement", id="cli.account-checks"]
-.Account and Check Commands
+.Account and Effect Commands
 --
 `git ents account create` MUST write or update `refs/meta/account`
 (<<account.ref>>) and print the account's genesis identity
 (<<account.genesis>>).
-`git ents checks` MUST provide `list`, `add`, and `remove` over the
-`refs/meta/effects/<name>` set (<<checks.definition>>).
+`git ents effect` MUST provide `list`, `add`, `remove`, `debug`, and `log`
+over the `refs/meta/effects/<name>` set (<<checks.definition>>).
 --
 
 [role="requirement", id="cli.toolchains"]

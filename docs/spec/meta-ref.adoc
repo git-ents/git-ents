@@ -56,12 +56,12 @@ Documented, not mandated.
 
 Key strategy::
   Every document is one of three shapes.
-  A *singleton* lives on one fixed ref (`config`, `account`, `checks`,
+  A *singleton* lives on one fixed ref (`config`, `account`,
   `revoked`, `issue-number`): `Store::load`/`store`.
   A *named collection* is one-ref-per-item under a namespace prefix
-  (`member/<username>`, `toolchains/<name>`) or a scalar-keyed map on a
-  single ref (`checks/<name>`, `revoked/<fingerprint>`,
-  `runs/<commit>/results/<name>`): `Store::load_item`/`store_item`,
+  (`member/<username>`, `toolchains/<name>`, `effects/<name>`,
+  `results/<effect>/<short-oid>`) or a scalar-keyed map on a single ref
+  (`revoked/<fingerprint>`): `Store::load_item`/`store_item`,
   `load_map`/`store_map`.
   A *content-addressed* collection is keyed by the hash of its own content
   (`issues/<id>`, `comments/<id>`) via the shared `git_store::new_id`

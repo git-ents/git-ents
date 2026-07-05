@@ -2,7 +2,7 @@
 //!
 //! It carries `git ents members` for managing the repository members recorded
 //! one-ref-per-person at `refs/meta/member/<username>`, `git ents account` for
-//! the account identity at `refs/meta/account`, `git ents checks` for the
+//! the account identity at `refs/meta/account`, `git ents effect` for the
 //! effect set at one-ref-per-effect `refs/meta/effects/<name>`, `git ents
 //! toolchain` for the toolchains stored as git trees at
 //! `refs/meta/toolchains/<name>` (`git-toolchain`), `git ents comment` for the
@@ -59,10 +59,10 @@ enum Top {
         #[facet(args::subcommand)]
         action: AccountAction,
     },
-    /// Manage the configured checks at `refs/meta/effects/<name>`.
-    Checks {
+    /// Manage the configured effects at `refs/meta/effects/<name>`.
+    Effect {
         #[facet(args::subcommand)]
-        action: ChecksAction,
+        action: EffectAction,
     },
     /// Manage the toolchains stored as git trees at
     /// `refs/meta/toolchains/<name>`.
@@ -78,7 +78,7 @@ enum Top {
     },
     /// Sign in to a remote's server the same way the web UI does — sign a
     /// server-issued challenge with your key — so this machine can also open a
-    /// debug session (`checks debug`).
+    /// debug session (`effect debug`).
     Login {
         /// Key to sign in with; defaults to `user.signingkey`.
         #[facet(args::named)]
@@ -199,44 +199,44 @@ enum AccountAction {
 /// @relation(cli.account-checks)
 #[derive(Facet)]
 #[repr(u8)]
-enum ChecksAction {
-    /// List the checks configured on a remote.
+enum EffectAction {
+    /// List the effects configured on a remote.
     List,
-    /// Add (or replace) a check on a remote's set and push the update.
+    /// Add (or replace) an effect on a remote's set and push the update.
     /// Prompts for any field left unset when run at an interactive terminal.
     Add {
-        /// Name to record the check under (`checks/<name>`).
+        /// Name to record the effect under (`effects/<name>`).
         #[facet(args::positional, default)]
         name: Option<String>,
-        /// Command the check runs (e.g. `cargo fmt --check`); omit for a
-        /// composite check that only aggregates its dependencies.
+        /// Command the effect runs (e.g. `cargo fmt --check`); omit for a
+        /// composite effect that only aggregates its dependencies.
         #[facet(args::positional, default)]
         command: Option<String>,
         /// Sandbox image the command runs in (reserved: the Sprite sandbox
         /// does not honor an image yet, so setting one is rejected).
         #[facet(args::named)]
         image: Option<String>,
-        /// Check that must pass before this one runs (repeatable).
-        #[facet(args::named, args::label = "CHECK", default)]
+        /// Effect that must pass before this one runs (repeatable).
+        #[facet(args::named, args::label = "EFFECT", default)]
         depends: Vec<String>,
         /// Toolchain (`refs/meta/toolchains/<name>`) to activate on `PATH`
         /// before the command runs (repeatable).
         #[facet(args::named, args::label = "TOOLCHAIN", default)]
         toolchains: Vec<String>,
     },
-    /// Remove a check from a remote's set and push the update.
+    /// Remove an effect from a remote's set and push the update.
     Remove {
-        /// Name (`checks/<name>`) to drop.
+        /// Name (`effects/<name>`) to drop.
         #[facet(args::positional)]
         name: String,
     },
-    /// Open an interactive, read-write shell in `remote`'s persistent checks
-    /// Sprite — the same sandbox its check runs execute in. Requires
+    /// Open an interactive, read-write shell in `remote`'s persistent effects
+    /// Sprite — the same sandbox its effect runs execute in. Requires
     /// `git ents login <remote>` first.
     Debug,
-    /// Show recorded check runs (queued/running/pass/fail/error) from
+    /// Show recorded effect runs (queued/running/pass/fail/error) from
     /// `refs/meta/results/*` on a remote, newest first.
-    Runs,
+    Log,
 }
 
 /// ## Requirements
@@ -403,7 +403,7 @@ fn main() -> ExitCode {
     match cli.command {
         Top::Members { action } => exit_code(run_members(action, &remote)),
         Top::Account { action } => exit_code(run_account(action, &remote)),
-        Top::Checks { action } => exit_code(run_checks(action, &remote)),
+        Top::Effect { action } => exit_code(run_effect(action, &remote)),
         Top::Toolchain { action } => exit_code(run_toolchain(action, &remote)),
         Top::Comment { action } => exit_code(run_comment(action, &remote)),
         Top::Login { key } => exit_code(login(&remote, key.as_deref())),
@@ -474,30 +474,30 @@ fn run_account(action: AccountAction, remote: &str) -> Result<(), String> {
 /// ## Requirements
 ///
 /// @relation(cli.account-checks)
-fn run_checks(action: ChecksAction, remote: &str) -> Result<(), String> {
+fn run_effect(action: EffectAction, remote: &str) -> Result<(), String> {
     match action {
-        ChecksAction::List => effect_list(remote),
-        ChecksAction::Add {
+        EffectAction::List => effect_list(remote),
+        EffectAction::Add {
             name,
             command,
             image,
             depends,
             toolchains,
-        } => add_check(name, command, image, depends, toolchains, remote),
-        ChecksAction::Remove { name } => effect_remove(&name, remote),
-        ChecksAction::Debug => checks_debug(remote),
-        ChecksAction::Runs => checks_runs(remote),
+        } => effect_add(name, command, image, depends, toolchains, remote),
+        EffectAction::Remove { name } => effect_remove(&name, remote),
+        EffectAction::Debug => effect_debug(remote),
+        EffectAction::Log => effect_log(remote),
     }
 }
 
 /// Print the latest recorded status of every checked commit on `remote`,
-/// newest commit first, as `<commit>  <when>  <check>=<status> …`.
-fn checks_runs(remote: &str) -> Result<(), String> {
+/// newest commit first, as `<commit>  <when>  <effect>=<status> …`.
+fn effect_log(remote: &str) -> Result<(), String> {
     let repo = repo()?;
     sync_namespace(remote, git_effect::RESULTS_NS)?;
     let commits = git_effect::runs(&repo).map_err(|error| error.to_string())?;
     if commits.is_empty() {
-        println!("no check runs on {remote}");
+        println!("no effect runs on {remote}");
         return Ok(());
     }
     for commit_runs in commits {
@@ -977,7 +977,7 @@ fn effect_list(remote: &str) -> Result<(), String> {
     sync_namespace(remote, git_effect::EFFECTS_NS)?;
     let mut effects = git_effect::load_all(&repo).map_err(|error| error.to_string())?;
     if effects.is_empty() {
-        println!("no checks configured on {remote}");
+        println!("no effects configured on {remote}");
         return Ok(());
     }
     effects.sort_by(|a, b| a.name.cmp(&b.name));
@@ -992,7 +992,7 @@ fn effect_list(remote: &str) -> Result<(), String> {
 fn effect_remove(name: &str, remote: &str) -> Result<(), String> {
     let refname = git_effect::effect_ref(name);
     let expected =
-        sync(remote, &refname)?.ok_or_else(|| format!("no check named {name} on {remote}"))?;
+        sync(remote, &refname)?.ok_or_else(|| format!("no effect named {name} on {remote}"))?;
     push_delete(remote, &refname, &expected)?;
     println!("removed {name}");
     Ok(())
@@ -1008,7 +1008,7 @@ fn effect_remove(name: &str, remote: &str) -> Result<(), String> {
 /// ## Requirements
 ///
 /// @relation(cli.account-checks)
-fn add_check(
+fn effect_add(
     name: Option<String>,
     command: Option<String>,
     image: Option<String>,
@@ -1016,7 +1016,7 @@ fn add_check(
     toolchains: Vec<String>,
     remote: &str,
 ) -> Result<(), String> {
-    let name = interactive::text_or(name, "Check name")?;
+    let name = interactive::text_or(name, "Effect name")?;
     let command = interactive::optional_text_or(command, "Command (empty for a composite)")?;
     let depends = if depends.is_empty() {
         parse_names(interactive::optional_text_or(
@@ -1051,7 +1051,7 @@ fn add_check(
     let _ordered = git_effect::order(&effects)?;
     git_effect::store(&repo, &effect).map_err(|error| error.to_string())?;
     push_signed(remote, &refname, expected.as_deref())?;
-    println!("recorded check {name}");
+    println!("recorded effect {name}");
     Ok(())
 }
 
@@ -1517,7 +1517,7 @@ const LOGIN_NAMESPACE: &str = "git.ents.cloud";
 /// Sign in to `remote`'s server: fetch its one-time challenge, sign it locally
 /// with `key` (never handing the private key anywhere), and post the
 /// signature back — the same proof the browser login page collects by hand.
-/// The returned session token is stored locally so `checks_debug` can reuse
+/// The returned session token is stored locally so `effect_debug` can reuse
 /// it.
 ///
 /// ## Requirements
@@ -1542,14 +1542,14 @@ fn login(remote: &str, key: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
-/// Open an interactive, read-write shell in `remote`'s persistent checks
+/// Open an interactive, read-write shell in `remote`'s persistent effects
 /// Sprite, brokered by the server over a WebSocket using the session
 /// `login` stored.
 ///
 /// ## Requirements
 ///
 /// @relation(checks.debug)
-fn checks_debug(remote: &str) -> Result<(), String> {
+fn effect_debug(remote: &str) -> Result<(), String> {
     let (base, repo_path) = remote_http_base(remote)?;
     let host = host_of(&base)?;
     let token = load_session(&host)?

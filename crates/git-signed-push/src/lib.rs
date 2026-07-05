@@ -15,8 +15,14 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use git_ents_core::config;
-use git_member::members::{self, Member};
+use git_member::members::{self, Member, Provenance};
 use git_member::revocations;
+
+/// Authoring an effect schedules code execution, which needs more trust than
+/// an ordinary branch push — this admin-only rule is explicit and unaffected
+/// by `refs/meta/config`'s role rules, per `abstractions.adoc`'s "this rule
+/// must exist explicitly; it is not the default."
+const EFFECTS_NS_PREFIX: &str = "refs/meta/effects/";
 
 /// Verify the push git is about to apply, returning `Ok(())` to accept it or
 /// `Err(reason)` to reject it. The push certificate is read from the
@@ -66,6 +72,15 @@ pub fn pre_receive() -> Result<(), String> {
                 return Err(format!(
                     "{} (role {:?}) is not permitted to push to {ref_name:?}",
                     member.principal, member.role
+                ));
+            }
+            // @relation(checks.admin-only)
+            if ref_name.starts_with(EFFECTS_NS_PREFIX)
+                && member.provenance != Provenance::AdminRegistered
+            {
+                return Err(format!(
+                    "{} is not admin-registered and so cannot push to {ref_name:?}: authoring an effect requires an admin",
+                    member.principal
                 ));
             }
         }

@@ -890,7 +890,7 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 }
 
 /// The Checks tab. The effect set lives one ref per effect under
-/// `refs/meta/effects` (managed with `git ents checks`); each push queues them
+/// `refs/meta/effects` (managed with `git ents effect`); each push queues them
 /// and a worker runs them in a Sprite. "Checks on HEAD" mirrors a GitHub PR
 /// checks list — one row per configured effect, its latest status against the
 /// current commit, linked to its recorded terminal session when it has one;
@@ -925,7 +925,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
                 "Checks are configured on " code { "refs/meta/effects/<name>" }
-                " (" code { "git ents checks list" } ") and run in a Sprite after each push; "
+                " (" code { "git ents effect list" } ") and run in a Sprite after each push; "
                 "each run is recorded under " code { "refs/meta/results/<effect>/<commit>" } "."
             }
             div.card {
@@ -1253,7 +1253,7 @@ pub(super) async fn settings_page(
 
                 p.shell-note {
                     "Commands on " code { "refs/meta/effects/*" } " run against each push "
-                    "(" code { "git ents checks list" } ")."
+                    "(" code { "git ents effect list" } ")."
                 }
                 (component::card(&checks))
 

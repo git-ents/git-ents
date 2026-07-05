@@ -205,12 +205,17 @@ fn work_repo(base: &Path, signing_key: Option<&Path>) -> PathBuf {
 
 /// Attempt a push, returning whether it succeeded.
 fn push(work: &Path, server: &Path, signed: bool) -> bool {
+    push_ref(work, server, signed, "main:refs/heads/main")
+}
+
+/// Attempt a push of `refspec`, returning whether it succeeded.
+fn push_ref(work: &Path, server: &Path, signed: bool, refspec: &str) -> bool {
     let url = format!("file://{}", server.display());
     let mut args = vec!["push"];
     if signed {
         args.push("--signed");
     }
-    args.extend_from_slice(&[url.as_str(), "main:refs/heads/main"]);
+    args.extend_from_slice(&[url.as_str(), refspec]);
     git_env(work, "git", &args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -344,6 +349,51 @@ fn rejects_a_push_signed_by_a_revoked_key() {
     assert!(
         !push(&work, &server, true),
         "push signed by a revoked key was accepted"
+    );
+    std::fs::remove_dir_all(&base).ok();
+}
+
+// @relation(checks.admin-only, role=Verifies)
+#[test]
+fn rejects_a_push_to_effects_from_a_self_attested_member() {
+    // A self-attested (non-admin-registered) member can still sign an
+    // ordinary content push, but is refused for `refs/meta/effects/*`
+    // regardless of any role rule: authoring an effect schedules code
+    // execution, which the admin-only rule guards unconditionally.
+    let base = unique_dir("effects-admin");
+    let pubkey = keygen(&base, "id");
+    let server = server_repo(&base, &[]);
+
+    let mut keys = std::collections::BTreeMap::new();
+    keys.insert("key".to_owned(), std::fs::read_to_string(&pubkey).unwrap());
+    let member = git_member::members::Member {
+        principal: "self-attested".to_owned(),
+        valid_after: None,
+        valid_before: None,
+        trust: git_member::members::Trust::Keys(keys),
+        provenance: git_member::members::Provenance::SelfAttestedWeb,
+        account: None,
+        role: None,
+    };
+    git_member::members::store(&server, &member).unwrap();
+
+    let work = work_repo(&base, Some(&pubkey));
+    let tree = ok(&work, "git", &["write-tree"]);
+    let commit = ok(&work, "git", &["commit-tree", &tree, "-m", "effect"]);
+    ok(
+        &work,
+        "git",
+        &["update-ref", "refs/heads/effect-tmp", &commit],
+    );
+
+    assert!(
+        !push_ref(
+            &work,
+            &server,
+            true,
+            "refs/heads/effect-tmp:refs/meta/effects/demo",
+        ),
+        "self-attested member was allowed to push to refs/meta/effects/*"
     );
     std::fs::remove_dir_all(&base).ok();
 }

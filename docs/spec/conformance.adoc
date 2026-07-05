@@ -47,13 +47,15 @@ renames, or removes a requirement or its implementation.
 |`checks.worker` |`git-effect/src/engine.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`engine::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-effect`)_
 |`checks.sandbox` |`git-effect/src/engine.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
 |`checks.outcomes` |`git-effect/src/results.rs` (`Status`, `record`/`update_run`); `git-effect/src/engine.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`results::tests::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_recording`
-|`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`checks debug`) | _(requires a live Sprite; manually verified)_
+|`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`effect debug`) | _(requires a live Sprite; manually verified)_
+|`checks.admin-only` |`git-signed-push/src/lib.rs` (`pre_receive`, `EFFECTS_NS_PREFIX`) |`git-ents-server::pre_receive rejects_a_push_to_effects_from_a_self_attested_member`
 |`issues.ref` |`git-ents/src/issues.rs` (`Issue`, `State`) |`issues::store_then_load_round_trips_an_issue`
 |`issues.id` |`git-ents/src/issues.rs` (`new_id`, `promote`) |`issues::new_id_hashes_its_own_content_with_no_origin`, `promotion_assigns_a_number_and_advances_the_counter_without_renaming_the_ref`
 |`comments.ref` |`git-comment/src/lib.rs` (`Comment`, `COMMENTS_NS`, `new_id`) |`git-comment::store_then_load_round_trips_a_comment`, `loads_the_on_disk_comment_format`, `new_id_hashes_its_own_content_with_no_origin`
 |`comments.authorship` |`git-store/src/lib.rs` (`store_item_authored`, `provenance`); `git-comment/src/lib.rs` (`provenance`) |`git-store::provenance_recovers_the_creating_and_updating_authors`, `git-comment::provenance_comes_from_the_commits_not_the_document`
 |`comments.anchor` |`git-anchor/src/lib.rs` (`Anchor`, `capture`, `snippet`) |`git-anchor::capture_records_the_commit_and_blob_and_snippet_derives_the_text`, `capture_rejects_a_missing_path_and_an_oversized_range`
 |`comments.projection` |`git-anchor/src/lib.rs` (`project`, `Projection`) |`git-anchor::unchanged_file_projects_as_current`, `a_pure_rename_relocates_with_the_same_lines`, `an_edit_inside_the_range_is_outdated`, `a_deleted_file_projects_as_deleted`, `projection_works_backwards_onto_an_ancestor`
+|`anchor.reachability` |`git-store/src/lib.rs` (`store_with_parents`, `store_authored_with_parents`, `CHAIN_PARENT_HEADER`); `git-comment/src/lib.rs` (`store`) |`git-comment::a_stored_comment_carries_its_anchored_commit_as_a_second_parent`
 |`web.render-registry` |`git-ents-server/src/render.rs` (`to_html`/`to_text`, `mime_for_name`) | _(passthrough fallback exercised by web/CLI render paths)_
 |`web.server-rendered` |`git-ents-server/src/web/*.rs` (Askama/maud templates, no client JS required) | _(manual UI verification)_
 |`web.index` |`git-ents-server/src/web/mod.rs` (`index`) | _(manual UI verification)_

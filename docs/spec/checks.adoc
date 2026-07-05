@@ -33,6 +33,17 @@ one; the field is reserved in the format so honoring it later is not a data
 migration.
 --
 
+[role="requirement", id="checks.admin-only"]
+.Effect Definitions Are Admin-Only
+--
+`pre-receive` MUST reject a push to `refs/meta/effects/*` from a member
+whose provenance is not admin-registered, regardless of `refs/meta/config`'s
+role rules: authoring an effect schedules code execution, which needs more
+trust than an ordinary branch push, so this rule MUST be enforced
+explicitly rather than left to a role a repository may or may not have
+configured.
+--
+
 [role="requirement", id="checks.toolchains"]
 .Check Toolchains
 --
@@ -123,7 +134,7 @@ records on that recorded moment.
 .Sprite Debug Shell
 --
 A signed-in member MUST be able to open an interactive, read-write shell in
-a repository's checks Sprite (`git ents checks debug`), brokered by the
+a repository's effects Sprite (`git ents effect debug`), brokered by the
 server over a WebSocket at the reserved path `/_debug/<repo>`.
 The server holds the only Fly credential (`SPRITES_TOKEN`); a member MUST
 NOT need one of their own, and the broker MUST refuse the connection

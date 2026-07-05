@@ -1,7 +1,7 @@
 //! Prompting for `add` commands left with unset fields.
 //!
 //! An omitted field is filled interactively when the terminal supports it,
-//! so `git ents checks add` alone walks a user through every field; a script
+//! so `git ents effect add` alone walks a user through every field; a script
 //! or CI invocation without a TTY gets a clear error instead of a hang.
 
 use std::io::IsTerminal as _;
