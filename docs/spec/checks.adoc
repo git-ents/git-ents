@@ -12,8 +12,8 @@ ever blocks a push.
 The configured checks for a repository MUST be stored one ref per check at
 `refs/meta/effects/<name>`, each holding an optional shell command, an
 optional sandbox image, an optional list of dependencies (names of sibling
-checks that must pass first), and an optional list of toolchain names
-(<<checks.toolchains>>).
+checks that must pass first), an optional list of toolchain names
+(<<checks.toolchains>>), and an optional cache name (<<checks.cache>>).
 A check with no command is a composite: it runs nothing itself and derives
 its outcome from its dependencies alone.
 A check's definition living on a meta ref means a branch under check cannot
@@ -25,9 +25,9 @@ push, and the admin-only write rule can be stated as a single refname glob
 The dependency graph is fully static — no conditional edges, no runtime
 expansion — and MUST be validated when the set is written: a dependency
 naming no configured check, a duplicate or self edge, a check with neither
-a command nor dependencies, any dependency cycle, and a toolchain name that
-is not a valid ref-path segment MUST each be rejected before the set is
-stored.
+a command nor dependencies, any dependency cycle, and a toolchain or cache
+name that is not a valid ref-path segment MUST each be rejected before the
+set is stored.
 A check that sets an image MUST be rejected until the sandbox can honor
 one; the field is reserved in the format so honoring it later is not a data
 migration.
@@ -42,6 +42,25 @@ role rules: authoring an effect schedules code execution, which needs more
 trust than an ordinary branch push, so this rule MUST be enforced
 explicitly rather than left to a role a repository may or may not have
 configured.
+--
+
+[role="requirement", id="checks.cache"]
+.Effect Cache
+--
+An effect's definition MAY name a persisted cache: a directory restored into
+the sandbox at a fixed path before the command runs and snapshotted back to
+`refs/meta/cache/<name>` after, unlike a toolchain (<<checks.toolchains>>),
+which is immutable and extracted once. The worker MUST restore a named
+cache's most recent snapshot (creating an empty directory when none exists
+yet) before any effect naming it runs, and MUST snapshot the directory back
+after the command finishes, regardless of its outcome, so a partial cache
+from a failed run is still available to the next one.
+The command MUST be able to find the restored directory's path via the
+`EFFECT_CACHE_DIR` environment variable.
+Persisting the cache through `git-store` rather than relying solely on the
+Sprite's own persistent filesystem means the cache survives a Sprite reset
+or migration, and is auditable and portable like every other meta-ref
+document.
 --
 
 [role="requirement", id="checks.toolchains"]

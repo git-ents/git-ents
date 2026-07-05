@@ -223,6 +223,11 @@ enum EffectAction {
         /// before the command runs (repeatable).
         #[facet(args::named, args::label = "TOOLCHAIN", default)]
         toolchains: Vec<String>,
+        /// Persisted cache (`refs/meta/cache/<name>`) restored into the
+        /// sandbox before the command runs and snapshotted back after; the
+        /// command finds its path in `$EFFECT_CACHE_DIR`.
+        #[facet(args::named, default)]
+        cache: Option<String>,
     },
     /// Remove an effect from a remote's set and push the update.
     Remove {
@@ -483,7 +488,8 @@ fn run_effect(action: EffectAction, remote: &str) -> Result<(), String> {
             image,
             depends,
             toolchains,
-        } => effect_add(name, command, image, depends, toolchains, remote),
+            cache,
+        } => effect_add(name, command, image, depends, toolchains, cache, remote),
         EffectAction::Remove { name } => effect_remove(&name, remote),
         EffectAction::Debug => effect_debug(remote),
         EffectAction::Log => effect_log(remote),
@@ -1014,6 +1020,7 @@ fn effect_add(
     image: Option<String>,
     depends: Vec<String>,
     toolchains: Vec<String>,
+    cache: Option<String>,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Effect name")?;
@@ -1046,6 +1053,7 @@ fn effect_add(
         image,
         depends,
         toolchains,
+        cache,
     };
     effects.push(effect.clone());
     let _ordered = git_effect::order(&effects)?;
@@ -1660,6 +1668,25 @@ fn http_get(url: &str) -> Result<String, String> {
     } else {
         Err(text)
     }
+}
+
+/// GET `url`, returning the raw response bytes — [`http_get`]'s counterpart
+/// for a binary download (an archive, ...) rather than text.
+fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut response = ureq::get(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|error| format!("GET {url} failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("GET {url} returned {status}"));
+    }
+    response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|error| format!("could not read the response: {error}"))
 }
 
 /// POST an `application/x-www-form-urlencoded` `body` to `url`, returning the

@@ -52,6 +52,10 @@ struct EffectBody {
     /// activated on `PATH` before the command runs. Stored as `None` when
     /// empty, like `depends`.
     toolchains: Option<Vec<String>>,
+    /// Name of a persisted cache (`refs/meta/cache/<name>`) restored into the
+    /// sandbox before the command runs and snapshotted back after, or `None`
+    /// for an effect with no cache.
+    cache: Option<String>,
 }
 
 impl component::Collection for EffectBody {
@@ -77,6 +81,9 @@ pub struct Effect {
     pub depends: Vec<String>,
     /// Names of toolchains activated on `PATH` before the command runs.
     pub toolchains: Vec<String>,
+    /// Name of a persisted cache (`refs/meta/cache/<name>`) restored into the
+    /// sandbox before the command runs and snapshotted back after.
+    pub cache: Option<String>,
 }
 
 impl component::Component for Effect {
@@ -91,6 +98,7 @@ fn compose(name: String, body: EffectBody) -> Effect {
         image: body.image,
         depends: body.depends.unwrap_or_default(),
         toolchains: body.toolchains.unwrap_or_default(),
+        cache: body.cache,
     }
 }
 
@@ -108,6 +116,7 @@ fn decompose(effect: &Effect) -> EffectBody {
         } else {
             Some(effect.toolchains.clone())
         },
+        cache: effect.cache.clone(),
     }
 }
 
@@ -151,7 +160,8 @@ pub fn store(repo: &Path, effect: &Effect) -> Result<(), git_store::Error> {
 /// now so supporting it later is not a data migration. Whether a named
 /// toolchain actually exists is checked server-side at job time, not here —
 /// unlike `depends`, `toolchains` cross-references a different ref
-/// namespace this function has no set of configured names to check against.
+/// namespace this function has no set of configured names to check against. A
+/// `cache` naming an invalid ref-path segment is rejected the same way.
 ///
 /// ## Requirements
 ///
@@ -184,6 +194,14 @@ pub fn order(effects: &[Effect]) -> Result<Vec<&Effect>, String> {
                     effect.name
                 ));
             }
+        }
+        if let Some(cache) = &effect.cache
+            && !git_store::ref_segment_ok(cache)
+        {
+            return Err(format!(
+                "effect {} names an invalid cache {cache:?}",
+                effect.name
+            ));
         }
         let mut seen = std::collections::BTreeSet::new();
         for dep in &effect.depends {
@@ -259,6 +277,7 @@ mod tests {
             image: None,
             depends: Vec::new(),
             toolchains: Vec::new(),
+            cache: None,
         }
     }
 
@@ -269,6 +288,7 @@ mod tests {
             image: None,
             depends: depends.iter().map(|dep| (*dep).to_owned()).collect(),
             toolchains: Vec::new(),
+            cache: None,
         }
     }
 
@@ -449,6 +469,30 @@ mod tests {
     fn store_then_load_round_trips_toolchains() {
         let repo = unique_repo();
         let written = toolchained("build", "make", &["gcc-12", "cmake"]);
+        store(&repo, &written).unwrap();
+        assert_eq!(load(&repo, "build").unwrap(), Some(written));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // @relation(checks.cache, role=Verifies)
+    #[test]
+    fn order_rejects_an_invalid_cache_name() {
+        let effects = vec![Effect {
+            cache: Some("not/valid".to_owned()),
+            ..effect("build", "cargo build")
+        }];
+        let err = order(&effects).unwrap_err();
+        assert!(err.contains("invalid cache"), "unexpected error: {err}");
+    }
+
+    // @relation(checks.cache, role=Verifies)
+    #[test]
+    fn store_then_load_round_trips_cache() {
+        let repo = unique_repo();
+        let written = Effect {
+            cache: Some("sccache".to_owned()),
+            ..effect("build", "cargo build --workspace")
+        };
         store(&repo, &written).unwrap();
         assert_eq!(load(&repo, "build").unwrap(), Some(written));
         let _ = std::fs::remove_dir_all(&repo);

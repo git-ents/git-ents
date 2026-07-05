@@ -34,6 +34,7 @@ use gix_hash::ObjectId;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::sync::Mutex;
 
+use crate::cache;
 use crate::definition::{self, Effect};
 use crate::results::{self, RunOutcome, Status};
 
@@ -314,6 +315,19 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
         }
     };
 
+    let mut cache_names: Vec<&str> = runnable
+        .iter()
+        .filter_map(|effect| effect.cache.as_deref())
+        .collect();
+    cache_names.sort_unstable();
+    cache_names.dedup();
+    for name in cache_names {
+        if let Err(e) = cache::restore(&job.repo, &sprite, name) {
+            finalize_error(&job.repo, job.new, &mut outcomes);
+            return Err(e);
+        }
+    }
+
     for index in ordered {
         let Some(effect) = runnable.get(index) else {
             continue;
@@ -333,10 +347,16 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
         match &effect.command {
             Some(command) if all_pass => {
                 let command = activate(command, &effect.toolchains, &toolchain_dirs);
+                let command = with_cache_env(&command, effect.cache.as_deref());
                 let key: LiveKey = (job.repo.clone(), job.new, effect.name.clone());
                 let buffer = live_start(live, key.clone());
                 let result = run_one(&sprite, &effect.name, &command, &buffer);
                 live_finish(live, &key);
+                if let Some(name) = &effect.cache
+                    && let Err(e) = cache::snapshot(&job.repo, &sprite, name)
+                {
+                    eprintln!("effects: could not snapshot cache {name}: {e}");
+                }
                 if let Some(outcome) = outcomes.get_mut(index) {
                     outcome.status = result.status;
                     outcome.duration_secs = Some(result.duration_secs);
@@ -677,6 +697,24 @@ fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>
         .collect::<Vec<_>>()
         .join(":");
     format!("export PATH={path}:$PATH; {command}")
+}
+
+/// Prefix `command` with an `EFFECT_CACHE_DIR` export pointing at `cache`'s
+/// restored directory (see [`cache::restore`]), so the command can point a
+/// tool (`sccache`, ...) at it; an effect with no cache is returned
+/// unchanged.
+///
+/// ## Requirements
+///
+/// @relation(checks.cache)
+fn with_cache_env(command: &str, cache: Option<&str>) -> String {
+    match cache {
+        Some(name) => format!(
+            "export EFFECT_CACHE_DIR={}; {command}",
+            cache::cache_dir(name)
+        ),
+        None => command.to_owned(),
+    }
 }
 
 /// Extract the toolchain tree `tree` into the Sprite at
@@ -1042,6 +1080,21 @@ mod tests {
         assert_eq!(
             activate("make", &toolchains, &dirs),
             "export PATH=:$PATH; make"
+        );
+    }
+
+    // @relation(checks.cache, role=Verifies)
+    #[test]
+    fn with_cache_env_leaves_a_cache_free_command_unchanged() {
+        assert_eq!(with_cache_env("cargo build", None), "cargo build");
+    }
+
+    // @relation(checks.cache, role=Verifies)
+    #[test]
+    fn with_cache_env_exports_the_restored_directory() {
+        assert_eq!(
+            with_cache_env("cargo build", Some("sccache")),
+            "export EFFECT_CACHE_DIR=/cache/sccache; cargo build"
         );
     }
 

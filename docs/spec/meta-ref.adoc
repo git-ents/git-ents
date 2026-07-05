@@ -60,7 +60,8 @@ Key strategy::
   `revoked`, `issue-number`): `Store::load`/`store`.
   A *named collection* is one-ref-per-item under a namespace prefix
   (`member/<username>`, `toolchains/<name>`, `effects/<name>`,
-  `results/<effect>/<short-oid>`) or a scalar-keyed map on a single ref
+  `results/<effect>/<short-oid>`, `cache/<name>`) or a scalar-keyed map on a
+  single ref
   (`revoked/<fingerprint>`): `Store::load_item`/`store_item`,
   `load_map`/`store_map`.
   A *content-addressed* collection is keyed by the hash of its own content

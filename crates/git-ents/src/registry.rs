@@ -59,13 +59,23 @@ pub struct RecipeInfo {
 /// `resolve`'s own error message — a plain list rather than a trait registry,
 /// since each recipe is one function with its own selector semantics, not a
 /// uniform interface worth abstracting over for a list of one.
-pub const RECIPES: &[RecipeInfo] = &[RecipeInfo {
-    name: "rustup",
-    spec: "a channel or version, e.g. stable, nightly, 1.75.0",
-    summary: "Resolves a rustup-managed toolchain via `rustc +<spec> -vV`; \
-              by default points at rust-lang's own hosted, hash-pinned \
-              component archives instead of importing local bytes.",
-}];
+pub const RECIPES: &[RecipeInfo] = &[
+    RecipeInfo {
+        name: "rustup",
+        spec: "a channel or version, e.g. stable, nightly, 1.75.0",
+        summary: "Resolves a rustup-managed toolchain via `rustc +<spec> -vV`; \
+                  by default points at rust-lang's own hosted, hash-pinned \
+                  component archives instead of importing local bytes.",
+    },
+    RecipeInfo {
+        name: "sccache",
+        spec: "a mozilla/sccache release tag, e.g. v0.8.2, or empty for latest",
+        summary: "Downloads a prebuilt sccache release for this machine's \
+                  platform from GitHub and imports it directly (always \
+                  embedded — the binary is small and GitHub publishes no \
+                  hash manifest to pin a hosted download against).",
+    },
+];
 
 /// Resolve `recipe` against `spec` (a recipe-specific selector, e.g. a
 /// rustup toolchain name). See [`RECIPES`] for what's known.
@@ -81,6 +91,7 @@ pub const RECIPES: &[RecipeInfo] = &[RecipeInfo {
 pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String> {
     match recipe {
         "rustup" => rustup(spec, embed),
+        "sccache" => sccache(spec),
         other => Err(format!(
             "unknown toolchain recipe {other:?} (known: {})",
             RECIPES
@@ -170,6 +181,115 @@ fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
         platform,
         _staging: staging,
     })
+}
+
+/// Resolve a prebuilt `sccache` release named `spec` (a GitHub release tag,
+/// e.g. `v0.8.2`), or the latest release when `spec` is empty, from
+/// `mozilla/sccache`'s GitHub releases — the archive matching this machine's
+/// own OS/architecture, the same "what's already usable here" convention
+/// [`rustup`] follows via its local `rustc`.
+///
+/// Unlike `rustup`, GitHub publishes no manifest of hashes alongside a
+/// release to pin a hosted download against, and the archive is a single
+/// ~15 MB binary, so this recipe always imports it directly (`Bin::Dir`)
+/// rather than offering [`Bin::Components`] — `embed` has nothing to toggle
+/// here.
+///
+/// ## Requirements
+///
+/// @relation(cli.toolchains)
+fn sccache(spec: &str) -> Result<Resolved, String> {
+    let tag = if spec.is_empty() {
+        latest_sccache_tag()?
+    } else {
+        spec.to_owned()
+    };
+    let version = tag.strip_prefix('v').unwrap_or(&tag).to_owned();
+    let target = sccache_target()?;
+    let url = format!(
+        "https://github.com/mozilla/sccache/releases/download/{tag}/sccache-{tag}-{target}.tar.gz"
+    );
+    let bytes = crate::http_get_bytes(&url)?;
+
+    let staging = tempfile::tempdir()
+        .map_err(|error| format!("could not create a staging directory: {error}"))?;
+    stage_sccache(&bytes, &tag, target, staging.path())?;
+
+    Ok(Resolved {
+        bin: Bin::Dir(staging.path().to_owned()),
+        src: None,
+        license: "MPL-2.0".to_owned(),
+        version,
+        platform: target.to_owned(),
+        _staging: Some(staging),
+    })
+}
+
+/// The latest `mozilla/sccache` release's tag name, from GitHub's "latest
+/// release" API.
+fn latest_sccache_tag() -> Result<String, String> {
+    let body = crate::http_get("https://api.github.com/repos/mozilla/sccache/releases/latest")?;
+    json_string_field(&body, "tag_name")
+        .ok_or_else(|| "GitHub's latest sccache release response carried no tag_name".to_owned())
+}
+
+/// Extract `"<key>": "value"` from a flat JSON response — a hand-rolled
+/// reader for the one field this recipe needs from GitHub's release API,
+/// rather than a full JSON parser for a format this is the only caller of.
+fn json_string_field(body: &str, key: &str) -> Option<String> {
+    let prefix = format!("\"{key}\": \"");
+    let rest = body.split_once(&prefix)?.1;
+    let end = rest.find('"')?;
+    rest.get(..end).map(str::to_owned)
+}
+
+/// This machine's OS/architecture as an `mozilla/sccache` release asset
+/// name's platform segment (e.g. `x86_64-unknown-linux-musl`).
+fn sccache_target() -> Result<&'static str, String> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
+        ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+        (os, arch) => Err(format!(
+            "the sccache recipe does not know a release asset for {os}/{arch}"
+        )),
+    }
+}
+
+/// Unpack `bytes` (an `sccache-<tag>-<target>.tar.gz` release archive) and
+/// copy its `sccache` binary to the top level of `staging`, executable —
+/// where `git-toolchain`'s `Bin::Embedded` extraction expects an embedded
+/// toolchain's binaries to live.
+fn stage_sccache(bytes: &[u8], tag: &str, target: &str, staging: &Path) -> Result<(), String> {
+    let scratch =
+        tempfile::tempdir().map_err(|error| format!("could not create a temp dir: {error}"))?;
+    let archive_path = scratch.path().join("sccache.tar.gz");
+    fs::write(&archive_path, bytes)
+        .map_err(|error| format!("could not write the downloaded archive: {error}"))?;
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(scratch.path())
+        .status()
+        .map_err(|error| format!("could not run tar: {error}"))?;
+    if !status.success() {
+        return Err("could not extract the sccache archive".to_owned());
+    }
+    let binary = scratch
+        .path()
+        .join(format!("sccache-{tag}-{target}"))
+        .join("sccache");
+    let dest = staging.join("sccache");
+    fs::copy(&binary, &dest)
+        .map_err(|error| format!("could not copy {}: {error}", binary.display()))?;
+    let mut perms = fs::metadata(&dest)
+        .map_err(|error| format!("could not read {}: {error}", dest.display()))?
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&dest, perms)
+        .map_err(|error| format!("could not set permissions on {}: {error}", dest.display()))
 }
 
 /// The three components of rust-lang's channel manifest that together make

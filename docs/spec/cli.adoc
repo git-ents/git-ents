@@ -66,7 +66,9 @@ confirmation, since it can lock the operator out of the remote.
 (<<account.ref>>) and print the account's genesis identity
 (<<account.genesis>>).
 `git ents effect` MUST provide `list`, `add`, `remove`, `debug`, and `log`
-over the `refs/meta/effects/<name>` set (<<checks.definition>>).
+over the `refs/meta/effects/<name>` set (<<checks.definition>>). `add` MUST
+accept a `--cache <name>` naming a persisted cache (<<checks.cache>>) for
+the effect to restore before, and snapshot after, its command runs.
 --
 
 [role="requirement", id="cli.toolchains"]
@@ -80,14 +82,16 @@ The CLI MUST provide, under `git ents toolchain`:
   `bin` MUST be non-empty; `license` MUST be a valid SPDX expression;
   `version` MUST be valid semver; `platform` MUST be a valid target triple.
 * `import --from <recipe>` — derive the fields from a local toolchain
-  install via a named recipe (currently only `rustup`, selected further by
-  `--spec <name>`, e.g. `stable`); explicitly passed fields override the
-  recipe.
+  install, or a hosted release, via a named recipe (`rustup` or `sccache`,
+  selected further by `--spec <name>`, e.g. `stable` for `rustup`, a release
+  tag for `sccache`); explicitly passed fields override the recipe.
   A recipe capable of pointing at a distributor's own hosted, hash-pinned
   archives (rust-lang's dist tarballs, for `rustup`) records those as the
   toolchain's `bin` by default, sparing the repository the bytes; `--embed`
   forces importing the local install's actual `bin` bytes, as `import`
-  without `--from` always does.
+  without `--from` always does. `sccache` has no hash manifest to pin a
+  hosted download against, so it always imports the downloaded bytes
+  directly regardless of `--embed`.
 * `list` — render every toolchain on a remote with its `bin` (a tree id,
   or a component count when hosted externally), version, platform, and
   license.
