@@ -1455,6 +1455,7 @@ dependencies = [
  "facet",
  "git-anchor",
  "git-store",
+ "gix",
 ]
 
 [[package]]

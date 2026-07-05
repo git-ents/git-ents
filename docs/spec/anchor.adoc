@@ -32,3 +32,11 @@ forwards, backwards, or across unrelated history.
 An outdated or deleted projection MUST NOT lose the comment: the original
 anchor remains displayable.
 --
+
+[role="requirement", id="anchor.reachability"]
+.Anchor Reachability
+--
+The meta-ref commit storing an anchor MUST carry the anchored commit as an
+extra parent, so the anchored commit is reachable from `refs/meta/*` and
+survives force-push, branch deletion, and gc without any gc special-casing.
+--

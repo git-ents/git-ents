@@ -9,6 +9,7 @@ license.workspace = true
 facet = { workspace = true }
 git-anchor = { workspace = true }
 git-store = { workspace = true }
+gix = { workspace = true }
 
 [dev-dependencies]
 git-store = { workspace = true, features = ["test-support"] }

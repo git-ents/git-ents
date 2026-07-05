@@ -27,6 +27,7 @@ use std::path::Path;
 use facet::Facet;
 use git_anchor::{Anchor, Projection};
 use git_store::Provenance;
+use gix::ObjectId;
 
 // @relation(comments.ref)
 /// The namespace under which comments are recorded: one ref,
@@ -66,23 +67,29 @@ pub fn load(repo: &Path, id: &str) -> Result<Option<Comment>, git_store::Error> 
 
 /// Write `comment` to `refs/meta/comments/<id>` in `repo` as a new commit
 /// authored by `author` (a `(name, email)` pair), so the ref's commit chain is
-/// the comment's edit history and carries its authorship.
+/// the comment's edit history and carries its authorship. The commit also
+/// carries the anchored commit as a second parent, so the commit the comment
+/// annotates stays reachable — and so cannot be garbage-collected — for as
+/// long as the comment's ref exists.
 ///
 /// ## Requirements
 ///
-/// @relation(comments.ref, comments.authorship)
+/// @relation(comments.ref, comments.authorship, anchor.reachability)
 pub fn store(
     repo: &Path,
     id: &str,
     comment: &Comment,
     author: (&str, &str),
 ) -> Result<(), git_store::Error> {
-    git_store::Store::open(repo)?.store_item_authored(
+    let anchored = ObjectId::try_from(&comment.anchor.commit)
+        .map_err(|error| git_store::Error::Invalid(error.to_string()))?;
+    git_store::Store::open(repo)?.store_item_authored_with_parents(
         COMMENTS_NS,
         id,
         comment,
         "Update comment",
         author,
+        &[anchored],
     )
 }
 
@@ -208,6 +215,42 @@ mod tests {
         assert_eq!(provenance.created.email, "alice@example.com");
         assert_eq!(provenance.updated.name, "bob");
         assert!(provenance.created.seconds > 0);
+    }
+
+    // @relation(anchor.reachability, role=Verifies)
+    #[test]
+    fn a_stored_comment_carries_its_anchored_commit_as_a_second_parent() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), "one\ntwo\nthree\n").unwrap();
+        commit_all(dir.path(), "one");
+
+        let anchor = git_anchor::capture(
+            dir.path(),
+            "HEAD",
+            "file.txt",
+            Some(LineRange { start: 2, end: 2 }),
+        )
+        .unwrap();
+        let anchored_commit = anchor.commit.to_string();
+        let written = Comment {
+            body: "Why two?".to_owned(),
+            anchor,
+            issue: None,
+        };
+        let id = new_id(None, &written).unwrap();
+        store(dir.path(), &id, &written, AUTHOR).unwrap();
+
+        let is_ancestor = Command::new("git")
+            .current_dir(dir.path())
+            .args([
+                "merge-base",
+                "--is-ancestor",
+                &anchored_commit,
+                &format!("{COMMENTS_NS}/{id}"),
+            ])
+            .status()
+            .unwrap();
+        assert!(is_ancestor.success());
     }
 
     // @relation(comments.anchor, comments.projection, role=Verifies)
