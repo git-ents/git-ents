@@ -15,6 +15,25 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+
+    // With zero CLI tokens (how Fly.io always runs this image — every setting
+    // arrives via env vars, which `git_ents_server::run` reads itself),
+    // `#[facet(flatten)]`'s all-`Option` `args` never gets a single populated
+    // key, and figue reports the whole flattened group as a missing field
+    // rather than an all-`None` value. Build it directly instead of parsing.
+    if raw_args.is_empty() {
+        return git_ents_server::run(git_ents_server::Args {
+            command: None,
+            port: None,
+            data_dir: None,
+            cert_nonce_seed: None,
+            hooks_dir: None,
+            web_signing_key: None,
+            checks_queue: None,
+        });
+    }
+
     let config = match figue::builder::<Cli>() {
         Ok(builder) => builder,
         Err(error) => {
@@ -22,7 +41,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    .cli(|cli| cli.args(std::env::args().skip(1)))
+    .cli(|cli| cli.args(raw_args))
     .help(|help| {
         help.program_name("git-ents-server")
             .version(env!("CARGO_PKG_VERSION"))
