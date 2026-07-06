@@ -733,6 +733,12 @@ fn with_cache_env(command: &str, cache: Option<&str>) -> String {
 /// so an already-cached toolchain never streams its (potentially large)
 /// contents through a pipe the Sprite has no reason to read.
 ///
+/// Extraction happens into a sibling `.tmp` directory and only lands at `dir`
+/// via a final `mv`, so a transient failure partway through (e.g. a truncated
+/// stream) never leaves `dir` existing-but-incomplete: the next push's cache
+/// check sees no directory at all and retries, instead of trusting a half
+/// extraction forever.
+///
 /// ## Requirements
 ///
 /// @relation(checks.sandbox)
@@ -764,7 +770,10 @@ fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), Strin
         return Err(format!("git archive failed for toolchain {tree}"));
     }
 
-    let script = format!("mkdir -p {dir} && tar -x -C {dir}");
+    let tmp = format!("{dir}.tmp");
+    let script = format!(
+        "rm -rf {tmp} && mkdir -p {tmp} && tar -x -C {tmp} && rm -rf {dir} && mv {tmp} {dir}"
+    );
     let mut child = Command::new("sprite")
         .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
         .stdin(Stdio::piped())
@@ -843,16 +852,24 @@ fn sync_downloaded_toolchain(
 /// construction: `git_toolchain::import_downloaded` refuses a component
 /// whose fields could escape the single quotes.
 ///
+/// Every component extracts into a sibling `.tmp` directory first; `dir`
+/// itself is only populated by the final `mv`, once every component has
+/// fetched, verified, and extracted successfully. A mid-script failure (a
+/// flaky `curl`, a hash mismatch) then leaves no directory at `dir` at all,
+/// so [`sync_downloaded_toolchain`]'s cache check retries on the next push
+/// instead of reusing a partially-extracted toolchain forever.
+///
 /// ## Requirements
 ///
 /// @relation(checks.sandbox)
 fn downloaded_script(dir: &str, components: &[git_toolchain::Component]) -> String {
-    let mut script = format!("mkdir -p {dir}");
+    let tmp = format!("{dir}.tmp");
+    let mut script = format!("rm -rf {tmp} && mkdir -p {tmp}");
     for component in components {
         let dest = if component.dest.is_empty() {
-            dir.to_owned()
+            tmp.clone()
         } else {
-            format!("{dir}/{}", component.dest)
+            format!("{tmp}/{}", component.dest)
         };
         script.push_str(&format!(
             " && mkdir -p {dest} \
@@ -865,6 +882,7 @@ fn downloaded_script(dir: &str, components: &[git_toolchain::Component]) -> Stri
             strip = component.strip,
         ));
     }
+    script.push_str(&format!(" && rm -rf {dir} && mv {tmp} {dir}"));
     script
 }
 
@@ -1135,17 +1153,20 @@ mod tests {
         ];
         assert_eq!(
             downloaded_script("/toolchains/key", &components),
-            "mkdir -p /toolchains/key \
-             && mkdir -p /toolchains/key \
+            "rm -rf /toolchains/key.tmp \
+             && mkdir -p /toolchains/key.tmp \
+             && mkdir -p /toolchains/key.tmp \
              && curl -fsSL 'https://static.rust-lang.org/dist/rustc.tar.gz' -o /tmp/component.archive \
              && [ \"$(sha256sum /tmp/component.archive | cut -d' ' -f1)\" = 'aaa' ] \
-             && tar -x --strip-components=2 -C /toolchains/key -f /tmp/component.archive \
+             && tar -x --strip-components=2 -C /toolchains/key.tmp -f /tmp/component.archive \
              && rm -f /tmp/component.archive \
-             && mkdir -p /toolchains/key/bin \
+             && mkdir -p /toolchains/key.tmp/bin \
              && curl -fsSL 'https://example.com/flat.tar.xz' -o /tmp/component.archive \
              && [ \"$(sha256sum /tmp/component.archive | cut -d' ' -f1)\" = 'bbb' ] \
-             && tar -x --strip-components=1 -C /toolchains/key/bin -f /tmp/component.archive \
-             && rm -f /tmp/component.archive"
+             && tar -x --strip-components=1 -C /toolchains/key.tmp/bin -f /tmp/component.archive \
+             && rm -f /tmp/component.archive \
+             && rm -rf /toolchains/key \
+             && mv /toolchains/key.tmp /toolchains/key"
         );
     }
 
