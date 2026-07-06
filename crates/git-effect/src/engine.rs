@@ -36,6 +36,8 @@ use tokio::sync::Mutex;
 
 use crate::cache;
 use crate::definition::{self, Effect};
+use crate::docker;
+use crate::local;
 use crate::results::{self, RunOutcome, Status};
 
 /// Where the pushed tree is unpacked inside the Sprite.
@@ -190,8 +192,8 @@ fn statuses(effects: &[Effect], status: Status) -> Vec<RunOutcome> {
 ///
 /// ## Requirements
 ///
-/// @relation(checks.worker, nonfunctional.concurrency)
-pub async fn worker(queue: PathBuf, live: LiveRegistry) {
+/// @relation(checks.worker, nonfunctional.concurrency, checks.sandbox)
+pub async fn worker(queue: PathBuf, live: LiveRegistry, kind: BackendKind) {
     if let Err(e) = std::fs::create_dir_all(&queue) {
         eprintln!("effects: could not create queue directory {queue:?}: {e}");
         return;
@@ -209,12 +211,61 @@ pub async fn worker(queue: PathBuf, live: LiveRegistry) {
             }
             let inflight = Arc::clone(&inflight);
             let live = live.clone();
-            let handle = tokio::task::spawn_blocking(move || drain_repo(&jobs, &live));
+            let handle = tokio::task::spawn_blocking(move || drain_repo(&jobs, &live, kind));
             tokio::spawn(async move {
                 let _done = handle.await;
                 inflight.lock().await.remove(&repo);
             });
         }
+    }
+}
+
+/// Which sandbox a job's effects run in.
+///
+/// [`Sprite`](BackendKind::Sprite) is the hosted backend, driven through the
+/// `sprite` CLI. [`Docker`](BackendKind::Docker) is the local default (`git
+/// effect run`, and `git ents serve`'s own worker): a throwaway container per
+/// effect, with toolchains materialized on the host and bind-mounted in — see
+/// [`crate::local`] and [`crate::docker`]. [`Host`](BackendKind::Host) is
+/// `--unsandboxed`: the command runs directly on the machine running the
+/// worker, no isolation at all.
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    /// The hosted Fly.io Sprite backend.
+    Sprite,
+    /// The local Docker backend.
+    Docker,
+    /// Host-direct execution (`--unsandboxed`), no sandbox at all.
+    Host,
+}
+
+/// The backend `git ents serve`/`git-ents-server` fall back to when not told
+/// otherwise: [`BackendKind::Sprite`] when `SPRITES_TOKEN` is set in the
+/// environment — the hosted deployment's own signal that a Sprite is
+/// configured (see [`ensure_auth`]) — [`BackendKind::Docker`] otherwise. This
+/// is exactly the Deployment table's split: hosted mode always carries
+/// `SPRITES_TOKEN`, local `git ents serve` never does.
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+#[must_use]
+pub fn default_backend() -> BackendKind {
+    backend_for_token(std::env::var("SPRITES_TOKEN").ok().as_deref())
+}
+
+/// [`default_backend`]'s pure decision, taking `SPRITES_TOKEN`'s value
+/// directly rather than reading the environment — the part worth unit
+/// testing without mutating process-global state.
+fn backend_for_token(sprites_token: Option<&str>) -> BackendKind {
+    if sprites_token.is_some() {
+        BackendKind::Sprite
+    } else {
+        BackendKind::Docker
     }
 }
 
@@ -246,34 +297,72 @@ fn pending_jobs(queue: &Path) -> HashMap<PathBuf, Vec<(PathBuf, Job)>> {
 
 /// Drain one repository's queued jobs in order, deleting each job file after it
 /// is handled (whether it ran cleanly or failed) so it is never retried.
-fn drain_repo(jobs: &[(PathBuf, Job)], live: &LiveRegistry) {
+fn drain_repo(jobs: &[(PathBuf, Job)], live: &LiveRegistry, kind: BackendKind) {
     for (path, job) in jobs {
-        if let Err(e) = process_job(job, live) {
+        if let Err(e) = process_job(job, live, kind) {
             eprintln!("effects: {e}");
         }
         let _removed = std::fs::remove_file(path);
     }
 }
 
-/// Run the effects for one queued push in its repository's Sprite, advancing
-/// the recorded run as it goes: `running` while the Sprite is prepared, then
-/// each effect flipped to its result as it finishes. Effects settle in the
-/// dependency order `definition::order` fixed at write time: an effect whose
-/// dependency did not pass is recorded `skipped` without touching the Sprite,
-/// and a composite (no command) derives its status from its dependencies
-/// alone. An infra failure (an unreachable Sprite, a tree that will not sync,
-/// an effect set that fails re-validation) finalizes the run as `error` rather
-/// than leaving it stuck at `running`, then returns `Err`. Returns `Ok` even
-/// when an effect fails — a failing effect is a recorded result, not an error.
+/// Run one queued job's effects in `kind`'s backend, discarding the outcomes
+/// (already recorded — see [`run_all`]) since nothing else needs them here.
 ///
 /// ## Requirements
 ///
 /// @relation(checks.worker)
-fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
+fn process_job(job: &Job, live: &LiveRegistry, kind: BackendKind) -> Result<(), String> {
+    run_all(&job.repo, job.new, &job.ref_name, kind, live)?;
+    Ok(())
+}
+
+/// Run every configured effect in `repo` against `at` outside the queue —
+/// `git effect run`'s local execution path. Identical toolchain
+/// materialization and sandbox path to a push-triggered run (see
+/// [`run_all`]); only the queue is skipped, exactly as the porcelain
+/// promises. `at` is a full hex commit id, already resolved by the caller.
+///
+/// ## Requirements
+///
+/// @relation(checks.worker, cli.account-checks)
+pub fn run_effect_at(
+    repo: &Path,
+    at: &str,
+    kind: BackendKind,
+    live: &LiveRegistry,
+) -> Result<Vec<RunOutcome>, String> {
+    let oid = ObjectId::from_hex(at.trim().as_bytes())
+        .map_err(|e| format!("{at:?} is not a valid commit id: {e}"))?;
+    run_all(repo, oid, "<local run>", kind, live)
+}
+
+/// Run every effect for `new` in `repo`'s given backend, advancing the
+/// recorded run as it goes: `running` while the sandbox is prepared, then
+/// each effect flipped to its result as it finishes. Effects settle in the
+/// dependency order `definition::order` fixed at write time: an effect whose
+/// dependency did not pass is recorded `skipped` without touching the
+/// sandbox, and a composite (no command) derives its status from its
+/// dependencies alone. An infra failure (an unreachable sandbox, a tree that
+/// will not sync, an effect set that fails re-validation) finalizes the run
+/// as `error` rather than leaving it stuck at `running`, then returns `Err`.
+/// Returns the settled outcomes on success — even one that includes a
+/// failing effect, which is a recorded result, not an error.
+///
+/// ## Requirements
+///
+/// @relation(checks.worker, checks.sandbox)
+fn run_all(
+    repo: &Path,
+    new: ObjectId,
+    ref_name: &str,
+    kind: BackendKind,
+    live: &LiveRegistry,
+) -> Result<Vec<RunOutcome>, String> {
     let runnable =
-        definition::load_all(&job.repo).map_err(|e| format!("could not read effects: {e}"))?;
+        definition::load_all(repo).map_err(|e| format!("could not read effects: {e}"))?;
     if runnable.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let mut outcomes = statuses(&runnable, Status::Running);
@@ -286,31 +375,38 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
             .filter_map(|effect| runnable.iter().position(|c| c.name == effect.name))
             .collect(),
         Err(e) => {
-            finalize_error(&job.repo, job.new, &mut outcomes);
+            finalize_error(repo, new, &mut outcomes);
             return Err(format!("invalid effect set: {e}"));
         }
     };
-    let sprite = sprite_name(&job.repo);
-    if let Err(e) = ensure_auth().and_then(|()| ensure_sprite(&sprite)) {
-        finalize_error(&job.repo, job.new, &mut outcomes);
+
+    let backend = match Backend::new(kind, repo) {
+        Ok(backend) => backend,
+        Err(e) => {
+            finalize_error(repo, new, &mut outcomes);
+            return Err(e);
+        }
+    };
+    if let Err(e) = backend.ensure() {
+        finalize_error(repo, new, &mut outcomes);
         return Err(e);
     }
 
     eprintln!(
         "effects: running {} effect(s) on {}",
         runnable.len(),
-        job.ref_name
+        ref_name
     );
-    advance(&job.repo, job.new, &outcomes);
-    if let Err(e) = sync_tree(&job.repo, &sprite, job.new) {
-        finalize_error(&job.repo, job.new, &mut outcomes);
+    advance(repo, new, &outcomes);
+    if let Err(e) = backend.sync_tree(repo, new) {
+        finalize_error(repo, new, &mut outcomes);
         return Err(e);
     }
 
-    let toolchain_dirs = match resolve_toolchains(&job.repo, &sprite, &runnable) {
+    let toolchain_dirs = match backend.resolve_toolchains(repo, &runnable) {
         Ok(dirs) => dirs,
         Err(e) => {
-            finalize_error(&job.repo, job.new, &mut outcomes);
+            finalize_error(repo, new, &mut outcomes);
             return Err(e);
         }
     };
@@ -322,8 +418,8 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
     cache_names.sort_unstable();
     cache_names.dedup();
     for name in cache_names {
-        if let Err(e) = cache::restore(&job.repo, &sprite, name) {
-            finalize_error(&job.repo, job.new, &mut outcomes);
+        if let Err(e) = backend.restore_cache(repo, name) {
+            finalize_error(repo, new, &mut outcomes);
             return Err(e);
         }
     }
@@ -347,13 +443,17 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
         match &effect.command {
             Some(command) if all_pass => {
                 let command = activate(command, &effect.toolchains, &toolchain_dirs);
-                let command = with_cache_env(&command, effect.cache.as_deref());
-                let key: LiveKey = (job.repo.clone(), job.new, effect.name.clone());
+                let cache_dir = effect
+                    .cache
+                    .as_deref()
+                    .map(|name| backend.cache_dir_for(name));
+                let command = with_cache_env(&command, cache_dir.as_deref());
+                let key: LiveKey = (repo.to_path_buf(), new, effect.name.clone());
                 let buffer = live_start(live, key.clone());
-                let result = run_one(&sprite, &effect.name, &command, &buffer);
+                let result = backend.run_one(&effect.name, &command, &buffer);
                 live_finish(live, &key);
                 if let Some(name) = &effect.cache
-                    && let Err(e) = cache::snapshot(&job.repo, &sprite, name)
+                    && let Err(e) = backend.snapshot_cache(repo, name)
                 {
                     eprintln!("effects: could not snapshot cache {name}: {e}");
                 }
@@ -382,9 +482,116 @@ fn process_job(job: &Job, live: &LiveRegistry) -> Result<(), String> {
                 }
             }
         }
-        advance(&job.repo, job.new, &outcomes);
+        advance(repo, new, &outcomes);
     }
-    Ok(())
+    Ok(outcomes)
+}
+
+/// One ready-to-use sandbox backend: the Sprite's name, or a fresh
+/// [`local::Sandbox`] materialized on the host for the Docker or host-direct
+/// backends. Constructing it is the one place a backend-specific setup
+/// failure (no `docker` on `PATH`, no scratch directory) surfaces before any
+/// sandbox work starts.
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+enum Backend {
+    Sprite(String),
+    Docker(local::Sandbox),
+    Host(local::Sandbox),
+}
+
+impl Backend {
+    fn new(kind: BackendKind, repo: &Path) -> Result<Self, String> {
+        match kind {
+            BackendKind::Sprite => Ok(Backend::Sprite(sprite_name(repo))),
+            BackendKind::Docker => {
+                docker::ensure_docker()?;
+                Ok(Backend::Docker(local::Sandbox::new()?))
+            }
+            BackendKind::Host => Ok(Backend::Host(local::Sandbox::new()?)),
+        }
+    }
+
+    /// Sprite-only setup (auth, create-if-absent); the local backends need
+    /// none, since [`Backend::new`] already prepared their sandbox.
+    fn ensure(&self) -> Result<(), String> {
+        match self {
+            Backend::Sprite(name) => ensure_auth().and_then(|()| ensure_sprite(name)),
+            Backend::Docker(_) | Backend::Host(_) => Ok(()),
+        }
+    }
+
+    fn sync_tree(&self, repo: &Path, new: ObjectId) -> Result<(), String> {
+        match self {
+            Backend::Sprite(name) => sync_tree(repo, name, new),
+            Backend::Docker(sandbox) | Backend::Host(sandbox) => {
+                local::sync_tree(repo, sandbox, new)
+            }
+        }
+    }
+
+    /// A `name -> PATH entry` map: an in-Sprite/in-container path for the
+    /// Sprite and Docker backends, the real host path for host-direct
+    /// execution, since it runs with no container to bind-mount into.
+    fn resolve_toolchains(
+        &self,
+        repo: &Path,
+        runnable: &[Effect],
+    ) -> Result<HashMap<String, String>, String> {
+        match self {
+            Backend::Sprite(name) => resolve_toolchains(repo, name, runnable),
+            Backend::Docker(sandbox) => {
+                let names = local::resolve_toolchains(repo, sandbox, runnable)?;
+                Ok(names
+                    .into_iter()
+                    .map(|name| {
+                        let dir = format!("{}/{name}/bin", docker::TOOLCHAINS_DIR);
+                        (name, dir)
+                    })
+                    .collect())
+            }
+            Backend::Host(sandbox) => {
+                let names = local::resolve_toolchains(repo, sandbox, runnable)?;
+                Ok(local::host_toolchain_dirs(sandbox, &names))
+            }
+        }
+    }
+
+    fn restore_cache(&self, repo: &Path, name: &str) -> Result<(), String> {
+        match self {
+            Backend::Sprite(sprite) => cache::restore(repo, sprite, name),
+            Backend::Docker(sandbox) | Backend::Host(sandbox) => {
+                cache::restore_local(repo, &sandbox.cache_dir(name), name)
+            }
+        }
+    }
+
+    fn snapshot_cache(&self, repo: &Path, name: &str) -> Result<(), String> {
+        match self {
+            Backend::Sprite(sprite) => cache::snapshot(repo, sprite, name),
+            Backend::Docker(sandbox) | Backend::Host(sandbox) => {
+                cache::snapshot_local(repo, &sandbox.cache_dir(name), name)
+            }
+        }
+    }
+
+    fn cache_dir_for(&self, name: &str) -> String {
+        match self {
+            Backend::Sprite(_) => cache::cache_dir(name),
+            Backend::Docker(_) => format!("{}/{name}", docker::CACHE_DIR),
+            Backend::Host(sandbox) => sandbox.cache_dir(name).display().to_string(),
+        }
+    }
+
+    fn run_one(&self, name: &str, command: &str, live: &Arc<StdMutex<String>>) -> RunResult {
+        match self {
+            Backend::Sprite(sprite) => run_one(sprite, name, command, live),
+            Backend::Docker(sandbox) => run_one_docker(sandbox, name, command, live),
+            Backend::Host(sandbox) => run_one_host(sandbox, name, command, live),
+        }
+    }
 }
 
 /// A composite effect's status, derived from its dependencies' settled
@@ -749,20 +956,18 @@ fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>
     format!("export PATH={path}:$PATH; {command}")
 }
 
-/// Prefix `command` with an `EFFECT_CACHE_DIR` export pointing at `cache`'s
-/// restored directory (see [`cache::restore`]), so the command can point a
+/// Prefix `command` with an `EFFECT_CACHE_DIR` export pointing at
+/// `cache_dir` (the cache's restored directory in whichever backend is
+/// running — see [`Backend::cache_dir_for`]), so the command can point a
 /// tool (`sccache`, ...) at it; an effect with no cache is returned
 /// unchanged.
 ///
 /// ## Requirements
 ///
 /// @relation(checks.cache)
-fn with_cache_env(command: &str, cache: Option<&str>) -> String {
-    match cache {
-        Some(name) => format!(
-            "export EFFECT_CACHE_DIR={}; {command}",
-            cache::cache_dir(name)
-        ),
+fn with_cache_env(command: &str, cache_dir: Option<&str>) -> String {
+    match cache_dir {
+        Some(dir) => format!("export EFFECT_CACHE_DIR={dir}; {command}"),
         None => command.to_owned(),
     }
 }
@@ -998,46 +1203,13 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     drop(pair.slave);
 
     let master = pair.master;
-    let Ok(mut reader) = master.try_clone_reader() else {
+    let Ok(reader) = master.try_clone_reader() else {
         eprintln!("effects: ERROR {name} (could not read the pty)");
         let _killed = child.kill();
         return finish(Status::Error, start, None, live);
     };
 
-    // The pty's `Read` is blocking, so it gets its own thread; the main thread
-    // times the whole run out against [`CHECK_TIMEOUT`] by bounding how long it
-    // waits on the channel rather than the read itself.
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let Some(chunk) = buf.get(..n) else { break };
-                    if tx.send(chunk.to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let deadline = start.checked_add(CHECK_TIMEOUT).unwrap_or(start);
-    let timed_out = loop {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            break true;
-        };
-        match rx.recv_timeout(remaining) {
-            Ok(chunk) => {
-                let elapsed = start.elapsed().as_secs_f64();
-                let data = String::from_utf8_lossy(&chunk);
-                push_event(&mut lock(live), elapsed, &data);
-            }
-            Err(RecvTimeoutError::Timeout) => break true,
-            Err(RecvTimeoutError::Disconnected) => break false,
-        }
-    };
+    let timed_out = drain(reader, start, live);
     drop(master);
 
     if timed_out {
@@ -1061,6 +1233,154 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
     } else {
         eprintln!("effects: FAIL {name} ({command})");
         finish(Status::Fail, start, exit_code, live)
+    }
+}
+
+/// Run one effect in the Docker backend's throwaway `--rm` container, per
+/// [`docker::run_args`]. Otherwise identical to [`run_one`]: same timeout,
+/// same asciicast recording, same `live` buffer — just a plain pipe instead
+/// of a pty, since nothing here needs an interactive terminal, only a
+/// captured one.
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+fn run_one_docker(
+    sandbox: &local::Sandbox,
+    name: &str,
+    command: &str,
+    live: &Arc<StdMutex<String>>,
+) -> RunResult {
+    let start = Instant::now();
+    lock(live).push_str(&asciicast_header());
+
+    let args = docker::run_args(
+        &sandbox.work_dir(),
+        &sandbox.toolchains_dir(),
+        &sandbox.cache_root(),
+        command,
+    );
+    let mut cmd = Command::new("docker");
+    cmd.args(&args);
+    run_captured(&mut cmd, name, command, start, live)
+}
+
+/// Run one effect directly on the host (`--unsandboxed`), in the sandbox's
+/// materialized work directory — no container, no isolation. Otherwise
+/// identical to [`run_one_docker`].
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+fn run_one_host(
+    sandbox: &local::Sandbox,
+    name: &str,
+    command: &str,
+    live: &Arc<StdMutex<String>>,
+) -> RunResult {
+    let start = Instant::now();
+    lock(live).push_str(&asciicast_header());
+
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("{command} 2>&1"))
+        .current_dir(sandbox.work_dir());
+    run_captured(&mut cmd, name, command, start, live)
+}
+
+/// Spawn `cmd` (already built, stdout not yet configured), capture its
+/// combined output into `live` via [`drain`], and assemble the [`RunResult`]
+/// — the part [`run_one_docker`] and [`run_one_host`] share.
+fn run_captured(
+    cmd: &mut Command,
+    name: &str,
+    command: &str,
+    start: Instant,
+    live: &Arc<StdMutex<String>>,
+) -> RunResult {
+    let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::piped()).spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("effects: ERROR {name} (could not run: {e})");
+            return finish(Status::Error, start, None, live);
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        eprintln!("effects: ERROR {name} (could not capture output)");
+        let _killed = child.kill();
+        return finish(Status::Error, start, None, live);
+    };
+
+    let timed_out = drain(stdout, start, live);
+    if timed_out {
+        eprintln!("effects: ERROR {name} (timed out after {CHECK_TIMEOUT:?})");
+        let _killed = child.kill();
+        return finish(Status::Error, start, None, live);
+    }
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!("effects: ERROR {name} (could not wait: {e})");
+            return finish(Status::Error, start, None, live);
+        }
+    };
+
+    let exit_code = status.code();
+    if status.success() {
+        eprintln!("effects: PASS {name}");
+        finish(Status::Pass, start, exit_code, live)
+    } else {
+        eprintln!("effects: FAIL {name} ({command})");
+        finish(Status::Fail, start, exit_code, live)
+    }
+}
+
+/// Read `reader` until EOF or [`CHECK_TIMEOUT`] elapses since `start`,
+/// appending each chunk to `live` as an asciicast v2 output event, exactly
+/// the format [`run_one`]'s pty capture already produces. Shared by every
+/// backend so the Checks tab's live/final recording looks the same
+/// regardless of which one ran: the Sprite backend feeds this a pty's
+/// reader, the Docker/host backends a plain child pipe. `reader`'s own
+/// (blocking) read runs on a dedicated thread; the caller's thread only
+/// waits on a channel, so it can time out the whole run without depending on
+/// the read itself returning promptly. Returns whether the timeout (rather
+/// than EOF) ended the read.
+fn drain(
+    mut reader: impl Read + Send + 'static,
+    start: Instant,
+    live: &Arc<StdMutex<String>>,
+) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let Some(chunk) = buf.get(..n) else { break };
+                    if tx.send(chunk.to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let deadline = start.checked_add(CHECK_TIMEOUT).unwrap_or(start);
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return true;
+        };
+        match rx.recv_timeout(remaining) {
+            Ok(chunk) => {
+                let elapsed = start.elapsed().as_secs_f64();
+                let data = String::from_utf8_lossy(&chunk);
+                push_event(&mut lock(live), elapsed, &data);
+            }
+            Err(RecvTimeoutError::Timeout) => return true,
+            Err(RecvTimeoutError::Disconnected) => return false,
+        }
     }
 }
 
@@ -1276,7 +1596,7 @@ mod tests {
     #[test]
     fn with_cache_env_exports_the_restored_directory() {
         assert_eq!(
-            with_cache_env("cargo build", Some("sccache")),
+            with_cache_env("cargo build", Some("/cache/sccache")),
             "export EFFECT_CACHE_DIR=/cache/sccache; cargo build"
         );
     }
@@ -1332,5 +1652,59 @@ mod tests {
         // The malformed job is dropped from the queue, the .tmp left untouched.
         assert!(!queue.path().join("d.job").exists());
         assert!(queue.path().join("ignored.tmp").exists());
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn backend_for_token_is_docker_without_a_token() {
+        assert_eq!(backend_for_token(None), BackendKind::Docker);
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn backend_for_token_is_sprite_with_a_token() {
+        assert_eq!(backend_for_token(Some("test-token")), BackendKind::Sprite);
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn docker_backend_runs_a_trivial_effect() {
+        if docker::ensure_docker().is_err() {
+            eprintln!("skipping docker_backend_runs_a_trivial_effect: docker is not available");
+            return;
+        }
+
+        let repo = crate::testutil::unique_repo("docker-run");
+        crate::testutil::write_effect_doc(&repo, "hello", "echo hi-from-docker");
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["commit", "--allow-empty", "-q", "-m", "seed"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(head.status.success());
+        let head = String::from_utf8(head.stdout).unwrap();
+
+        let live = new_live_registry();
+        let outcomes = run_effect_at(&repo, head.trim(), BackendKind::Docker, &live).unwrap();
+        let outcome = outcomes
+            .iter()
+            .find(|outcome| outcome.name == "hello")
+            .unwrap();
+        assert_eq!(outcome.status, Status::Pass);
+        assert!(
+            outcome
+                .recording
+                .as_deref()
+                .unwrap_or_default()
+                .contains("hi-from-docker")
+        );
     }
 }
