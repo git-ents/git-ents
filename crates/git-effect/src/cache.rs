@@ -133,10 +133,12 @@ pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
         return Err(format!("could not archive cache {name} from the sprite"));
     }
 
-    let extracted = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
+    let scratch = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
+    let extracted = scratch.path().join("tree");
+    std::fs::create_dir(&extracted).map_err(|e| format!("could not create extraction dir: {e}"))?;
     let mut child = Command::new("tar")
         .args(["-x", "-C"])
-        .arg(extracted.path())
+        .arg(&extracted)
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("could not run tar: {e}"))?;
@@ -155,13 +157,18 @@ pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
 
     // A scratch index and an explicit work tree, so this builds a tree from
     // the extracted directory without disturbing the repository's own
-    // (nonexistent, since it is bare) index.
-    let index = extracted.path().join(".git-index");
+    // (nonexistent, since it is bare) index. The index lives as a sibling of
+    // `extracted`, never inside it — otherwise `git add -A .` stages the
+    // index/lock files themselves, and a snapshot taken that way poisons every
+    // future run: restoring it into the sandbox and archiving it back places
+    // a stale `.git-index.lock` inside the next extraction, which then
+    // collides with the real lock `git add` tries to create there.
+    let index = scratch.path().join(".git-index");
     let add = Command::new("git")
         .arg("-C")
         .arg(repo)
         .env("GIT_INDEX_FILE", &index)
-        .env("GIT_WORK_TREE", extracted.path())
+        .env("GIT_WORK_TREE", &extracted)
         .args(["add", "-A", "."])
         .status()
         .map_err(|e| format!("could not stage the cache tree: {e}"))?;
@@ -172,7 +179,7 @@ pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
         .arg("-C")
         .arg(repo)
         .env("GIT_INDEX_FILE", &index)
-        .env("GIT_WORK_TREE", extracted.path())
+        .env("GIT_WORK_TREE", &extracted)
         .args(["write-tree"])
         .output()
         .map_err(|e| format!("could not write the cache tree: {e}"))?;
