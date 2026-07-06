@@ -81,8 +81,11 @@ signatures unverifiable.
 schedules code execution, which requires more trust than pushing a
 branch. This rule must exist explicitly; it is not the default.
 * Bootstrap: an empty member list admits every push so the first member
-can enroll — locally. Hosted, repository creation requires an existing
-account; “first push owns the repo” is not an enrollment path.
+can enroll. Hosted, this leaves “first push owns the repo” open per
+repository; closing it — repository creation requires an existing
+account — needs a server-level key→account registry, because bare repos
+are created on the first `info/refs` request, before any push
+certificate exists. Known gap, direction chosen, not yet enforced.
 
 === 5. Effect
 

@@ -106,14 +106,17 @@ the run as `error` when it is invalid.
 --
 
 [role="requirement", id="checks.sandbox"]
-.Sprite Sandbox
+.Sandbox
 --
-Each check MUST run inside a Fly.io Sprite: a persistent,
+Each check MUST run inside a sandbox, behind one execution abstraction
+with two backends: hosted, a Fly.io Sprite — a persistent,
 hardware-isolated sandbox, one per repository, so build caches survive
-between pushes.
+between pushes — and local, a Docker container. Host-direct execution
+MUST require an explicit `--unsandboxed` opt-in.
 Before running checks the worker MUST sync the pushed tree into the
-Sprite's work directory via `git archive` piped to `tar -x`, and MUST
-configure the `sprite` CLI from `SPRITES_TOKEN` via `sprite auth setup`.
+sandbox's work directory via `git archive` piped to `tar -x`; the Sprite
+backend MUST configure the `sprite` CLI from `SPRITES_TOKEN` via
+`sprite auth setup`.
 
 Before running a check that names a toolchain, the worker MUST resolve each
 distinct toolchain named across the job's checks (<<checks.toolchains>>) to
