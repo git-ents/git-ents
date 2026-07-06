@@ -109,8 +109,10 @@ pub fn restore(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
 }
 
 /// Snapshot the sandbox's [`cache_dir`] for `name` back to [`cache_ref`],
-/// replacing any prior snapshot as a new commit — the state [`restore`] will
-/// pick up on this cache's next use.
+/// replacing any prior snapshot with a parentless commit — cache history has
+/// no audit value, so replaced snapshots become garbage-collectable instead
+/// of pinned by a parent chain. The tip is the state [`restore`] will pick
+/// up on this cache's next use.
 ///
 /// ## Requirements
 ///
@@ -192,6 +194,6 @@ pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
 
     let store = git_store::Store::open(repo).map_err(|e| format!("could not open store: {e}"))?;
     store
-        .store_tree(&cache_ref(name), tree, "Update cache")
+        .store_tree_replace(&cache_ref(name), tree, "Update cache")
         .map_err(|e| format!("could not store cache {name}: {e}"))
 }

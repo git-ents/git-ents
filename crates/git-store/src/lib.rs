@@ -308,6 +308,24 @@ impl Store {
         self.try_set_ref(refname, expected, commit)
     }
 
+    /// Write `tree` to `refname` as a parentless commit, fully replacing the
+    /// ref's prior tip. Like [`store_tree`], it uses a compare-and-swap shape
+    /// for consistency, but omits the parent chain. This is suited for refs
+    /// whose history has no audit value — e.g. cache snapshots — where old
+    /// commits become unreachable and garbage-collectable rather than pinned
+    /// by a parent chain.
+    pub fn store_tree_replace(
+        &self,
+        refname: &str,
+        tree: ObjectId,
+        message: &str,
+    ) -> Result<(), Error> {
+        let expected = self.ref_commit(refname)?;
+        let parents = Vec::new();
+        let commit = self.write_commit(tree, parents, expected, message, None)?;
+        self.try_set_ref(refname, expected, commit)
+    }
+
     /// The tree of `refname`'s tip commit.
     pub fn ref_tree(&self, refname: &str) -> Result<ObjectId, Error> {
         let commit = self
@@ -920,6 +938,24 @@ mod tests {
         store.store_tree("refs/meta/raw", tree, "write").unwrap();
         store.delete_ref("refs/meta/raw").unwrap();
         let _ = store.ref_tree("refs/meta/raw").unwrap_err();
+    }
+
+    #[test]
+    fn store_tree_replace_writes_parentless_commits() {
+        let dir = repo();
+        let store = Store::open(dir.path()).unwrap();
+        let first = facet_git_tree::serialize_into(&"first".to_owned(), &store.odb).unwrap();
+        let second = facet_git_tree::serialize_into(&"second".to_owned(), &store.odb).unwrap();
+        store
+            .store_tree_replace("refs/meta/raw", first, "write")
+            .unwrap();
+        store
+            .store_tree_replace("refs/meta/raw", second, "write")
+            .unwrap();
+        assert_eq!(store.ref_tree("refs/meta/raw").unwrap(), second);
+        let tip = store.ref_commit("refs/meta/raw").unwrap().unwrap();
+        let commit = store.read_commit(&tip).unwrap();
+        assert!(commit.parents.is_empty());
     }
 
     /// A minimal keyed item, used to exercise `load_item`/`store_item`/
