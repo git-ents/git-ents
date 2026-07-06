@@ -845,7 +845,7 @@ fn comment_list(remote: &str, rev: &str) -> Result<(), String> {
         let author = git_comment::provenance(&repo, &id)
             .map_err(|error| error.to_string())?
             .map_or_else(|| "?".to_owned(), |provenance| provenance.created.name);
-        let place = describe_projection(&repo, &comment, rev);
+        let place = describe_projection(&repo, &id, &comment, rev);
         let title = comment.body.lines().next().unwrap_or_default();
         println!("{}  {author}  {place}  {title}", short_id(&id));
     }
@@ -883,7 +883,10 @@ fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
         location(&comment.anchor.path, comment.anchor.lines),
         short_id(&comment.anchor.commit.to_string())
     );
-    println!("on {rev}: {}", describe_projection(&repo, &comment, rev));
+    println!(
+        "on {rev}: {}",
+        describe_projection(&repo, &id, &comment, rev)
+    );
     if let Some(issue) = &comment.issue {
         println!("issue   {issue}");
     }
@@ -969,9 +972,9 @@ fn location(path: &str, lines: Option<LineRange>) -> String {
     }
 }
 
-/// One-line description of where `comment` sits on `rev`.
-fn describe_projection(repo: &Path, comment: &Comment, rev: &str) -> String {
-    match git_comment::project(repo, comment, rev) {
+/// One-line description of where `comment` (`id`'s document) sits on `rev`.
+fn describe_projection(repo: &Path, id: &str, comment: &Comment, rev: &str) -> String {
+    match git_comment::project(repo, id, comment, rev) {
         Ok(Projection::Current) => location(&comment.anchor.path, comment.anchor.lines),
         Ok(Projection::Relocated { path, lines }) => location(&path, lines),
         Ok(Projection::Outdated { path }) => format!("{path} [outdated]"),

@@ -40,12 +40,20 @@ migration, not a refactor.
 A durable pointer into source: blob, optional line range, specific
 commit.
 
-* *Reachability invariant:* the meta-ref commit storing an anchor
-carries the anchored commit as a second parent. Anchored objects are
-reachable from `refs/meta/*` and survive force-push, branch deletion,
-and gc — no gc special-casing.
+* *Reachability invariant:* the anchored blob and a small window of
+surrounding source lines are embedded as ordinary entries in the
+consuming document's own stored tree (a reference to the existing
+blob's object id, no copy; the surrounding-lines window written fresh)
+— not a gitlink, which names a commit without making it reachable.
+Both stay reachable from `refs/meta/*` and survive force-push, branch
+deletion, and gc — no gc special-casing. The anchored commit's id is
+kept only as a best-effort data field, not pinned by this mechanism.
 * *Projection:* anchors project onto newer commits, so annotations
-follow code as it evolves.
+follow code as it evolves. When the anchored commit still exists this
+is an exact tree diff; once it has been collected, projection falls
+back to fuzzy-matching the retained surrounding-lines window against
+the target commit's version of the file. Projection never mutates the
+stored anchor.
 
 Anchors are independent of any consumer; comments use them, but reviews,
 TODOs, and blame overlays can too.

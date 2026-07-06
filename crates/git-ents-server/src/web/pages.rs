@@ -685,7 +685,7 @@ async fn file_comments(repo: &Path, path: &str) -> Vec<FileComment> {
         };
         let mut out = Vec::new();
         for (id, comment) in comments {
-            let Ok(projection) = git_comment::project(&repo, &comment, "HEAD") else {
+            let Ok(projection) = git_comment::project(&repo, &id, &comment, "HEAD") else {
                 continue;
             };
             let (landed, lines, outdated) = match projection {
