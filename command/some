@@ -1,0 +1,1 @@
+export RUSTC_WRAPPER=sccache SCCACHE_DIR=$EFFECT_CACHE_DIR; cargo build --workspace
