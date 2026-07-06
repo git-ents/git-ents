@@ -15,7 +15,9 @@
 
 pub mod cache;
 pub mod definition;
+pub mod docker;
 pub mod engine;
+pub mod local;
 pub mod results;
 #[cfg(test)]
 mod testutil;

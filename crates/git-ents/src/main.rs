@@ -242,6 +242,23 @@ enum EffectAction {
     /// Show recorded effect runs (queued/running/pass/fail/error) from
     /// `refs/meta/results/*` on a remote, newest first.
     Log,
+    /// Run this repository's effects locally against `at`, identical
+    /// toolchain materialization and sandbox path to a push-triggered run —
+    /// the queue is skipped, nothing else differs. Runs in the local Docker
+    /// sandbox by default; `--unsandboxed` runs directly on the host
+    /// instead.
+    Run {
+        /// Name (`effects/<name>`) whose result to report.
+        #[facet(args::positional)]
+        name: String,
+        /// Commit-ish to check (defaults to `HEAD`).
+        #[facet(args::named)]
+        at: Option<String>,
+        /// Run directly on the host instead of in the Docker sandbox — no
+        /// isolation; this used to be local execution's only mode.
+        #[facet(args::named, default)]
+        unsandboxed: bool,
+    },
 }
 
 /// ## Requirements
@@ -504,6 +521,46 @@ fn run_effect(action: EffectAction, remote: &str) -> Result<(), String> {
         EffectAction::Remove { name } => effect_remove(&name, remote),
         EffectAction::Debug => effect_debug(remote),
         EffectAction::Log => effect_log(remote),
+        EffectAction::Run {
+            name,
+            at,
+            unsandboxed,
+        } => effect_run(&name, at.as_deref(), unsandboxed),
+    }
+}
+
+/// Run this repository's effects locally against `at` (default `HEAD`),
+/// printing `name`'s settled outcome — the local execution path: identical
+/// toolchain materialization and sandbox as a push, minus the queue. Runs in
+/// the local Docker sandbox by default; `unsandboxed` runs directly on the
+/// host instead.
+///
+/// ## Requirements
+///
+/// @relation(cli.account-checks, checks.sandbox)
+fn effect_run(name: &str, at: Option<&str>, unsandboxed: bool) -> Result<(), String> {
+    let repo = repo()?;
+    let rev = at.unwrap_or("HEAD");
+    let commit = git_capture(&["-C", &repo.to_string_lossy(), "rev-parse", "--verify", rev])?;
+
+    let kind = if unsandboxed {
+        git_effect::engine::BackendKind::Host
+    } else {
+        git_effect::engine::BackendKind::Docker
+    };
+    let live = git_effect::engine::new_live_registry();
+    let outcomes = git_effect::engine::run_effect_at(&repo, commit.trim(), kind, &live)
+        .map_err(|e| format!("effects: {e}"))?;
+    let outcome = outcomes
+        .iter()
+        .find(|outcome| outcome.name == name)
+        .ok_or_else(|| format!("no effect named {name} is configured"))?;
+    println!("{}: {}", outcome.name, outcome.status);
+    match outcome.status {
+        git_effect::Status::Fail | git_effect::Status::Error => {
+            Err(format!("effect {name} did not pass"))
+        }
+        _ => Ok(()),
     }
 }
 

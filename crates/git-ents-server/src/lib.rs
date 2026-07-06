@@ -179,10 +179,14 @@ async fn serve(args: Args) -> ExitCode {
         live_runs: git_effect::engine::new_live_registry(),
     };
 
-    // Drain queued pushes and run their effects for the life of the server.
+    // Drain queued pushes and run their effects for the life of the server:
+    // the Sprite backend when `SPRITES_TOKEN` says this is the hosted
+    // deployment, the local Docker backend otherwise — see
+    // `git_effect::engine::default_backend`.
     tokio::spawn(git_effect::engine::worker(
         state.checks_queue.clone(),
         state.live_runs.clone(),
+        git_effect::engine::default_backend(),
     ));
 
     // @relation(protocol.routing, deploy.health)

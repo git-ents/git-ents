@@ -197,3 +197,97 @@ pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
         .store_tree_replace(&cache_ref(name), tree, "Update cache")
         .map_err(|e| format!("could not store cache {name}: {e}"))
 }
+
+/// [`restore`]'s local-backend equivalent: `dest` is already a host directory
+/// (a [`crate::local::Sandbox`] bind-mounted straight into a Docker
+/// container, or used as-is for host-direct execution), so restoring is just
+/// extracting the snapshot tree onto it — no sandbox CLI transport needed.
+///
+/// ## Requirements
+///
+/// @relation(checks.cache)
+pub fn restore_local(repo: &Path, dest: &Path, name: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| format!("could not create cache directory: {e}"))?;
+
+    let store = git_store::Store::open(repo).map_err(|e| format!("could not open store: {e}"))?;
+    let Ok(tree) = store.ref_tree(&cache_ref(name)) else {
+        return Ok(());
+    };
+
+    let archive = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["archive", "--format=tar", &tree.to_string()])
+        .output()
+        .map_err(|e| format!("could not run git archive: {e}"))?;
+    if !archive.status.success() {
+        return Err(format!("git archive failed for cache {name}"));
+    }
+
+    let mut child = Command::new("tar")
+        .args(["-x", "-C"])
+        .arg(dest)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run tar: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("tar did not accept stdin")?
+        .write_all(&archive.stdout)
+        .map_err(|e| format!("could not extract cache {name}: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("tar did not complete: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("could not restore cache {name}"))
+    }
+}
+
+/// [`snapshot`]'s local-backend equivalent: `src` is already a host
+/// directory, so snapshotting is building a tree from it directly, without
+/// first archiving it out of a sandbox. Uses a scratch index alongside `src`
+/// (never inside it) for the same reason [`snapshot`] does: a `.git-index`
+/// left inside `src` would poison the next run's restore/snapshot cycle.
+///
+/// ## Requirements
+///
+/// @relation(checks.cache)
+pub fn snapshot_local(repo: &Path, src: &Path, name: &str) -> Result<(), String> {
+    let index_dir =
+        tempfile::tempdir().map_err(|e| format!("could not create scratch dir: {e}"))?;
+    let index = index_dir.path().join(".git-index");
+
+    let add = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .env("GIT_INDEX_FILE", &index)
+        .env("GIT_WORK_TREE", src)
+        .args(["add", "-A", "."])
+        .status()
+        .map_err(|e| format!("could not stage cache {name}'s tree: {e}"))?;
+    if !add.success() {
+        return Err(format!("could not stage cache {name}'s tree"));
+    }
+    let write_tree = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .env("GIT_INDEX_FILE", &index)
+        .env("GIT_WORK_TREE", src)
+        .args(["write-tree"])
+        .output()
+        .map_err(|e| format!("could not write cache {name}'s tree: {e}"))?;
+    if !write_tree.status.success() {
+        return Err(format!("could not write cache {name}'s tree"));
+    }
+    let tree = String::from_utf8_lossy(&write_tree.stdout);
+    let tree = ObjectId::from_hex(tree.trim().as_bytes())
+        .map_err(|e| format!("git write-tree returned an invalid tree oid: {e}"))?;
+
+    let store = git_store::Store::open(repo).map_err(|e| format!("could not open store: {e}"))?;
+    store
+        .store_tree_replace(&cache_ref(name), tree, "Update cache")
+        .map_err(|e| format!("could not store cache {name}: {e}"))
+}
