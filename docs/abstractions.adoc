@@ -127,7 +127,8 @@ member-cache rebuilds, ATProto mirroring) are registrations, not
 subsystems.
 * *Toolchains* — typed trees under `refs/meta/toolchains/*`; a resource
 effects declare, not a trigger. The repo carries its own execution
-environment with provenance. They keep a subcommand only because
+environment with provenance, as ~1KB hash-pinned manifests; only the
+sandbox touches the bytes. They keep a subcommand only because
 import/activation logic is nontrivial; if that shrinks, the subcommand
 dies.
 * *Members, accounts, comments* — typed trees behind meta-refs (1+2),

@@ -82,24 +82,35 @@ The CLI MUST provide, under `git ents toolchain`:
   `bin` MUST be non-empty; `license` MUST be a valid SPDX expression;
   `version` MUST be valid semver; `platform` MUST be a valid target triple.
 * `import --from <recipe>` — derive the fields from a local toolchain
-  install, or a hosted release, via a named recipe (`rustup` or `sccache`,
-  selected further by `--spec <name>`, e.g. `stable` for `rustup`, a release
-  tag for `sccache`); explicitly passed fields override the recipe.
-  A recipe capable of pointing at a distributor's own hosted, hash-pinned
-  archives (rust-lang's dist tarballs, for `rustup`) records those as the
-  toolchain's `bin` by default, sparing the repository the bytes; `--embed`
-  forces importing the local install's actual `bin` bytes, as `import`
-  without `--from` always does. `sccache` has no hash manifest to pin a
-  hosted download against, so it always imports the downloaded bytes
-  directly regardless of `--embed`.
+  install, or a hosted release, via a named recipe (`rustup`, `sccache`, or
+  `url`, selected further by `--spec <name>`, e.g. `stable` for `rustup`, a
+  release tag for `sccache`, the archive's URL for `url`); explicitly passed
+  fields override the recipe. A recipe capable of pointing at a
+  distributor's own hosted, hash-pinned archives (rust-lang's dist tarballs,
+  for `rustup`) records those as the toolchain's `bin` by default, sparing
+  the repository the bytes; `--embed` forces importing the local install's
+  actual `bin` bytes, as `import` without `--from` always does.
+* `import --from <recipe> --platform <triple>` — `--platform` MUST
+  additionally parameterize the recipe's own resolution, pinning the named
+  target's hosted archives without the local machine ever holding that
+  platform's binaries (`rustup` resolves version and components from the
+  channel manifest alone), and MUST be rejected together with `--embed`.
+  A recipe whose distributor publishes no hash manifest (`sccache`, `url`)
+  MUST instead fetch the archive once at import time solely to compute the
+  sha256 recorded as its pin — trust on first use, with the recipe string
+  and the ref's commit history as the audit trail; every later fetch
+  verifies against that pin. `url` pins any archive (`--spec <url>`,
+  required) with its extraction layout from `--strip`/`--dest`, and
+  supplies no version, platform, or license of its own.
 * `list` — render every toolchain on a remote with its `bin` (a tree id,
   or a component count when hosted externally), version, platform, and
   license.
 * `export` — recreate a remote toolchain's `bin` (and `src`, if present)
   under a local destination, restoring the executable bit and symlinks —
-  fetching and sha256-verifying externally hosted components first — and
-  print the version, platform, and license; read-only, per
-  <<cli.remote-admin>>.
+  fetching, sha256-verifying, and extracting externally hosted components
+  first, each per its recorded layout (leading segments stripped, landed in
+  its recorded subdirectory, compression auto-detected) — and print the
+  version, platform, and license; read-only, per <<cli.remote-admin>>.
 * `remove` — delete the toolchain's ref on a remote.
 --
 

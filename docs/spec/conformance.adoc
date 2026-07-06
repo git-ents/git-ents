@@ -39,6 +39,7 @@ renames, or removes a requirement or its implementation.
 |`cli.comments` |`git-ents/src/main.rs` (`CommentAction`, `run_comment`) | _(manual/CLI UX, no automated test)_
 |`cli.login` |`git-ents/src/main.rs` (`login`); `git-ents-server/src/main.rs` (`/login/cli` routes) | _(manual/CLI UX, no automated test)_
 |`cli.key-resolution` |`git-ents/src/main.rs` (`fingerprint`, MD5 colon form) | _(manual/CLI UX, no automated test)_
+|`cli.toolchains` |`git-ents/src/main.rs` (`ToolchainAction`, `toolchain_import`); `git-ents/src/registry.rs` (`resolve`, `rustup`, `sccache`, `url_archive`) | _(manual/CLI UX, no automated test)_
 |`account.ref` |`git-ents/src/account.rs` |`account::store_then_load_round_trips_the_account`, `the_account_ref_marks_an_account_repo`
 |`account.genesis` |`git-ents/src/account.rs` (`genesis`) | _(exercised via `members add --account`; no dedicated unit test)_
 |`config.ref` |`git-ents-core/src/config.rs` |`config::store_then_load_round_trips_the_config`, `default_when_the_config_ref_is_absent`
@@ -46,7 +47,7 @@ renames, or removes a requirement or its implementation.
 |`checks.cache` |`git-effect/src/cache.rs` (`CACHE_NS`, `cache_ref`, `cache_dir`, `restore`, `snapshot`); `git-effect/src/engine.rs` (`with_cache_env`) |`definition::tests::store_then_load_round_trips_cache`, `order_rejects_an_invalid_cache_name`; `engine::tests::with_cache_env_leaves_a_cache_free_command_unchanged`, `with_cache_env_exports_the_restored_directory` _(`restore`/`snapshot` themselves require a live Sprite; not covered by unit tests)_
 |`checks.post-receive` |`git-effect/src/engine.rs` (`post_receive`, `enqueue`) | _(hook-level, exercised manually; `enqueue` writes tmp+rename)_
 |`checks.worker` |`git-effect/src/engine.rs` (`worker`, `pending_jobs`, `drain_repo`, `process_job`, `derive_composite`) |`engine::tests::pending_jobs_groups_by_repo_and_drops_malformed`, `composite_status_derives_from_its_dependencies` _(dependency-ordered execution requires a live Sprite; `order` is unit-tested in `git-effect`)_
-|`checks.sandbox` |`git-effect/src/engine.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`) | _(requires a live Sprite; not covered by unit tests)_
+|`checks.sandbox` |`git-effect/src/engine.rs` (`ensure_auth`, `ensure_sprite`, `sync_tree`, `resolve_toolchains`, `downloaded_script`, `components_key`, `activate`) |`engine::tests::downloaded_script_extracts_each_component_per_its_layout`, `components_key_includes_the_layout`, `activate_prefixes_path_in_declared_order` _(live-Sprite paths not covered by unit tests)_
 |`checks.outcomes` |`git-effect/src/results.rs` (`Status`, `record`/`update_run`); `git-effect/src/engine.rs` (`CHECK_TIMEOUT`, `finalize_error`) |`results::tests::update_run_advances_in_place_rather_than_appending`, `round_trips_an_outcomes_duration_and_recording`
 |`checks.debug` |`git-ents-server/src/web/debug.rs` (`handshake`, broker); `git-ents/src/main.rs` (`effect debug`) | _(requires a live Sprite; manually verified)_
 |`checks.admin-only` |`git-signed-push/src/lib.rs` (`pre_receive`, `EFFECTS_NS_PREFIX`) |`git-ents-server::pre_receive rejects_a_push_to_effects_from_a_self_attested_member`

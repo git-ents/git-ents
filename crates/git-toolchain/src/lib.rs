@@ -100,15 +100,15 @@ pub enum Bin {
     /// [`export`] (or a Sprite, at check-activation time) instead of stored
     /// in the object database — spares the repository the toolchain's own
     /// bytes when a stable, content-hashed origin (a distributor's release
-    /// archives) already exists. Each component is extracted with its outer
-    /// two path segments (`<package>-<version>-<target>/<component>/`)
-    /// stripped, the layout rust-lang's (and most other distributors')
-    /// dist archives use.
+    /// archives) already exists. Each component records its own archive
+    /// layout ([`Component::strip`], [`Component::dest`]), so a rust-lang
+    /// dist archive and a flat single-binary release tarball can coexist in
+    /// one toolchain.
     Downloaded(Vec<Component>),
 }
 
 /// One archive making up a [`Bin::Downloaded`] toolchain: fetched from `url`
-/// and checked against `sha256` before being extracted.
+/// and checked against `sha256` before being extracted per `strip`/`dest`.
 #[derive(Debug, Clone, PartialEq, Facet)]
 pub struct Component {
     /// Where to fetch the archive from.
@@ -116,6 +116,17 @@ pub struct Component {
     /// The archive's expected sha256, hex-encoded — checked before
     /// extraction; a mismatch is refused rather than extracted anyway.
     pub sha256: String,
+    /// Leading path segments stripped at extraction (`tar
+    /// --strip-components`): 2 for rust-lang dist archives
+    /// (`<package>-<version>-<target>/<component>/…`), 1 for a flat release
+    /// tarball (`<package>-<version>/<binary>`).
+    pub strip: u8,
+    /// Subdirectory under the toolchain's extraction root to extract into:
+    /// empty for archives already carrying their own `bin/`/`lib/`/… top
+    /// level (rustup components), `bin` for flat archives whose payload
+    /// should itself land on `PATH` — keeping `<root>/bin` the one activation
+    /// convention either way.
+    pub dest: String,
 }
 
 /// A failure importing, resolving, listing, exporting, or removing a
@@ -153,6 +164,11 @@ pub enum Error {
     /// activates nothing on `PATH` is not a toolchain.
     #[error("a downloaded toolchain must list at least one component")]
     NoComponents,
+    /// A [`Component`] carried a field unsafe to interpolate into the shell
+    /// script that fetches and extracts it: a `dest` that is not empty or a
+    /// single safe path segment, or a `url`/`sha256` containing a quote.
+    #[error("invalid component: {0}")]
+    InvalidComponent(String),
     /// A [`Bin::Downloaded`] component could not be fetched or extracted.
     #[error("could not fetch {0}: {1}")]
     Fetch(String, String),
@@ -242,6 +258,9 @@ pub fn import_downloaded(
     if components.is_empty() {
         return Err(Error::NoComponents);
     }
+    for component in &components {
+        validate_component(component)?;
+    }
     validate_metadata(license, version, platform)?;
     let odb = odb_at(repo)?;
     let collector = PackCollector::default();
@@ -257,6 +276,26 @@ pub fn import_downloaded(
         recipe: recipe.map(str::to_owned),
     };
     store_toolchain(repo, name, toolchain, &odb)
+}
+
+/// A [`Component`]'s fields end up interpolated into a shell script (the
+/// Sprite-side fetch-and-extract in `git-effect`), so refuse anything that
+/// could escape it: `dest` must be empty or one safe path segment, and no
+/// field may contain a single quote.
+fn validate_component(component: &Component) -> Result<(), Error> {
+    if !component.dest.is_empty() && !git_store::ref_segment_ok(&component.dest) {
+        return Err(Error::InvalidComponent(format!(
+            "dest {:?} is not empty or a single safe path segment",
+            component.dest
+        )));
+    }
+    if component.url.contains('\'') || component.sha256.contains('\'') {
+        return Err(Error::InvalidComponent(format!(
+            "{:?} contains a quote",
+            component.url
+        )));
+    }
+    Ok(())
 }
 
 /// `license` MUST be a valid SPDX license expression, `version` a valid
@@ -347,10 +386,9 @@ pub fn history(repo: &Path, name: &str) -> Result<Vec<(u64, Toolchain)>, Error> 
 ///
 /// [`Bin::Embedded`] writes its (already self-contained: executables plus a
 /// sibling `lib/`) tree straight under `dest/bin`. [`Bin::Downloaded`]'s
-/// components already carry their own `bin/`/`lib/`/... top-level
-/// directories once their outer two path segments are stripped, so they are
-/// extracted directly under `dest` instead, landing at the same `dest/bin/…`
-/// shape by construction.
+/// components are each fetched, verified, and extracted per their own
+/// recorded layout ([`Component::strip`], [`Component::dest`]) relative to
+/// `dest`, landing at the same `dest/bin/…` shape by construction.
 pub fn export(repo: &Path, name: &str, dest: &Path) -> Result<Toolchain, Error> {
     let toolchain = resolve(repo, name)?;
     let odb = odb_at(repo)?;
@@ -729,7 +767,7 @@ fn download_components(components: &[Component], dest: &Path) -> Result<(), Erro
                 actual,
             ));
         }
-        extract_stripped(&archive, dest)?;
+        extract_component(&archive, component, dest)?;
     }
     Ok(())
 }
@@ -752,8 +790,9 @@ fn fetch(url: &str) -> Result<Vec<u8>, Error> {
 
 /// Hex-encoded sha256 of `bytes`, via the system `shasum` (macOS) or
 /// `sha256sum` (Linux) — shells out rather than adding a hashing dependency
-/// to this crate.
-fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
+/// to this crate. Public so a recipe pinning a hosted archive (trust on
+/// first use) computes its hash the same way every later verification does.
+pub fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
     let (program, args): (&str, &[&str]) = match std::env::consts::OS {
         "macos" => ("shasum", &["-a", "256"]),
         _ => ("sha256sum", &[]),
@@ -786,13 +825,20 @@ fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
         .ok_or_else(|| Error::Fetch(program.to_owned(), "no hash in output".to_owned()))
 }
 
-/// Extract a gzipped tar `archive` into `dest`, stripping the outer two path
-/// segments every rust-lang dist archive (and most other distributors')
-/// wraps its payload in (`<package>-<version>-<target>/<component>/`).
-fn extract_stripped(archive: &[u8], dest: &Path) -> Result<(), Error> {
+/// Extract a tar `archive` (compression auto-detected — gzip, xz, ...) per
+/// `component`'s recorded layout: strip its leading [`Component::strip`]
+/// path segments and land it in `dest_root`/[`Component::dest`].
+fn extract_component(archive: &[u8], component: &Component, dest_root: &Path) -> Result<(), Error> {
+    let dest = if component.dest.is_empty() {
+        dest_root.to_owned()
+    } else {
+        dest_root.join(&component.dest)
+    };
+    fs::create_dir_all(&dest).map_err(|error| Error::Io(dest.clone(), error))?;
+    let strip = format!("--strip-components={}", component.strip);
     let mut child = Command::new("tar")
-        .args(["-xz", "--strip-components=2", "-C"])
-        .arg(dest)
+        .args(["-x", &strip, "-C"])
+        .arg(&dest)
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
@@ -1022,6 +1068,34 @@ mod tests {
         Component {
             url: format!("file://{}", archive.display()),
             sha256: sha256_hex(&bytes).unwrap(),
+            strip: 2,
+            dest: String::new(),
+        }
+    }
+
+    /// Build a flat single-binary `.tar.xz` release archive
+    /// (`<pkg>-<version>/<binary>`), the shape a GitHub release or a zig
+    /// tarball ships — one leading segment, no `bin/` of its own.
+    fn build_flat_component(staging: &Path, name: &str, contents: &[u8]) -> Component {
+        let root = staging.join("pkg-1.0.0");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(name), contents).unwrap();
+        let archive = staging.join("flat.tar.xz");
+        let status = Command::new("tar")
+            .args(["-cJf"])
+            .arg(&archive)
+            .args(["-C"])
+            .arg(staging)
+            .arg("pkg-1.0.0")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let bytes = fs::read(&archive).unwrap();
+        Component {
+            url: format!("file://{}", archive.display()),
+            sha256: sha256_hex(&bytes).unwrap(),
+            strip: 1,
+            dest: "bin".to_owned(),
         }
     }
 
@@ -1051,6 +1125,66 @@ mod tests {
             fs::read(dest_path.join("bin/tool")).unwrap(),
             b"#!/bin/sh\n"
         );
+    }
+
+    #[test]
+    fn export_extracts_a_flat_xz_component_into_its_dest() {
+        let repo_dir = repo();
+        let staging = tempfile::tempdir().unwrap();
+        let component = build_flat_component(staging.path(), "tool", b"#!/bin/sh\n");
+
+        import_downloaded(
+            repo_dir.path(),
+            "flat",
+            vec![component],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+            None,
+        )
+        .unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_path = dest.path().join("out");
+        export(repo_dir.path(), "flat", &dest_path).unwrap();
+        assert_eq!(
+            fs::read(dest_path.join("bin/tool")).unwrap(),
+            b"#!/bin/sh\n"
+        );
+    }
+
+    #[test]
+    fn import_downloaded_rejects_an_unsafe_component() {
+        let repo_dir = repo();
+        let staging = tempfile::tempdir().unwrap();
+        let mut component = build_component(staging.path(), &[("bin/tool", b"#!/bin/sh\n")]);
+        component.dest = "a/b".to_owned();
+        let result = import_downloaded(
+            repo_dir.path(),
+            "bad-dest",
+            vec![component],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+            None,
+        );
+        assert!(matches!(result, Err(Error::InvalidComponent(_))));
+
+        let mut component = build_component(staging.path(), &[("bin/tool", b"#!/bin/sh\n")]);
+        component.url = "https://example.com/x' rm -rf'".to_owned();
+        let result = import_downloaded(
+            repo_dir.path(),
+            "bad-url",
+            vec![component],
+            None,
+            "MIT",
+            VERSION,
+            PLATFORM,
+            None,
+        );
+        assert!(matches!(result, Err(Error::InvalidComponent(_))));
     }
 
     #[test]

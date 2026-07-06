@@ -276,11 +276,12 @@ enum ToolchainAction {
         #[facet(args::named, default)]
         platform: Option<String>,
         /// Recipe to derive `bin`/`src`/`license`/`version`/`platform` from
-        /// instead of supplying them by hand (currently only `rustup`).
+        /// instead of supplying them by hand (`rustup`, `sccache`, `url`).
         #[facet(args::named)]
         from: Option<String>,
         /// Recipe-specific selector (for `--from rustup`, the toolchain
-        /// name `rustup` itself knows, e.g. `stable`; defaults to `stable`).
+        /// name `rustup` itself knows, e.g. `stable`; defaults to `stable`.
+        /// For `--from url`, the archive URL — required).
         #[facet(args::named)]
         spec: Option<String>,
         /// With `--from`, import the recipe's actual `bin` bytes instead of
@@ -288,6 +289,16 @@ enum ToolchainAction {
         /// (see `git_toolchain::Bin::Downloaded`).
         #[facet(args::named, default)]
         embed: bool,
+        /// With `--from url`: leading path segments to strip when the
+        /// sandbox extracts the archive (default 1, a flat
+        /// `<pkg>-<version>/…` release tarball).
+        #[facet(args::named, default)]
+        strip: Option<u8>,
+        /// With `--from url`: subdirectory of the toolchain to extract the
+        /// archive into (default `bin`, putting a flat archive's payload on
+        /// `PATH`).
+        #[facet(args::named, default)]
+        dest: Option<String>,
     },
     /// List the toolchains configured on a remote.
     List,
@@ -540,8 +551,10 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
             from,
             spec,
             embed,
+            strip,
+            dest,
         } => toolchain_import(
-            name, bin, src, license, version, platform, from, spec, embed, remote,
+            name, bin, src, license, version, platform, from, spec, embed, strip, dest, remote,
         ),
         ToolchainAction::List => toolchain_list(remote),
         ToolchainAction::Recipes => toolchain_recipes(),
@@ -556,7 +569,10 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
 /// `remote` and push it. Prompts for any field left unset when run at an
 /// interactive terminal, unless `from` names a recipe (`registry::resolve`)
 /// to derive `bin`/`src`/`license`/`version`/`platform` from instead;
-/// explicit flags still win over a recipe's values.
+/// explicit flags still win over a recipe's values, and `platform`
+/// additionally parameterizes the recipe's own resolution — pinning another
+/// platform's hosted archives without this machine ever holding its
+/// binaries.
 ///
 /// ## Requirements
 ///
@@ -572,15 +588,26 @@ fn toolchain_import(
     from: Option<String>,
     spec: Option<String>,
     embed: bool,
+    strip: Option<u8>,
+    dest: Option<String>,
     remote: &str,
 ) -> Result<(), String> {
     let name = interactive::text_or(name, "Toolchain name")?;
 
+    if from.as_deref() == Some("url") && spec.is_none() {
+        return Err("the url recipe needs --spec <archive-url>".to_owned());
+    }
     let recipe_desc = from
         .as_deref()
         .map(|from| registry::describe(from, spec.as_deref().unwrap_or("stable")));
+    let opts = registry::RecipeOptions {
+        embed,
+        platform: platform.clone(),
+        strip,
+        dest,
+    };
     let recipe = from
-        .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable"), embed))
+        .map(|recipe| registry::resolve(&recipe, spec.as_deref().unwrap_or("stable"), &opts))
         .transpose()?;
 
     let bin_plan = match bin {
@@ -603,15 +630,15 @@ fn toolchain_import(
     } else {
         interactive::optional_text_or(None, "Directory of source to import (optional)")?
     };
-    let license = match license.or_else(|| recipe.as_ref().map(|r| r.license.clone())) {
+    let license = match license.or_else(|| recipe.as_ref().and_then(|r| r.license.clone())) {
         Some(license) => license,
         None => interactive::text_or(None, "License (SPDX expression)")?,
     };
-    let version = match version.or_else(|| recipe.as_ref().map(|r| r.version.clone())) {
+    let version = match version.or_else(|| recipe.as_ref().and_then(|r| r.version.clone())) {
         Some(version) => version,
         None => interactive::text_or(None, "Version (semver)")?,
     };
-    let platform = match platform.or_else(|| recipe.as_ref().map(|r| r.platform.clone())) {
+    let platform = match platform.or_else(|| recipe.as_ref().and_then(|r| r.platform.clone())) {
         Some(platform) => platform,
         None => interactive::text_or(None, "Platform (target triple)")?,
     };

@@ -656,8 +656,10 @@ fn resolve_toolchains(
                 sync_downloaded_toolchain(sprite, &key, components)?;
                 // Unlike an embedded toolchain's tree (already flattened to
                 // put executables at its own top level), each component
-                // archive extracts its own `bin/` alongside `lib/`, so `PATH`
-                // must point one level deeper.
+                // extracts per its recorded layout — its own `bin/` top level
+                // (rustup) or straight into a `bin` dest (a flat archive) —
+                // landing executables at `<key>/bin` either way, so `PATH`
+                // points one level deeper.
                 format!("{TOOLCHAINS_DIR}/{key}/bin")
             }
         };
@@ -667,13 +669,20 @@ fn resolve_toolchains(
 }
 
 /// A stable, filesystem-safe cache key for a [`git_toolchain::Bin::Downloaded`]
-/// toolchain: its components' sha256s, joined in extraction order — there is
-/// no tree oid to key the extraction cache by, since nothing is written to
-/// the object database for a downloaded toolchain's `bin`.
+/// toolchain: each component's sha256 plus its recorded layout
+/// (`strip`/`dest` — the same bytes extracted differently are a different
+/// toolchain on disk), joined in extraction order — there is no tree oid to
+/// key the extraction cache by, since nothing is written to the object
+/// database for a downloaded toolchain's `bin`.
 fn components_key(components: &[git_toolchain::Component]) -> String {
     components
         .iter()
-        .map(|component| component.sha256.as_str())
+        .map(|component| {
+            format!(
+                "{}.{}.{}",
+                component.sha256, component.strip, component.dest
+            )
+        })
         .collect::<Vec<_>>()
         .join("-")
 }
@@ -811,17 +820,7 @@ fn sync_downloaded_toolchain(
         return Ok(());
     }
 
-    let mut script = format!("mkdir -p {dir}");
-    for component in components {
-        script.push_str(&format!(
-            " && curl -fsSL '{url}' -o /tmp/component.tar.gz \
-               && [ \"$(sha256sum /tmp/component.tar.gz | cut -d' ' -f1)\" = '{sha256}' ] \
-               && tar -xz --strip-components=2 -C {dir} -f /tmp/component.tar.gz \
-               && rm -f /tmp/component.tar.gz",
-            url = component.url,
-            sha256 = component.sha256,
-        ));
-    }
+    let script = downloaded_script(&dir, components);
     let status = Command::new("sprite")
         .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
         .status()
@@ -833,6 +832,40 @@ fn sync_downloaded_toolchain(
             "could not fetch and extract downloaded toolchain {key} in the sprite"
         ))
     }
+}
+
+/// The `sh` script fetching, verifying, and extracting `components` into
+/// `dir` — pure, so the exact extraction semantics the Sprite runs are unit
+/// tested against `git_toolchain::export`'s local equivalent (the
+/// local/hosted parity anchor). Each component lands in `dir`/its `dest`,
+/// stripped of its leading `strip` path segments, compression auto-detected
+/// by `tar` (rust-lang ships gzip, zig ships xz). Interpolation is safe by
+/// construction: `git_toolchain::import_downloaded` refuses a component
+/// whose fields could escape the single quotes.
+///
+/// ## Requirements
+///
+/// @relation(checks.sandbox)
+fn downloaded_script(dir: &str, components: &[git_toolchain::Component]) -> String {
+    let mut script = format!("mkdir -p {dir}");
+    for component in components {
+        let dest = if component.dest.is_empty() {
+            dir.to_owned()
+        } else {
+            format!("{dir}/{}", component.dest)
+        };
+        script.push_str(&format!(
+            " && mkdir -p {dest} \
+               && curl -fsSL '{url}' -o /tmp/component.archive \
+               && [ \"$(sha256sum /tmp/component.archive | cut -d' ' -f1)\" = '{sha256}' ] \
+               && tar -x --strip-components={strip} -C {dest} -f /tmp/component.archive \
+               && rm -f /tmp/component.archive",
+            url = component.url,
+            sha256 = component.sha256,
+            strip = component.strip,
+        ));
+    }
+    script
 }
 
 /// How long a single effect may run before the worker abandons it. A runaway
@@ -1080,6 +1113,58 @@ mod tests {
         assert_eq!(
             activate("make", &toolchains, &dirs),
             "export PATH=:$PATH; make"
+        );
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn downloaded_script_extracts_each_component_per_its_layout() {
+        let components = vec![
+            git_toolchain::Component {
+                url: "https://static.rust-lang.org/dist/rustc.tar.gz".to_owned(),
+                sha256: "aaa".to_owned(),
+                strip: 2,
+                dest: String::new(),
+            },
+            git_toolchain::Component {
+                url: "https://example.com/flat.tar.xz".to_owned(),
+                sha256: "bbb".to_owned(),
+                strip: 1,
+                dest: "bin".to_owned(),
+            },
+        ];
+        assert_eq!(
+            downloaded_script("/toolchains/key", &components),
+            "mkdir -p /toolchains/key \
+             && mkdir -p /toolchains/key \
+             && curl -fsSL 'https://static.rust-lang.org/dist/rustc.tar.gz' -o /tmp/component.archive \
+             && [ \"$(sha256sum /tmp/component.archive | cut -d' ' -f1)\" = 'aaa' ] \
+             && tar -x --strip-components=2 -C /toolchains/key -f /tmp/component.archive \
+             && rm -f /tmp/component.archive \
+             && mkdir -p /toolchains/key/bin \
+             && curl -fsSL 'https://example.com/flat.tar.xz' -o /tmp/component.archive \
+             && [ \"$(sha256sum /tmp/component.archive | cut -d' ' -f1)\" = 'bbb' ] \
+             && tar -x --strip-components=1 -C /toolchains/key/bin -f /tmp/component.archive \
+             && rm -f /tmp/component.archive"
+        );
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn components_key_includes_the_layout() {
+        let component = git_toolchain::Component {
+            url: "https://example.com/a.tar.gz".to_owned(),
+            sha256: "aaa".to_owned(),
+            strip: 2,
+            dest: String::new(),
+        };
+        let mut flat = component.clone();
+        flat.strip = 1;
+        flat.dest = "bin".to_owned();
+        assert_eq!(components_key(std::slice::from_ref(&component)), "aaa.2.");
+        assert_ne!(
+            components_key(std::slice::from_ref(&component)),
+            components_key(&[flat])
         );
     }
 

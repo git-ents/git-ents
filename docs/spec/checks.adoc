@@ -117,10 +117,16 @@ configure the `sprite` CLI from `SPRITES_TOKEN` via `sprite auth setup`.
 
 Before running a check that names a toolchain, the worker MUST resolve each
 distinct toolchain named across the job's checks (<<checks.toolchains>>) to
-its typed `bin` tree (`Toolchain::bin`, not the whole document) and extract
-it into the Sprite at a hash-keyed directory, skipping the extraction when
-that directory already exists — the Sprite's persistent filesystem is the
-cache.
+its typed `bin` (`Toolchain::bin`, not the whole document) and materialize
+it into the Sprite at a hash-keyed directory, skipping the work when that
+directory already exists — the Sprite's persistent filesystem is the cache.
+An embedded toolchain's tree is extracted from the object database; a
+downloaded toolchain's components MUST be fetched, sha256-verified against
+their recorded pins, and extracted *inside* the Sprite itself, each per its
+recorded layout (leading path segments stripped, landed in its recorded
+subdirectory, compression auto-detected), under a cache key derived from
+the component hashes plus their layout — the repository never proxies the
+bytes it deliberately does not store.
 A check's command MUST then run with each of its named toolchains'
 extracted `bin` directory prefixed onto `PATH`, in declaration order, so an
 earlier toolchain wins a name collision.

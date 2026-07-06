@@ -27,7 +27,10 @@ pub enum Bin {
 }
 
 /// What a recipe resolved from a local toolchain install, ready to hand to
-/// `git_toolchain::import`/`import_downloaded`.
+/// `git_toolchain::import`/`import_downloaded`. A `None` metadata field is
+/// one the recipe cannot know (the `url` recipe knows nothing about what an
+/// arbitrary archive contains); the CLI's own flag-else-prompt chain covers
+/// it.
 ///
 /// `_staging`, when `bin` is [`Bin::Dir`] pointing into a temporary
 /// directory, is kept alive only so the directory survives until the
@@ -35,10 +38,29 @@ pub enum Bin {
 pub struct Resolved {
     pub bin: Bin,
     pub src: Option<PathBuf>,
-    pub license: String,
-    pub version: String,
-    pub platform: String,
+    pub license: Option<String>,
+    pub version: Option<String>,
+    pub platform: Option<String>,
     _staging: Option<TempDir>,
+}
+
+/// How [`resolve`] should resolve, beyond the recipe's own `spec` selector.
+#[derive(Default)]
+pub struct RecipeOptions {
+    /// Import the recipe's actual local `bin` bytes instead of recording
+    /// hosted, hash-pinned archives. Incompatible with `platform`.
+    pub embed: bool,
+    /// Resolve for this target triple instead of the local machine's — the
+    /// recipe then never touches local binaries, only the distributor's
+    /// hosted metadata and archives, so a toolchain for the effect worker's
+    /// sandbox can be pinned from any machine.
+    pub platform: Option<String>,
+    /// `url` recipe only: leading path segments to strip at extraction
+    /// (default 1, a flat `<pkg>-<version>/…` release tarball).
+    pub strip: Option<u8>,
+    /// `url` recipe only: subdirectory of the toolchain to extract into
+    /// (default `bin`, so a flat archive's payload lands on `PATH`).
+    pub dest: Option<String>,
 }
 
 /// A recipe `git ents toolchain import --from` accepts, described richly
@@ -70,28 +92,51 @@ pub const RECIPES: &[RecipeInfo] = &[
     RecipeInfo {
         name: "sccache",
         spec: "a mozilla/sccache release tag, e.g. v0.8.2, or empty for latest",
-        summary: "Downloads a prebuilt sccache release for this machine's \
-                  platform from GitHub and imports it directly (always \
-                  embedded — the binary is small and GitHub publishes no \
-                  hash manifest to pin a hosted download against).",
+        summary: "Resolves a prebuilt sccache release from GitHub; with \
+                  --platform it records the release archive as a hash pin \
+                  computed at import time (trust on first use — GitHub \
+                  publishes no hash manifest), otherwise it downloads this \
+                  machine's archive and imports the binary directly.",
+    },
+    RecipeInfo {
+        name: "url",
+        spec: "an archive URL, e.g. https://ziglang.org/download/.../zig-x86_64-linux-0.15.2.tar.xz",
+        summary: "Pins any hosted archive as a downloaded toolchain: fetches \
+                  it once at import time only to compute its sha256 (trust \
+                  on first use), records url+hash+layout (--strip, --dest), \
+                  and lets the sandbox fetch the bytes itself. Version, \
+                  platform, and license must be supplied explicitly.",
     },
 ];
 
 /// Resolve `recipe` against `spec` (a recipe-specific selector, e.g. a
 /// rustup toolchain name). See [`RECIPES`] for what's known.
 ///
-/// `embed` forces the old behavior of staging and importing `bin`'s actual
-/// bytes; by default the recipe instead points at its distributor's own
-/// hosted, hash-verified archives (see [`Bin::Components`]), sparing the
-/// repository the toolchain's own bytes.
+/// `opts.embed` forces the old behavior of staging and importing `bin`'s
+/// actual bytes; by default the recipe instead points at its distributor's
+/// own hosted, hash-verified archives (see [`Bin::Components`]), sparing the
+/// repository the toolchain's own bytes. `opts.platform` resolves for a
+/// foreign target without touching local binaries at all, and is therefore
+/// rejected together with `embed`.
 ///
 /// ## Requirements
 ///
 /// @relation(cli.toolchains)
-pub fn resolve(recipe: &str, spec: &str, embed: bool) -> Result<Resolved, String> {
+pub fn resolve(recipe: &str, spec: &str, opts: &RecipeOptions) -> Result<Resolved, String> {
+    if opts.embed && opts.platform.is_some() {
+        return Err(
+            "--embed imports this machine's bytes; it cannot target another platform".to_owned(),
+        );
+    }
+    if (opts.strip.is_some() || opts.dest.is_some()) && recipe != "url" {
+        return Err(format!(
+            "--strip/--dest are layout hints for the url recipe; {recipe} records its own layout"
+        ));
+    }
     match recipe {
-        "rustup" => rustup(spec, embed),
-        "sccache" => sccache(spec),
+        "rustup" => rustup(spec, opts),
+        "sccache" => sccache(spec, opts.platform.as_deref()),
+        "url" => url_archive(spec, opts),
         other => Err(format!(
             "unknown toolchain recipe {other:?} (known: {})",
             RECIPES
@@ -144,10 +189,31 @@ pub fn describe(recipe: &str, spec: &str) -> String {
 /// component is installed, else omitted, regardless of `embed`. Rust's own
 /// toolchain is dual-licensed `MIT OR Apache-2.0`.
 ///
+/// With `opts.platform`, no local toolchain is consulted at all: the channel
+/// manifest for `spec` (`stable`, `nightly`, a version) is the sole source —
+/// it names its own version (`[pkg.rustc].version`) and hosts hash-pinned
+/// archives for every target, so a toolchain for a foreign platform (the
+/// effect worker's sandbox) can be pinned from any machine. `src` is omitted
+/// there: there is no local sysroot to point at.
+///
 /// ## Requirements
 ///
 /// @relation(cli.toolchains)
-fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
+fn rustup(spec: &str, opts: &RecipeOptions) -> Result<Resolved, String> {
+    if let Some(platform) = &opts.platform {
+        let manifest = fetch_manifest(spec)?;
+        let version = manifest_version(&manifest)
+            .ok_or_else(|| format!("channel-rust-{spec}.toml has no [pkg.rustc].version"))?;
+        return Ok(Resolved {
+            bin: Bin::Components(manifest_components(&manifest, platform)?),
+            src: None,
+            license: Some("MIT OR Apache-2.0".to_owned()),
+            version: Some(version),
+            platform: Some(platform.clone()),
+            _staging: None,
+        });
+    }
+
     let toolchain_arg = format!("+{spec}");
     let sysroot = rustc(&toolchain_arg, &["--print", "sysroot"])?;
     let sysroot = PathBuf::from(sysroot.trim());
@@ -161,14 +227,15 @@ fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
     let src = sysroot.join("lib/rustlib/src/rust");
     let src = src.is_dir().then_some(src);
 
-    let (bin, staging) = if embed {
+    let (bin, staging) = if opts.embed {
         let staging = tempfile::tempdir()
             .map_err(|error| format!("could not create a staging directory: {error}"))?;
         stage_bin(&sysroot.join("bin"), &sysroot.join("lib"), staging.path())?;
         (Bin::Dir(staging.path().to_owned()), Some(staging))
     } else {
+        let manifest = fetch_manifest(&channel_for(&version))?;
         (
-            Bin::Components(manifest_components(&version, &platform)?),
+            Bin::Components(manifest_components(&manifest, &platform)?),
             None,
         )
     };
@@ -176,9 +243,9 @@ fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
     Ok(Resolved {
         bin,
         src,
-        license: "MIT OR Apache-2.0".to_owned(),
-        version,
-        platform,
+        license: Some("MIT OR Apache-2.0".to_owned()),
+        version: Some(version),
+        platform: Some(platform),
         _staging: staging,
     })
 }
@@ -190,38 +257,98 @@ fn rustup(spec: &str, embed: bool) -> Result<Resolved, String> {
 /// [`rustup`] follows via its local `rustc`.
 ///
 /// Unlike `rustup`, GitHub publishes no manifest of hashes alongside a
-/// release to pin a hosted download against, and the archive is a single
-/// ~15 MB binary, so this recipe always imports it directly (`Bin::Dir`)
-/// rather than offering [`Bin::Components`] — `embed` has nothing to toggle
-/// here.
+/// release to pin a hosted download against. Without a `platform` override
+/// this recipe therefore imports this machine's archive's binary directly
+/// (`Bin::Dir`). With `platform`, it instead records the release archive as
+/// a downloaded component whose sha256 it computes itself, once, at import
+/// time — trust on first use: the trust decision is taken exactly here, is
+/// audited via the recipe string on the document and the ref's commit
+/// history, and every later fetch (local export, the sandbox) verifies
+/// against the pinned hash. The archive is flat
+/// (`sccache-<tag>-<target>/sccache`), hence `strip: 1, dest: "bin"`.
 ///
 /// ## Requirements
 ///
 /// @relation(cli.toolchains)
-fn sccache(spec: &str) -> Result<Resolved, String> {
+fn sccache(spec: &str, platform: Option<&str>) -> Result<Resolved, String> {
     let tag = if spec.is_empty() {
         latest_sccache_tag()?
     } else {
         spec.to_owned()
     };
     let version = tag.strip_prefix('v').unwrap_or(&tag).to_owned();
-    let target = sccache_target()?;
+    let target = match platform {
+        Some(platform) => platform.to_owned(),
+        None => sccache_target()?.to_owned(),
+    };
     let url = format!(
         "https://github.com/mozilla/sccache/releases/download/{tag}/sccache-{tag}-{target}.tar.gz"
     );
     let bytes = crate::http_get_bytes(&url)?;
 
+    if platform.is_some() {
+        let sha256 = git_toolchain::sha256_hex(&bytes)
+            .map_err(|error| format!("could not hash: {error}"))?;
+        return Ok(Resolved {
+            bin: Bin::Components(vec![Component {
+                url,
+                sha256,
+                strip: 1,
+                dest: "bin".to_owned(),
+            }]),
+            src: None,
+            license: Some("MPL-2.0".to_owned()),
+            version: Some(version),
+            platform: Some(target),
+            _staging: None,
+        });
+    }
+
     let staging = tempfile::tempdir()
         .map_err(|error| format!("could not create a staging directory: {error}"))?;
-    stage_sccache(&bytes, &tag, target, staging.path())?;
+    stage_sccache(&bytes, &tag, &target, staging.path())?;
 
     Ok(Resolved {
         bin: Bin::Dir(staging.path().to_owned()),
         src: None,
-        license: "MPL-2.0".to_owned(),
-        version,
-        platform: target.to_owned(),
+        license: Some("MPL-2.0".to_owned()),
+        version: Some(version),
+        platform: Some(target),
         _staging: Some(staging),
+    })
+}
+
+/// Pin any hosted archive as a one-component downloaded toolchain —
+/// `http_archive`, in Bazel terms. `spec` is the archive's URL; it is
+/// fetched once, here, only to compute the sha256 every later verification
+/// pins against (trust on first use, audited exactly like [`sccache`]'s
+/// pin). The layout hints come from `--strip`/`--dest` (default: a flat
+/// `<pkg>-<version>/…` tarball whose payload belongs on `PATH`). This recipe
+/// knows nothing about what the archive contains, so version, platform, and
+/// license all stay `None` for the caller to supply.
+///
+/// ## Requirements
+///
+/// @relation(cli.toolchains)
+fn url_archive(spec: &str, opts: &RecipeOptions) -> Result<Resolved, String> {
+    if spec.is_empty() {
+        return Err("the url recipe needs --spec <archive-url>".to_owned());
+    }
+    let bytes = crate::http_get_bytes(spec)?;
+    let sha256 =
+        git_toolchain::sha256_hex(&bytes).map_err(|error| format!("could not hash: {error}"))?;
+    Ok(Resolved {
+        bin: Bin::Components(vec![Component {
+            url: spec.to_owned(),
+            sha256,
+            strip: opts.strip.unwrap_or(1),
+            dest: opts.dest.clone().unwrap_or_else(|| "bin".to_owned()),
+        }]),
+        src: None,
+        license: None,
+        version: None,
+        platform: None,
+        _staging: None,
     })
 }
 
@@ -292,31 +419,52 @@ fn stage_sccache(bytes: &[u8], tag: &str, target: &str, staging: &Path) -> Resul
         .map_err(|error| format!("could not set permissions on {}: {error}", dest.display()))
 }
 
-/// The three components of rust-lang's channel manifest that together make
-/// a working toolchain (compiler, cargo, and the target's standard library),
-/// resolved for `target` against the manifest for `version` (or the shared
-/// `nightly` channel, when `version` names one — rust-lang does not publish
-/// a stable per-version manifest name for nightly builds).
-fn manifest_components(version: &str, target: &str) -> Result<Vec<Component>, String> {
-    let channel = if version.contains("nightly") {
+/// The manifest name for a version rustc reported: nightly builds collapse
+/// to the shared `nightly` channel, since rust-lang publishes no stable
+/// per-version manifest name for them.
+fn channel_for(version: &str) -> String {
+    if version.contains("nightly") {
         "nightly".to_owned()
     } else {
         version.to_owned()
-    };
-    let url = format!("https://static.rust-lang.org/dist/channel-rust-{channel}.toml");
-    let manifest = crate::http_get(&url)?;
+    }
+}
 
+/// Fetch rust-lang's channel manifest for `channel` (`stable`, `nightly`, or
+/// a version) — the one authoritative document naming the channel's version
+/// and every target's hash-pinned component archives.
+fn fetch_manifest(channel: &str) -> Result<String, String> {
+    let url = format!("https://static.rust-lang.org/dist/channel-rust-{channel}.toml");
+    crate::http_get(&url)
+}
+
+/// The channel's own version, from `[pkg.rustc] version = "1.88.0 (hash
+/// date)"` — the first whitespace-separated token, valid semver for stable
+/// (`1.88.0`) and nightly (`1.90.0-nightly`) alike.
+fn manifest_version(manifest: &str) -> Option<String> {
+    let raw = manifest_field(manifest, "pkg.rustc", "version")?;
+    raw.split_whitespace().next().map(str::to_owned)
+}
+
+/// The three components of rust-lang's channel manifest that together make
+/// a working toolchain (compiler, cargo, and the target's standard library),
+/// resolved for `target`. Every rust-lang dist archive unpacks to
+/// `<package>-<version>-<target>/<component>/…`, hence `strip: 2` with no
+/// `dest` — the payload carries its own `bin/`/`lib/` top level.
+fn manifest_components(manifest: &str, target: &str) -> Result<Vec<Component>, String> {
     ["rustc", "cargo", "rust-std"]
         .into_iter()
         .map(|package| {
             let section = format!("pkg.{package}.target.{target}");
-            let component_url = manifest_field(&manifest, &section, "url")
-                .ok_or_else(|| format!("{url} has no [{section}].url"))?;
-            let sha256 = manifest_field(&manifest, &section, "hash")
-                .ok_or_else(|| format!("{url} has no [{section}].hash"))?;
+            let component_url = manifest_field(manifest, &section, "url")
+                .ok_or_else(|| format!("the channel manifest has no [{section}].url"))?;
+            let sha256 = manifest_field(manifest, &section, "hash")
+                .ok_or_else(|| format!("the channel manifest has no [{section}].hash"))?;
             Ok(Component {
                 url: component_url,
                 sha256,
+                strip: 2,
+                dest: String::new(),
             })
         })
         .collect()
