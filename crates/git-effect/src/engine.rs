@@ -579,10 +579,9 @@ pub fn ensure_sprite(sprite: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Stream the pushed tree at `new` into the Sprite's [`WORKDIR`], replacing any
-/// previous contents while leaving the rest of the persistent filesystem (build
-/// caches and the like) intact. `git archive` emits the tree as a tar that the
-/// Sprite unpacks over stdin.
+/// Stream the pushed tree at `new` into the Sprite's [`WORKDIR`] via
+/// [`unpack_script`]. `git archive` emits the tree as a tar that the Sprite
+/// unpacks over stdin.
 ///
 /// ## Requirements
 ///
@@ -598,7 +597,7 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
         return Err(format!("git archive failed for {new}"));
     }
 
-    let script = format!("rm -rf {WORKDIR} && mkdir -p {WORKDIR} && tar -x -C {WORKDIR}");
+    let script = unpack_script();
     let mut child = Command::new("sprite")
         .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
         .stdin(Stdio::piped())
@@ -618,6 +617,27 @@ fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
     } else {
         Err("could not unpack the tree in the sprite".to_owned())
     }
+}
+
+/// The in-sprite script that replaces [`WORKDIR`]'s contents with the tar
+/// streamed over stdin, leaving the rest of the persistent filesystem (build
+/// caches and the like) intact.
+///
+/// It first kills any process still working under [`WORKDIR`]: a worker
+/// killed mid-run (a deploy, a restart) leaves its in-sprite build processes
+/// alive, since `sprite exec` only tethers the local CLI process — and an
+/// orphaned build still writing under [`WORKDIR`] races the wipe, failing
+/// `rm -rf` with "Directory not empty". The final `rm -rf && mkdir && tar`
+/// chain is what the exec's exit status reflects, as before.
+fn unpack_script() -> String {
+    format!(
+        "for cwd in /proc/[0-9]*/cwd; do\n\
+           case \"$(readlink \"$cwd\" 2>/dev/null)\" in\n\
+             {WORKDIR}|{WORKDIR}/*) kill -9 \"$(basename \"${{cwd%/cwd}}\")\" 2>/dev/null || true ;;\n\
+           esac\n\
+         done\n\
+         rm -rf {WORKDIR} && mkdir -p {WORKDIR} && tar -x -C {WORKDIR}"
+    )
 }
 
 /// Resolve and extract every distinct toolchain named across `runnable`,
@@ -1168,6 +1188,16 @@ mod tests {
              && rm -rf /toolchains/key \
              && mv /toolchains/key.tmp /toolchains/key"
         );
+    }
+
+    // @relation(checks.sandbox, role=Verifies)
+    #[test]
+    fn unpack_script_kills_stale_processes_before_the_wipe() {
+        let script = unpack_script();
+        let kill = script.find("kill -9").unwrap();
+        let wipe = script.find("rm -rf").unwrap();
+        assert!(kill < wipe);
+        assert!(script.ends_with("rm -rf /work && mkdir -p /work && tar -x -C /work"));
     }
 
     // @relation(checks.sandbox, role=Verifies)
