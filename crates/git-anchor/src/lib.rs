@@ -5,11 +5,18 @@
 //! blob at that commit, and an optional line range. The anchored text is never
 //! stored — the blob is content-addressed, so [`snippet`] derives it exactly
 //! at read time. The anchor is authoritative at creation and never mutated.
-//! [`project`]
-//! answers, at read time, where that position sits on any *other* commit —
-//! following renames through git's rewrite tracking and shifting line ranges
-//! through the blob's diff hunks, the way git itself re-derives positions when
-//! replaying diffs on rebase.
+//!
+//! `commit` is recorded on a best-effort basis: nothing pins it against
+//! garbage collection, so it may no longer exist by the time the anchor is
+//! read back. [`project`] answers, at read time, where the anchor's position
+//! sits on any *other* commit — following renames through git's rewrite
+//! tracking and shifting line ranges through the blob's diff hunks, the way
+//! git itself re-derives positions when replaying diffs on rebase — but it
+//! needs `commit` to still exist to do so. [`context`] captures a small,
+//! independently-retainable window of surrounding lines at capture time;
+//! [`project_from_context`] fuzzy-matches that window against a target
+//! commit's version of the same path when `commit` is gone, giving projection
+//! a fallback that survives the anchor commit's own collection.
 //!
 //! Projection is a two-point tree diff, not a history walk: it compares the
 //! anchor commit's tree directly against the target commit's tree, so it works
@@ -95,6 +102,11 @@ pub enum Error {
         /// How many lines the file actually has.
         len: u64,
     },
+    /// [`project`]'s anchor commit is no longer present in the repository
+    /// (garbage collected) — the trigger for [`project_from_context`]'s
+    /// fuzzy-matching fallback, which needs no commit at all.
+    #[error("the anchor commit {0} no longer exists")]
+    AnchorCommitMissing(ObjectId),
 }
 
 /// A 1-based inclusive range of lines within an anchored file.
@@ -115,7 +127,10 @@ pub struct LineRange {
 /// @relation(comments.anchor)
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Anchor {
-    /// The commit the anchor was created against.
+    /// The commit the anchor was created against, recorded on a best-effort
+    /// basis: nothing keeps it reachable, so it may be gone (garbage
+    /// collected) by the time the anchor is read back. [`project`] needs it
+    /// to still exist; [`project_from_context`] does not.
     pub commit: Oid,
     /// The repository-relative path of the anchored file at that commit.
     pub path: String,
@@ -242,6 +257,11 @@ fn lines_of(data: &[u8], path: &str, range: LineRange) -> Result<String, Error> 
 /// range is mapped through the blob diff's hunks — shifted past edits that
 /// land entirely outside it, [`Projection::Outdated`] when an edit touches it.
 ///
+/// Fails with [`Error::AnchorCommitMissing`] when `anchor.commit` no longer
+/// exists (it is retained on a best-effort basis only); a caller that also
+/// holds the anchor's [`context`] should retry with [`project_from_context`]
+/// in that case.
+///
 /// ## Requirements
 ///
 /// @relation(comments.projection)
@@ -265,6 +285,9 @@ pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection,
         return Ok(Projection::Current);
     }
 
+    if !repo.has_object(anchor_commit_id) {
+        return Err(Error::AnchorCommitMissing(anchor_commit_id));
+    }
     let anchor_commit = commit_at(&repo, anchor_commit_id)?;
     let anchor_tree = anchor_commit
         .tree()
@@ -344,6 +367,146 @@ pub fn project(repo: &Path, anchor: &Anchor, target: &str) -> Result<Projection,
         }
     };
     Ok(Projection::Relocated { path, lines })
+}
+
+/// How many lines of surrounding source [`context`] captures on each side of
+/// an anchored range — enough for [`project_from_context`]'s line-window scan
+/// to recognize the anchored lines' neighborhood even after they themselves
+/// moved a little, without dragging in unrelated parts of a large file.
+const CONTEXT_MARGIN: u64 = 3;
+
+/// The anchored range (or, for a whole-file anchor, the whole file) plus up to
+/// [`CONTEXT_MARGIN`] lines on either side, read from `anchor.blob` — a small,
+/// independently-retainable snapshot of the anchor's surroundings for
+/// [`project_from_context`] to fuzzy-match once `anchor.commit` itself is
+/// gone. The caller decides how (or whether) to retain the result; this
+/// function only derives it.
+///
+/// ## Requirements
+///
+/// @relation(comments.anchor)
+pub fn context(repo: &Path, anchor: &Anchor) -> Result<String, Error> {
+    let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
+    let blob = ObjectId::try_from(&anchor.blob)
+        .map_err(|_error| Error::Resolve(anchor.blob.to_string()))?;
+    let data = read_blob(&repo, blob)?;
+    let Some(range) = anchor.lines else {
+        return Ok(String::from_utf8_lossy(&data).into_owned());
+    };
+    let all: Vec<&[u8]> = data.lines_with_terminator().collect();
+    let len = u64::try_from(all.len()).unwrap_or(u64::MAX);
+    let start0 = range.start.saturating_sub(1);
+    let margin_before = CONTEXT_MARGIN.min(start0);
+    let ctx_start = start0.saturating_sub(margin_before);
+    let margin_after = CONTEXT_MARGIN.min(len.saturating_sub(range.end));
+    let ctx_end = range.end.saturating_add(margin_after).min(len);
+    let (Ok(ctx_start), Ok(ctx_end)) = (usize::try_from(ctx_start), usize::try_from(ctx_end))
+    else {
+        return Ok(String::new());
+    };
+    let bytes = all.get(ctx_start..ctx_end).unwrap_or_default().concat();
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Project `anchor` onto `target` by fuzzy-matching `context` (as produced by
+/// [`context`] at capture time) against `target`'s version of `anchor.path`,
+/// for use once `anchor.commit` no longer exists and [`project`] can no
+/// longer diff against its tree.
+///
+/// Looks up `anchor.path` in `target`'s tree directly (no rename tracking is
+/// possible without the anchor commit's tree, so a genuine rename reports
+/// [`Projection::FileDeleted`] here, same as a real deletion); a whole-file
+/// anchor (`anchor.lines` is `None`) survives any edit at that path, same as
+/// [`project`]. For a line-range anchor, every contiguous window of the
+/// target file's lines the same length as `context` is scored by how many
+/// lines match `context`'s exactly; the best-scoring window (at least half
+/// its lines matching) is accepted and the anchored sub-range is mapped back
+/// through the same margin [`context`] used to build it. No match clears that
+/// bar reports [`Projection::Outdated`], the same as an unrecoverable edit
+/// would under [`project`].
+///
+/// ## Requirements
+///
+/// @relation(comments.projection)
+pub fn project_from_context(
+    repo: &Path,
+    anchor: &Anchor,
+    target: &str,
+    context: &str,
+) -> Result<Projection, Error> {
+    let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
+    let target_commit = resolve_commit(&repo, target)?;
+    let target_tree = target_commit
+        .tree()
+        .map_err(|error| Error::Object(error.to_string()))?;
+    let Some(entry) = target_tree
+        .lookup_entry_by_path(&anchor.path)
+        .map_err(|error| Error::Object(error.to_string()))?
+    else {
+        return Ok(Projection::FileDeleted);
+    };
+    if !entry.mode().is_blob() {
+        return Ok(Projection::Outdated {
+            path: anchor.path.clone(),
+        });
+    }
+    let Some(range) = anchor.lines else {
+        return Ok(Projection::Relocated {
+            path: anchor.path.clone(),
+            lines: None,
+        });
+    };
+
+    let data = read_blob(&repo, entry.object_id())?;
+    let target_lines: Vec<&[u8]> = data.lines_with_terminator().collect();
+    let context_lines: Vec<&[u8]> = context.as_bytes().lines_with_terminator().collect();
+    let window = context_lines.len();
+    if window == 0 || window > target_lines.len() {
+        return Ok(Projection::Outdated {
+            path: anchor.path.clone(),
+        });
+    }
+
+    let mut best: Option<(usize, usize)> = None;
+    for (start, slice) in target_lines.windows(window).enumerate() {
+        let score = slice
+            .iter()
+            .zip(context_lines.iter())
+            .filter(|(have, want)| have == want)
+            .count();
+        if best.is_none_or(|(_start, best_score)| score > best_score) {
+            best = Some((start, score));
+        }
+    }
+    // Require at least half the window's lines to match exactly, so an
+    // unrelated coincidence of blank or near-empty lines is not mistaken for
+    // the anchored region having relocated there.
+    let Some((start, _score)) = best.filter(|(_start, score)| {
+        score
+            .checked_mul(2)
+            .is_some_and(|doubled| doubled >= window)
+    }) else {
+        return Ok(Projection::Outdated {
+            path: anchor.path.clone(),
+        });
+    };
+
+    let margin_before = CONTEXT_MARGIN.min(range.start.saturating_sub(1));
+    let range_len = range.end.saturating_sub(range.start).saturating_add(1);
+    let Ok(start) = u64::try_from(start) else {
+        return Ok(Projection::Outdated {
+            path: anchor.path.clone(),
+        });
+    };
+    let mapped_start = start.saturating_add(margin_before).saturating_add(1);
+    let mapped_end = mapped_start.saturating_add(range_len).saturating_sub(1);
+    Ok(Projection::Relocated {
+        path: anchor.path.clone(),
+        lines: Some(LineRange {
+            start: mapped_start,
+            end: mapped_end,
+        }),
+    })
 }
 
 /// Resolve `revision` (a hex id, ref name, or revspec) to the commit it names.
@@ -660,5 +823,151 @@ mod tests {
         assert_eq!(map_range(old, inside, LineRange { start: 2, end: 3 }), None);
         // A range past the end of the old file cannot map.
         assert_eq!(map_range(old, old, LineRange { start: 4, end: 9 }), None);
+    }
+
+    // @relation(comments.projection, role=Verifies)
+    #[test]
+    fn project_reports_the_anchor_commit_as_missing_once_it_is_gone() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let mut anchor = capture(dir.path(), "HEAD", "file.txt", range(3, 4)).unwrap();
+
+        let edited = numbered(1..=10).replace("line 5\n", "line five\n");
+        std::fs::write(dir.path().join("file.txt"), edited).unwrap();
+        commit_all(dir.path(), "two");
+
+        // A made-up commit id that was never written to this repository
+        // stands in for "gc'd away" without actually having to run gc in a
+        // unit test — `has_object` answers `false` either way.
+        anchor.commit = "0123456789abcdef0123456789abcdef01234567".into();
+        assert!(matches!(
+            project(dir.path(), &anchor, "HEAD"),
+            Err(Error::AnchorCommitMissing(_))
+        ));
+    }
+
+    // @relation(comments.anchor, role=Verifies)
+    #[test]
+    fn context_captures_a_margin_around_the_anchored_range() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", range(5, 6)).unwrap();
+
+        // 3 lines of margin on each side of a 2-line range: lines 2..=9.
+        let expected: String = (2..=9).map(|n| format!("line {n}\n")).collect();
+        assert_eq!(context(dir.path(), &anchor).unwrap(), expected);
+    }
+
+    // @relation(comments.anchor, role=Verifies)
+    #[test]
+    fn context_clamps_to_the_file_when_the_margin_would_overrun_it() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=4)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", range(1, 2)).unwrap();
+
+        assert_eq!(context(dir.path(), &anchor).unwrap(), numbered(1..=4));
+    }
+
+    // @relation(comments.anchor, role=Verifies)
+    #[test]
+    fn context_of_a_whole_file_anchor_is_the_whole_file() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=5)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", None).unwrap();
+
+        assert_eq!(context(dir.path(), &anchor).unwrap(), numbered(1..=5));
+    }
+
+    // @relation(comments.projection, role=Verifies)
+    #[test]
+    fn project_from_context_relocates_across_an_edit_above_the_range() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", range(5, 6)).unwrap();
+        let context = context(dir.path(), &anchor).unwrap();
+
+        let edited = format!("added a\nadded b\n{}", numbered(1..=10));
+        std::fs::write(dir.path().join("file.txt"), edited).unwrap();
+        commit_all(dir.path(), "two");
+
+        // Same answer `project` itself would give, but derived with no
+        // reference at all to the anchor's own (still very much present)
+        // commit — exercising the exact code path that stands in once it is
+        // gone.
+        assert_eq!(
+            project_from_context(dir.path(), &anchor, "HEAD", &context).unwrap(),
+            Projection::Relocated {
+                path: "file.txt".to_owned(),
+                lines: range(7, 8),
+            }
+        );
+    }
+
+    // @relation(comments.projection, role=Verifies)
+    #[test]
+    fn project_from_context_reports_outdated_when_no_window_matches_well() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", range(5, 6)).unwrap();
+        let context = context(dir.path(), &anchor).unwrap();
+
+        // A wholesale rewrite leaves nothing resembling the captured
+        // neighborhood anywhere in the file.
+        std::fs::write(dir.path().join("file.txt"), "totally\nunrelated\ncontent\n").unwrap();
+        commit_all(dir.path(), "two");
+
+        assert_eq!(
+            project_from_context(dir.path(), &anchor, "HEAD", &context).unwrap(),
+            Projection::Outdated {
+                path: "file.txt".to_owned(),
+            }
+        );
+    }
+
+    // @relation(comments.projection, role=Verifies)
+    #[test]
+    fn project_from_context_reports_file_deleted() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", range(5, 6)).unwrap();
+        let context = context(dir.path(), &anchor).unwrap();
+
+        std::fs::remove_file(dir.path().join("file.txt")).unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), "different\n").unwrap();
+        commit_all(dir.path(), "two");
+
+        assert_eq!(
+            project_from_context(dir.path(), &anchor, "HEAD", &context).unwrap(),
+            Projection::FileDeleted
+        );
+    }
+
+    // @relation(comments.projection, role=Verifies)
+    #[test]
+    fn project_from_context_of_a_whole_file_anchor_survives_any_edit() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let anchor = capture(dir.path(), "HEAD", "file.txt", None).unwrap();
+        let context = context(dir.path(), &anchor).unwrap();
+
+        let edited = numbered(1..=10).replace("line 5\n", "line five\n");
+        std::fs::write(dir.path().join("file.txt"), edited).unwrap();
+        commit_all(dir.path(), "two");
+
+        assert_eq!(
+            project_from_context(dir.path(), &anchor, "HEAD", &context).unwrap(),
+            Projection::Relocated {
+                path: "file.txt".to_owned(),
+                lines: None,
+            }
+        );
     }
 }

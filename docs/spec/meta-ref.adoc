@@ -275,6 +275,10 @@ The identifier MUST follow the same genesis-key rule as an issue and is
 never renamed.
 One ref per comment keeps comments independently loadable and separately
 historied; the ref's commit chain is the comment's edit history.
+The document's stored tree additionally carries the retained blob and
+surrounding-lines window described in <<anchor.reachability>>; this is
+storage plumbing, not a `Comment` field, and is invisible to any reader of
+the document's public shape.
 --
 
 [role="requirement", id="comments.authorship"]

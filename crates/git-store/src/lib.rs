@@ -206,23 +206,7 @@ impl Store {
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, None, &[])
-    }
-
-    /// Like [`store`](Self::store), but also parenting the written commit on
-    /// each of `extra_parents` (beyond the ref's own prior tip), so the
-    /// commit stays reachability-anchored to other history it depends on —
-    /// e.g. a comment's commit carries the commit it annotates as a second
-    /// parent, so the annotated commit can never be garbage-collected out
-    /// from under it.
-    pub fn store_with_parents<T: for<'a> Facet<'a> + SchemaVersion>(
-        &self,
-        refname: &str,
-        value: &T,
-        message: &str,
-        extra_parents: &[ObjectId],
-    ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, None, extra_parents)
+        self.store_impl(refname, value, message, None)
     }
 
     /// Like [`store`](Self::store), but attributing authorship to `author`
@@ -236,21 +220,7 @@ impl Store {
         message: &str,
         author: (&str, &str),
     ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, Some(author), &[])
-    }
-
-    /// Like [`store_authored`](Self::store_authored), but also parenting the
-    /// written commit on each of `extra_parents`, per
-    /// [`store_with_parents`](Self::store_with_parents).
-    pub fn store_authored_with_parents<T: for<'a> Facet<'a> + SchemaVersion>(
-        &self,
-        refname: &str,
-        value: &T,
-        message: &str,
-        author: (&str, &str),
-        extra_parents: &[ObjectId],
-    ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, Some(author), extra_parents)
+        self.store_impl(refname, value, message, Some(author))
     }
 
     /// ## Requirements
@@ -262,7 +232,6 @@ impl Store {
         value: &T,
         message: &str,
         author: Option<(&str, &str)>,
-        extra_parents: &[ObjectId],
     ) -> Result<(), Error> {
         let mut expected = self.ref_commit(refname)?;
         // Bare (unmarked) tree throughout: the `.schema` marker is added only
@@ -271,11 +240,8 @@ impl Store {
         let mut tree = facet_git_tree::serialize_into(value, &self.odb)?;
         for _ in 0..=MAX_MERGE_RETRIES {
             let versioned = schema::inject(&self.odb, tree, T::VERSION)?;
-            let parents = expected
-                .into_iter()
-                .chain(extra_parents.iter().copied())
-                .collect();
-            let commit = self.write_commit(versioned, parents, expected, message, author)?;
+            let parents = expected.into_iter().collect();
+            let commit = self.write_commit(versioned, parents, message, author)?;
             match self.try_set_ref(refname, expected, commit) {
                 Ok(()) => return Ok(()),
                 Err(Error::Conflict) => {
@@ -322,14 +288,11 @@ impl Store {
         let tree = facet_git_tree::serialize_into(value, &self.odb)?;
         let tree = schema::inject(&self.odb, tree, T::VERSION)?;
         let expected = self.ref_commit(refname)?;
-        let (parents, chain_parent) = match &expected {
-            Some(tip) => {
-                let tip = self.read_commit(tip)?;
-                (tip.parents, tip.chain_parent)
-            }
-            None => (Vec::new(), None),
+        let parents = match &expected {
+            Some(tip) => self.read_commit(tip)?.parents,
+            None => Vec::new(),
         };
-        let commit = self.write_commit(tree, parents, chain_parent, message, None)?;
+        let commit = self.write_commit(tree, parents, message, None)?;
         self.try_set_ref(refname, expected, commit)
     }
 
@@ -341,7 +304,7 @@ impl Store {
     pub fn store_tree(&self, refname: &str, tree: ObjectId, message: &str) -> Result<(), Error> {
         let expected = self.ref_commit(refname)?;
         let parents = expected.into_iter().collect();
-        let commit = self.write_commit(tree, parents, expected, message, None)?;
+        let commit = self.write_commit(tree, parents, message, None)?;
         self.try_set_ref(refname, expected, commit)
     }
 
@@ -359,7 +322,7 @@ impl Store {
     ) -> Result<(), Error> {
         let expected = self.ref_commit(refname)?;
         let parents = Vec::new();
-        let commit = self.write_commit(tree, parents, expected, message, None)?;
+        let commit = self.write_commit(tree, parents, message, None)?;
         self.try_set_ref(refname, expected, commit)
     }
 
@@ -423,27 +386,6 @@ impl Store {
         author: (&str, &str),
     ) -> Result<(), Error> {
         self.store_authored(&item_ref(prefix, id)?, value, message, author)
-    }
-
-    /// Like [`store_item_authored`](Self::store_item_authored), but also
-    /// parenting the written commit on each of `extra_parents`, per
-    /// [`store_with_parents`](Self::store_with_parents).
-    pub fn store_item_authored_with_parents<T: for<'a> Facet<'a>>(
-        &self,
-        prefix: &str,
-        id: &str,
-        value: &T,
-        message: &str,
-        author: (&str, &str),
-        extra_parents: &[ObjectId],
-    ) -> Result<(), Error> {
-        self.store_authored_with_parents(
-            &item_ref(prefix, id)?,
-            value,
-            message,
-            author,
-            extra_parents,
-        )
     }
 
     /// Like [`store_item`](Self::store_item), but for a [`HasId`] value that
@@ -539,7 +481,7 @@ impl Store {
                 Err(facet_git_tree::Error::Message(_)) => break,
                 Err(error) => return Err(error.into()),
             }
-            cursor = commit.chain_parent;
+            cursor = commit.parents.first().copied();
         }
         Ok(out)
     }
@@ -557,7 +499,7 @@ impl Store {
         };
         let mut commit = self.read_commit(&tip)?;
         let updated = commit.author.clone();
-        while let Some(parent) = commit.chain_parent {
+        while let Some(parent) = commit.parents.first().copied() {
             commit = self.read_commit(&parent)?;
         }
         Ok(Some(Provenance {
@@ -612,8 +554,8 @@ impl Store {
         }
     }
 
-    /// Read `oid`'s tree, parents, chain parent, author, and committer date
-    /// from the durable store.
+    /// Read `oid`'s tree, parents, author, and committer date from the
+    /// durable store.
     fn read_commit(&self, oid: &ObjectId) -> Result<CommitFacts, Error> {
         let mut buffer = Vec::new();
         let commit = self
@@ -627,24 +569,9 @@ impl Store {
         let author = commit
             .author()
             .map_err(|error| Error::Object(error.to_string()))?;
-        let chain_parent = commit
-            .extra_headers()
-            .find(CHAIN_PARENT_HEADER)
-            .map(|value| {
-                if value.is_empty() {
-                    Ok(None)
-                } else {
-                    ObjectId::from_hex(value)
-                        .map(Some)
-                        .map_err(|error| Error::Object(error.to_string()))
-                }
-            })
-            .transpose()?
-            .unwrap_or_else(|| commit.parents().next());
         Ok(CommitFacts {
             tree: commit.tree(),
             parents: commit.parents().collect(),
-            chain_parent,
             seconds: u64::try_from(seconds).unwrap_or(0),
             author: Authorship {
                 name: author.name.to_string(),
@@ -655,18 +582,15 @@ impl Store {
     }
 
     /// Wrap `tree` in a commit over `parents` and write it to the durable
-    /// store, recording `chain_parent` (the document's own prior state, as
-    /// opposed to any other parent riding along for reachability, e.g. an
-    /// anchored commit) in a header when `parents` holds more than just it —
-    /// otherwise the chain and the parent list agree and no header is needed.
-    /// The committer is always the git-ents system identity; `author`
-    /// overrides the authorship when set, otherwise it too is the system
-    /// identity.
+    /// store. Every write through this `Store` produces a single-parent (or
+    /// parentless) commit, so `parents.first()` is always the document's own
+    /// prior state — no other parent ever rides along. The committer is
+    /// always the git-ents system identity; `author` overrides the
+    /// authorship when set, otherwise it too is the system identity.
     fn write_commit(
         &self,
         tree: ObjectId,
         parents: Vec<ObjectId>,
-        chain_parent: Option<ObjectId>,
         message: &str,
         author: Option<(&str, &str)>,
     ) -> Result<ObjectId, Error> {
@@ -684,16 +608,6 @@ impl Store {
             },
             None => committer.clone(),
         };
-        // The chain-parent header is only needed when the plain "first
-        // parent is the chain" convention would recover the wrong thing —
-        // i.e. a genesis commit (no chain parent) that still carries an
-        // extra parent, which would otherwise occupy the first slot.
-        let extra_headers = if parents.first().copied() == chain_parent {
-            Vec::new()
-        } else {
-            let value = chain_parent.map(|oid| oid.to_string()).unwrap_or_default();
-            vec![(CHAIN_PARENT_HEADER.into(), value.into())]
-        };
         let commit = Commit {
             tree,
             parents: parents.into(),
@@ -701,7 +615,7 @@ impl Store {
             committer,
             encoding: None,
             message: message.into(),
-            extra_headers,
+            extra_headers: Vec::new(),
         };
         self.odb
             .write(&commit)
@@ -742,14 +656,6 @@ impl Store {
 /// contention; ordinary racing writers resolve within one or two rounds.
 const MAX_MERGE_RETRIES: usize = 5;
 
-/// The commit header recording a document's chain parent explicitly, written
-/// only when the plain "first parent is the chain" convention would recover
-/// the wrong thing: a genesis commit (no prior document state) that still
-/// carries an extra parent for reachability (<<anchor.reachability>>), which
-/// would otherwise occupy the first — and only — parent slot. An empty value
-/// means the chain has no parent at all (this commit is the genesis).
-const CHAIN_PARENT_HEADER: &str = "chain-parent";
-
 /// The ref name for item `id` under the collection namespace `prefix`
 /// (`{prefix}/{id}`), rejecting an `id` that fails [`ref_segment_ok`] since it
 /// becomes the ref's last path segment.
@@ -781,13 +687,11 @@ pub struct Provenance {
     pub updated: Authorship,
 }
 
-/// The facts read off a commit: its tree, its parents, its chain parent (the
-/// document's own prior state, distinct from any other parent riding along
-/// for reachability), its author, and its committer date.
+/// The facts read off a commit: its tree, its parents, its author, and its
+/// committer date.
 struct CommitFacts {
     tree: ObjectId,
     parents: Vec<ObjectId>,
-    chain_parent: Option<ObjectId>,
     seconds: u64,
     author: Authorship,
 }
@@ -1287,7 +1191,7 @@ mod tests {
         // A write built from the now-stale snapshot loses the CAS race.
         let tree = facet_git_tree::serialize_into(&"third".to_string(), &store.odb).unwrap();
         let commit = store
-            .write_commit(tree, stale.into_iter().collect(), stale, "write", None)
+            .write_commit(tree, stale.into_iter().collect(), "write", None)
             .unwrap();
         let result = store.try_set_ref(refname, stale, commit);
         assert!(matches!(result, Err(Error::Conflict)));
@@ -1308,9 +1212,7 @@ mod tests {
         // Our write, built assuming the ref was still absent, has no common
         // ancestor with theirs and so cannot be merged.
         let tree = facet_git_tree::serialize_into(&"ours".to_string(), &store.odb).unwrap();
-        let commit = store
-            .write_commit(tree, Vec::new(), None, "ours", None)
-            .unwrap();
+        let commit = store.write_commit(tree, Vec::new(), "ours", None).unwrap();
         let result = store.try_set_ref(refname, None, commit);
         assert!(matches!(result, Err(Error::Conflict)));
     }
@@ -1339,7 +1241,7 @@ mod tests {
         };
         let tree = facet_git_tree::serialize_into(&"pass".to_string(), &store.odb).unwrap();
         let commit = store
-            .write_commit(tree, parents, stale, "advance to pass", None)
+            .write_commit(tree, parents, "advance to pass", None)
             .unwrap();
         let result = store.try_set_ref(refname, stale, commit);
         assert!(matches!(result, Err(Error::Conflict)));

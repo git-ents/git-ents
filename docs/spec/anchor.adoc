@@ -16,6 +16,10 @@ Creating an anchor MUST validate the path and line range against the
 revision's actual content.
 The anchored text is fully derivable from the blob and the line range and
 MUST be derived at read time, never stored redundantly.
+The anchored commit is recorded on a best-effort basis only (see
+<<anchor.reachability>>): nothing keeps it from being garbage collected, and
+an anchor MUST remain valid — its exact text still derivable, its position
+still projectable via a fallback — after it is gone.
 --
 
 [role="requirement", id="comments.projection"]
@@ -28,15 +32,32 @@ file moved and/or the range shifted past edits outside it, reported with the
 new path and range), *outdated* (an edit touched the anchored region, or the
 entry is no longer a regular file), or *deleted* (the file is gone).
 Projection MUST follow renames and MUST work between any two commits —
-forwards, backwards, or across unrelated history.
+forwards, backwards, or across unrelated history, as long as the anchor's own
+commit still exists.
+Once the anchor commit has been garbage collected, projection MUST fall back
+to fuzzy-matching a small retained window of surrounding source lines against
+the target commit's version of the same path, reporting *relocated* (with the
+matched line range) on a good match, *outdated* on a poor one, and *deleted*
+when the path itself is gone — the same four outcomes, recovered
+approximately rather than exactly.
 An outdated or deleted projection MUST NOT lose the comment: the original
 anchor remains displayable.
+Projection is read-only and MUST NEVER mutate the stored anchor, in either
+the exact or the fallback path.
 --
 
 [role="requirement", id="anchor.reachability"]
 .Anchor Reachability
 --
-The meta-ref commit storing an anchor MUST carry the anchored commit as an
-extra parent, so the anchored commit is reachable from `refs/meta/*` and
-survives force-push, branch deletion, and gc without any gc special-casing.
+The content an anchor names — the anchored blob and a small window of
+surrounding source lines — MUST be embedded as ordinary tree entries in the
+consuming document's own stored tree (a reference to the existing blob's
+object id, not a copy; the surrounding-lines window written fresh), so both
+stay reachable from `refs/meta/*`, and so survive force-push, branch
+deletion, and gc, for as long as the consuming document's ref exists. This
+MUST NOT use a gitlink (mode `160000`): a gitlink names a commit in another
+repository and is not itself a reachability edge, so it would not keep
+anything reachable. The anchored commit's id is retained only as a plain data
+field (see <<comments.anchor>>) and is NOT pinned by this mechanism; it MAY
+be garbage collected once nothing else keeps it reachable.
 --

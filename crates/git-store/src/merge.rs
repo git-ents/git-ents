@@ -59,6 +59,15 @@ enum Classify {
 }
 
 fn classify(shape: &'static Shape) -> Classify {
+    // A `RawTree` field's tree entry is the wrapped subtree's own object id,
+    // not a struct encoding of `RawTree` itself (see `facet_git_tree::RawTree`),
+    // so walking it field-by-field would look for a `hash` entry that was
+    // never written and fail. Treat it as a leaf instead: identical oids are
+    // untouched, one side changed is taken as-is, both sides changed conflicts
+    // — the same fallback every other opaque leaf gets.
+    if shape.is_type::<facet_git_tree::RawTree>() {
+        return Classify::Atomic;
+    }
     if let Type::User(UserType::Struct(st)) = shape.ty
         && !matches!(st.kind, StructKind::Unit)
     {

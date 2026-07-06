@@ -6,14 +6,30 @@
 //! authoritative at creation and never mutated, and [`project`] re-derives at
 //! read time where the comment sits on any other commit.
 //!
+//! # Retention
+//!
+//! Nothing pins the anchored commit against garbage collection any more — its
+//! id on [`Anchor::commit`] is best-effort. What actually survives is the
+//! anchored *content*: [`store`] embeds the anchored blob directly (a tree
+//! entry pointing at its existing object id, no copy — content addressing
+//! makes this free) alongside a small `context` blob of the surrounding source
+//! lines ([`git_anchor::context`]), both as ordinary entries in the comment's
+//! own document tree. That makes them reachable — and so un-collectable — for
+//! as long as the comment's ref exists, with no gitlink and no second commit
+//! parent involved. [`project`] uses the context blob to fuzzy-match the
+//! anchor's location back onto a target commit once the anchor commit itself
+//! is gone (see [`git_anchor::project_from_context`]).
+//!
 //! # The comment is the commit
 //!
 //! The document tree holds only the body, the anchor, and an optional issue
-//! cross-reference. Who wrote the comment and when are *not* fields: they are
-//! recovered from the ref's commit chain ([`provenance`]) — the genesis
-//! commit's author created the comment, the tip commit's author last edited
-//! it — exactly as git itself carries authorship. [`store`] therefore takes
-//! the author and stamps it on the commit it writes.
+//! cross-reference (plus the retained blob and context, invisible to the
+//! public [`Comment`] type — see [`StoredComment`]). Who wrote the comment and
+//! when are *not* fields: they are recovered from the ref's commit chain
+//! ([`provenance`]) — the genesis commit's author created the comment, the
+//! tip commit's author last edited it — exactly as git itself carries
+//! authorship. [`store`] therefore takes the author and stamps it on the
+//! commit it writes.
 //!
 //! # Identity
 //!
@@ -25,9 +41,12 @@
 use std::path::Path;
 
 use facet::Facet;
+use facet_git_tree::RawTree;
 use git_anchor::{Anchor, Projection};
 use git_store::Provenance;
 use gix::ObjectId;
+use gix::objs::tree::{Entry as TreeEntry, EntryKind, EntryMode};
+use gix::objs::{Blob, FindExt as _, Tree, Write as _};
 
 // @relation(comments.ref)
 /// The namespace under which comments are recorded: one ref,
@@ -52,6 +71,41 @@ pub struct Comment {
     pub issue: Option<String>,
 }
 
+/// The document actually written to and read from a comment's ref: [`Comment`]
+/// plus `retained`, a passthrough tree ([`facet_git_tree::RawTree`]) holding
+/// two entries invisible to [`Comment`] itself — `blob`, the anchored file at
+/// its own object id (a reference, not a copy: content addressing makes this
+/// free), and `context`, [`git_anchor::context`]'s snapshot of the
+/// surrounding lines. Both ride along in the comment's own document tree
+/// purely so they stay reachable from `refs/meta/comments/<id>` — and so
+/// survive force-push, branch deletion, and gc — for as long as the comment's
+/// ref exists, with no gitlink and no second commit parent involved.
+///
+/// `retained` is deliberately absent from the public [`Comment`]: it is
+/// storage plumbing a caller never needs to see, read, or set — [`store`]
+/// derives it fresh from `comment.anchor` every write.
+///
+/// ## Requirements
+///
+/// @relation(anchor.reachability)
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+struct StoredComment {
+    body: String,
+    anchor: Anchor,
+    issue: Option<String>,
+    retained: RawTree,
+}
+
+impl From<StoredComment> for Comment {
+    fn from(stored: StoredComment) -> Self {
+        Self {
+            body: stored.body,
+            anchor: stored.anchor,
+            issue: stored.issue,
+        }
+    }
+}
+
 /// Derive a comment's stable genesis key: `origin`'s object id (hex) when the
 /// comment derives from one, otherwise the hash of the comment's own initial
 /// content — every comment is a git object, so it always has one.
@@ -62,15 +116,17 @@ pub fn new_id(origin: Option<&str>, content: &Comment) -> Result<String, git_sto
 /// Load the comment recorded at `refs/meta/comments/<id>` in `repo`, or `None`
 /// when no such comment exists.
 pub fn load(repo: &Path, id: &str) -> Result<Option<Comment>, git_store::Error> {
-    git_store::Store::open(repo)?.load_item(COMMENTS_NS, id)
+    Ok(git_store::Store::open(repo)?
+        .load_item::<StoredComment>(COMMENTS_NS, id)?
+        .map(Into::into))
 }
 
 /// Write `comment` to `refs/meta/comments/<id>` in `repo` as a new commit
 /// authored by `author` (a `(name, email)` pair), so the ref's commit chain is
-/// the comment's edit history and carries its authorship. The commit also
-/// carries the anchored commit as a second parent, so the commit the comment
-/// annotates stays reachable — and so cannot be garbage-collected — for as
-/// long as the comment's ref exists.
+/// the comment's edit history and carries its authorship. Also embeds the
+/// anchored blob and a context snapshot in the written document tree (see
+/// [`StoredComment`]), so the content the comment is anchored to stays
+/// reachable independently of whether `comment.anchor.commit` itself survives.
 ///
 /// ## Requirements
 ///
@@ -81,21 +137,80 @@ pub fn store(
     comment: &Comment,
     author: (&str, &str),
 ) -> Result<(), git_store::Error> {
-    let anchored = ObjectId::try_from(&comment.anchor.commit)
+    let context = git_anchor::context(repo, &comment.anchor)
         .map_err(|error| git_store::Error::Invalid(error.to_string()))?;
-    git_store::Store::open(repo)?.store_item_authored_with_parents(
+    let odb = odb_at(repo)?;
+    let retained = embed(&odb, &comment.anchor, &context)?;
+    let stored = StoredComment {
+        body: comment.body.clone(),
+        anchor: comment.anchor.clone(),
+        issue: comment.issue.clone(),
+        retained,
+    };
+    git_store::Store::open(repo)?.store_item_authored(
         COMMENTS_NS,
         id,
-        comment,
+        &stored,
         "Update comment",
         author,
-        &[anchored],
     )
+}
+
+/// Write the anchored blob (by its existing object id, no copy) and a fresh
+/// `context` blob into a small tree, wrapped as a [`RawTree`] ready to embed
+/// in a [`StoredComment`] — the retention mechanism [`store`] relies on.
+///
+/// ## Requirements
+///
+/// @relation(anchor.reachability)
+fn embed(
+    odb: &gix::odb::Handle,
+    anchor: &Anchor,
+    context: &str,
+) -> Result<RawTree, git_store::Error> {
+    let blob_oid = ObjectId::try_from(&anchor.blob)
+        .map_err(|error| git_store::Error::Invalid(error.to_string()))?;
+    let context_oid = odb
+        .write(&Blob {
+            data: context.as_bytes().to_vec(),
+        })
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    let mut entries = vec![
+        TreeEntry {
+            mode: EntryMode::from(EntryKind::Blob),
+            filename: "blob".into(),
+            oid: blob_oid,
+        },
+        TreeEntry {
+            mode: EntryMode::from(EntryKind::Blob),
+            filename: "context".into(),
+            oid: context_oid,
+        },
+    ];
+    entries.sort();
+    let tree_oid = odb
+        .write(&Tree { entries })
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    Ok(RawTree::new(tree_oid))
+}
+
+/// Open a raw object database on `repo`'s common git directory, the same one
+/// [`git_store::Store`] uses internally — opened again here since writing the
+/// retained blob and context tree directly is this crate's own concern (see
+/// [`embed`]), the same reasoning `git-toolchain` documents for its own
+/// direct object writes.
+fn odb_at(repo: &Path) -> Result<gix::odb::Handle, git_store::Error> {
+    let opened = gix::open(repo).map_err(|error| git_store::Error::Open(Box::new(error)))?;
+    gix::odb::at(opened.common_dir().join("objects")).map_err(|_io| git_store::Error::Odb)
 }
 
 /// List every comment in `repo` as `(id, comment)` pairs, newest ref first.
 pub fn list(repo: &Path) -> Result<Vec<(String, Comment)>, git_store::Error> {
-    git_store::Store::open(repo)?.list_items(COMMENTS_NS)
+    Ok(git_store::Store::open(repo)?
+        .list_items::<StoredComment>(COMMENTS_NS)?
+        .into_iter()
+        .map(|(id, stored)| (id, stored.into()))
+        .collect())
 }
 
 /// Who created and who last updated the comment at `id`, recovered from its
@@ -108,19 +223,56 @@ pub fn provenance(repo: &Path, id: &str) -> Result<Option<Provenance>, git_store
     git_store::Store::open(repo)?.item_provenance(COMMENTS_NS, id)
 }
 
-/// Where `comment`'s anchor sits on `target` (a revision in `repo`): still
-/// [`Projection::Current`], relocated to a new path or shifted lines, outdated
-/// because the anchored region was edited, or gone with its file.
+/// Where the comment `id`'s anchor sits on `target` (a revision in `repo`):
+/// still [`Projection::Current`], relocated to a new path or shifted lines,
+/// outdated because the anchored region was edited, or gone with its file.
+///
+/// Tries [`git_anchor::project`] first; if `comment.anchor.commit` has been
+/// garbage collected, falls back to [`git_anchor::project_from_context`]
+/// against the comment's retained `context` blob, read directly off `id`'s
+/// ref rather than recomputed — recomputing would need the very commit that
+/// is gone.
 ///
 /// ## Requirements
 ///
 /// @relation(comments.projection)
 pub fn project(
     repo: &Path,
+    id: &str,
     comment: &Comment,
     target: &str,
 ) -> Result<Projection, git_anchor::Error> {
-    git_anchor::project(repo, &comment.anchor, target)
+    match git_anchor::project(repo, &comment.anchor, target) {
+        Err(git_anchor::Error::AnchorCommitMissing(_)) => {
+            let context = retained_context(repo, id)
+                .map_err(|error| git_anchor::Error::Object(error.to_string()))?;
+            git_anchor::project_from_context(repo, &comment.anchor, target, &context)
+        }
+        other => other,
+    }
+}
+
+/// Read the `context` blob out of comment `id`'s retained tree (see
+/// [`StoredComment`]) directly off its ref, for [`project`]'s fallback path.
+fn retained_context(repo: &Path, id: &str) -> Result<String, git_store::Error> {
+    let stored: StoredComment = git_store::Store::open(repo)?
+        .load_item(COMMENTS_NS, id)?
+        .ok_or_else(|| git_store::Error::Ref(format!("{COMMENTS_NS}/{id} does not exist")))?;
+    let odb = odb_at(repo)?;
+    let mut tree_buf = Vec::new();
+    let tree = odb
+        .find_tree(&stored.retained.oid(), &mut tree_buf)
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    let entry = tree
+        .entries
+        .iter()
+        .find(|entry| entry.filename == "context")
+        .ok_or_else(|| git_store::Error::Object("retained tree has no context entry".to_owned()))?;
+    let mut blob_buf = Vec::new();
+    let blob = odb
+        .find_blob(entry.oid, &mut blob_buf)
+        .map_err(|error| git_store::Error::Object(error.to_string()))?;
+    Ok(String::from_utf8_lossy(blob.data).into_owned())
 }
 
 #[cfg(test)]
@@ -131,6 +283,7 @@ mod tests {
         reason = "unit test"
     )]
 
+    use std::path::Path;
     use std::process::Command;
 
     use git_anchor::LineRange;
@@ -138,13 +291,23 @@ mod tests {
 
     use super::*;
 
-    fn comment(body: &str, issue: Option<&str>) -> Comment {
+    /// A comment whose anchor points at a real (if otherwise arbitrary) blob
+    /// in `dir` — `store` now has to read that blob to derive `context`, so a
+    /// fixture anchored to a made-up oid would fail before ever reaching the
+    /// assertions these tests care about. The anchor's `commit` stays a
+    /// made-up hex string: nothing reads it back except as an opaque field.
+    fn comment(dir: &Path, body: &str, issue: Option<&str>) -> Comment {
+        let blob = git_with_stdin(
+            dir,
+            &["hash-object", "-w", "--stdin"],
+            "one\ntwo\nthree\nfour\n",
+        );
         Comment {
             body: body.to_owned(),
             anchor: Anchor {
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
                 path: "src/lib.rs".to_owned(),
-                blob: "89abcdef0123456789abcdef0123456789abcdef".into(),
+                blob: blob.as_str().into(),
                 lines: Some(LineRange { start: 3, end: 4 }),
             },
             issue: issue.map(str::to_owned),
@@ -157,7 +320,7 @@ mod tests {
     #[test]
     fn store_then_load_round_trips_a_comment() {
         let dir = repo();
-        let written = comment("Why is this 1?", Some("deadbeef"));
+        let written = comment(dir.path(), "Why is this 1?", Some("deadbeef"));
         store(dir.path(), "1", &written, AUTHOR).unwrap();
         assert_eq!(load(dir.path(), "1").unwrap(), Some(written));
     }
@@ -172,8 +335,14 @@ mod tests {
     #[test]
     fn lists_comments_keyed_by_id() {
         let dir = repo();
-        store(dir.path(), "1", &comment("first", None), AUTHOR).unwrap();
-        store(dir.path(), "2", &comment("second", None), AUTHOR).unwrap();
+        store(dir.path(), "1", &comment(dir.path(), "first", None), AUTHOR).unwrap();
+        store(
+            dir.path(),
+            "2",
+            &comment(dir.path(), "second", None),
+            AUTHOR,
+        )
+        .unwrap();
         let mut ids: Vec<String> = list(dir.path())
             .unwrap()
             .into_iter()
@@ -185,14 +354,16 @@ mod tests {
 
     #[test]
     fn new_id_uses_the_origin_when_one_is_given() {
-        let content = comment("a comment", None);
+        let dir = repo();
+        let content = comment(dir.path(), "a comment", None);
         assert_eq!(new_id(Some("deadbeef"), &content).unwrap(), "deadbeef");
     }
 
     #[test]
     fn new_id_hashes_its_own_content_with_no_origin() {
-        let a = comment("a comment", None);
-        let b = comment("a different comment", None);
+        let dir = repo();
+        let a = comment(dir.path(), "a comment", None);
+        let b = comment(dir.path(), "a different comment", None);
         let a_id = new_id(None, &a).unwrap();
         assert_eq!(a_id, new_id(None, &a).unwrap());
         assert_ne!(a_id, new_id(None, &b).unwrap());
@@ -202,11 +373,11 @@ mod tests {
     #[test]
     fn provenance_comes_from_the_commits_not_the_document() {
         let dir = repo();
-        store(dir.path(), "1", &comment("first", None), AUTHOR).unwrap();
+        store(dir.path(), "1", &comment(dir.path(), "first", None), AUTHOR).unwrap();
         store(
             dir.path(),
             "1",
-            &comment("edited", None),
+            &comment(dir.path(), "edited", None),
             ("bob", "bob@example.com"),
         )
         .unwrap();
@@ -217,40 +388,120 @@ mod tests {
         assert!(provenance.created.seconds > 0);
     }
 
+    /// The current branch's short name, so a test that force-moves the
+    /// branch ref does not have to guess `init.defaultBranch`.
+    fn current_branch(dir: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    /// Whether `oid` still exists as an object in `dir`'s repository.
+    fn object_exists(dir: &Path, oid: &str) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["cat-file", "-e", oid])
+            .status()
+            .unwrap()
+            .success()
+    }
+
     // @relation(anchor.reachability, role=Verifies)
     #[test]
-    fn a_stored_comment_carries_its_anchored_commit_as_a_second_parent() {
+    fn the_anchored_blob_survives_branch_deletion_and_gc_pruning_the_anchor_commit() {
         let dir = repo();
-        std::fs::write(dir.path().join("file.txt"), "one\ntwo\nthree\n").unwrap();
-        commit_all(dir.path(), "one");
+        let repo_path = dir.path();
+        std::fs::write(repo_path.join("file.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        commit_all(repo_path, "one");
 
         let anchor = git_anchor::capture(
-            dir.path(),
+            repo_path,
             "HEAD",
             "file.txt",
             Some(LineRange { start: 2, end: 2 }),
         )
         .unwrap();
-        let anchored_commit = anchor.commit.to_string();
+        let anchor_commit = anchor.commit.to_string();
         let written = Comment {
-            body: "Why two?".to_owned(),
+            body: "why two?".to_owned(),
             anchor,
             issue: None,
         };
         let id = new_id(None, &written).unwrap();
-        store(dir.path(), &id, &written, AUTHOR).unwrap();
+        store(repo_path, &id, &written, AUTHOR).unwrap();
 
-        let is_ancestor = Command::new("git")
-            .current_dir(dir.path())
-            .args([
-                "merge-base",
-                "--is-ancestor",
-                &anchored_commit,
-                &format!("{COMMENTS_NS}/{id}"),
-            ])
+        // Rewrite the branch onto a brand-new parentless commit holding an
+        // edited file, so the original commit is no longer anyone's
+        // ancestor. An ordinary edit could never detach history like this,
+        // but a rebase, a `filter-repo` pass, or a force-push can, and that
+        // is exactly the scenario retention has to survive.
+        let edited_blob = git_with_stdin(
+            repo_path,
+            &["hash-object", "-w", "--stdin"],
+            "zero\none\ntwo\nthree\nfour\nfive\n",
+        );
+        let edited_tree = git_with_stdin(
+            repo_path,
+            &["mktree"],
+            &format!("100644 blob {edited_blob}\tfile.txt\n"),
+        );
+        let replacement =
+            git_with_stdin(repo_path, &["commit-tree", &edited_tree, "-m", "two"], "");
+        let branch = current_branch(repo_path);
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(["update-ref", &format!("refs/heads/{branch}"), &replacement])
             .status()
             .unwrap();
-        assert!(is_ancestor.success());
+        assert!(status.success());
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo_path)
+                .args(["reflog", "expire", "--expire=now", "--all"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo_path)
+                .args(["gc", "--prune=now", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        assert!(
+            !object_exists(repo_path, &anchor_commit),
+            "the anchor commit should have been pruned"
+        );
+
+        // The anchored blob, embedded in the comment's own tree, is still
+        // readable straight off the ref...
+        let loaded = load(repo_path, &id).unwrap().unwrap();
+        assert_eq!(
+            git_anchor::snippet(repo_path, &loaded.anchor).unwrap(),
+            "two\n"
+        );
+        // ...and still projects onto the rewritten branch tip, via the
+        // context fallback `project` reaches for once the anchor commit is
+        // gone.
+        assert_eq!(
+            project(repo_path, &id, &loaded, &replacement).unwrap(),
+            Projection::Relocated {
+                path: "file.txt".to_owned(),
+                lines: Some(LineRange { start: 3, end: 3 }),
+            }
+        );
     }
 
     // @relation(comments.anchor, comments.projection, role=Verifies)
@@ -281,7 +532,7 @@ mod tests {
             "two\n"
         );
         assert_eq!(
-            project(dir.path(), &loaded, "HEAD").unwrap(),
+            project(dir.path(), &id, &loaded, "HEAD").unwrap(),
             Projection::Current
         );
     }
@@ -291,14 +542,15 @@ mod tests {
     fn loads_the_on_disk_comment_format() {
         // A fixture written as the real on-disk layout — a `body` blob, an
         // `anchor/` subtree of `commit`/`path`/`blob` blobs with a
-        // `lines/some/{start,end}` Option subtree, and an `issue/some` Option
-        // blob — must keep loading, guarding the Comment document's shape
-        // against an incompatible change to data already on a ref.
+        // `lines/some/{start,end}` Option subtree, an `issue/some` Option
+        // blob, and a `retained/{blob,context}` passthrough tree — must keep
+        // loading, guarding the document's shape against an incompatible
+        // change to data already on a ref.
         let dir = repo();
         let repo = dir.path();
         let blob = |value: &str| git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
 
-        let expected = comment("Why is this 1?", Some("deadbeef"));
+        let expected = comment(repo, "Why is this 1?", Some("deadbeef"));
         let range = expected.anchor.lines.unwrap();
         let range_tree = git_with_stdin(
             repo,
@@ -335,13 +587,23 @@ mod tests {
                 blob(expected.issue.as_deref().unwrap())
             ),
         );
+        let retained_tree = git_with_stdin(
+            repo,
+            &["mktree"],
+            &format!(
+                "100644 blob {}\tblob\n100644 blob {}\tcontext\n",
+                expected.anchor.blob,
+                blob("one\ntwo\nthree\nfour\n"),
+            ),
+        );
         let root = git_with_stdin(
             repo,
             &["mktree"],
             &format!(
                 "100644 blob {}\tbody\n\
                  040000 tree {anchor_tree}\tanchor\n\
-                 040000 tree {issue_tree}\tissue\n",
+                 040000 tree {issue_tree}\tissue\n\
+                 040000 tree {retained_tree}\tretained\n",
                 blob(&expected.body),
             ),
         );
