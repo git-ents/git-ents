@@ -284,11 +284,9 @@ fn sccache(spec: &str, platform: Option<&str>) -> Result<Resolved, String> {
     let url = format!(
         "https://github.com/mozilla/sccache/releases/download/{tag}/sccache-{tag}-{target}.tar.gz"
     );
-    let bytes = crate::http_get_bytes(&url)?;
 
     if platform.is_some() {
-        let sha256 = git_toolchain::sha256_hex(&bytes)
-            .map_err(|error| format!("could not hash: {error}"))?;
+        let sha256 = crate::http_get_sha256(&url)?;
         return Ok(Resolved {
             bin: Bin::Components(vec![Component {
                 url,
@@ -304,6 +302,7 @@ fn sccache(spec: &str, platform: Option<&str>) -> Result<Resolved, String> {
         });
     }
 
+    let bytes = crate::http_get_bytes(&url)?;
     let staging = tempfile::tempdir()
         .map_err(|error| format!("could not create a staging directory: {error}"))?;
     stage_sccache(&bytes, &tag, &target, staging.path())?;
@@ -334,9 +333,7 @@ fn url_archive(spec: &str, opts: &RecipeOptions) -> Result<Resolved, String> {
     if spec.is_empty() {
         return Err("the url recipe needs --spec <archive-url>".to_owned());
     }
-    let bytes = crate::http_get_bytes(spec)?;
-    let sha256 =
-        git_toolchain::sha256_hex(&bytes).map_err(|error| format!("could not hash: {error}"))?;
+    let sha256 = crate::http_get_sha256(spec)?;
     Ok(Resolved {
         bin: Bin::Components(vec![Component {
             url: spec.to_owned(),

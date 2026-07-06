@@ -1716,6 +1716,24 @@ fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("could not read the response: {error}"))
 }
 
+/// GET `url` and return its sha256, streamed straight into the hash rather
+/// than buffered — [`http_get_bytes`]'s counterpart for a trust-on-first-use
+/// pin, which only ever needs the digest and otherwise discards the archive.
+fn http_get_sha256(url: &str) -> Result<String, String> {
+    let mut response = ureq::get(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|error| format!("GET {url} failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("GET {url} returned {status}"));
+    }
+    git_toolchain::sha256_hex_reader(response.body_mut().as_reader())
+        .map_err(|error| format!("could not hash: {error}"))
+}
+
 /// POST an `application/x-www-form-urlencoded` `body` to `url`, returning the
 /// response body, or its body text as the error on a non-2xx status.
 fn http_post_form(url: &str, body: &str) -> Result<String, String> {

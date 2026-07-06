@@ -793,6 +793,14 @@ fn fetch(url: &str) -> Result<Vec<u8>, Error> {
 /// to this crate. Public so a recipe pinning a hosted archive (trust on
 /// first use) computes its hash the same way every later verification does.
 pub fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
+    sha256_hex_reader(bytes)
+}
+
+/// Hex-encoded sha256 of everything `reader` yields, streamed straight into
+/// the hashing subprocess rather than buffered — so a recipe computing a
+/// trust-on-first-use pin over a multi-hundred-MB archive doesn't have to
+/// hold the whole thing in memory just to hash it once and discard it.
+pub fn sha256_hex_reader(mut reader: impl std::io::Read) -> Result<String, Error> {
     let (program, args): (&str, &[&str]) = match std::env::consts::OS {
         "macos" => ("shasum", &["-a", "256"]),
         _ => ("sha256sum", &[]),
@@ -803,12 +811,13 @@ pub fn sha256_hex(bytes: &[u8]) -> Result<String, Error> {
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| Error::Fetch(program.to_owned(), "no stdin".to_owned()))?
-        .write_all(bytes)
+        .ok_or_else(|| Error::Fetch(program.to_owned(), "no stdin".to_owned()))?;
+    std::io::copy(&mut reader, &mut stdin)
         .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
+    drop(stdin);
     let output = child
         .wait_with_output()
         .map_err(|error| Error::Fetch(program.to_owned(), error.to_string()))?;
