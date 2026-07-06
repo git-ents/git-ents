@@ -24,7 +24,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Seek as _, SeekFrom, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr as _;
@@ -672,12 +671,10 @@ fn write_entry(
         return Ok(Some((oid, EntryMode::from(EntryKind::Link))));
     }
     let bytes = fs::read(path).map_err(|error| Error::Io(path.to_owned(), error))?;
-    let executable = fs::metadata(path)
+    let perms = fs::metadata(path)
         .map_err(|error| Error::Io(path.to_owned(), error))?
-        .permissions()
-        .mode()
-        & 0o111
-        != 0;
+        .permissions();
+    let executable = is_executable(&perms);
     let oid = collector.insert(gix::objs::Kind::Blob, bytes)?;
     let kind = if executable {
         EntryKind::BlobExecutable
@@ -696,6 +693,47 @@ fn ensure_empty_dest(dest: &Path) -> Result<(), Error> {
     } else {
         fs::create_dir_all(dest).map_err(|error| Error::Io(dest.to_owned(), error))?;
     }
+    Ok(())
+}
+
+/// Whether any of the file's execute bits are set. Windows has no execute
+/// permission, so imported files never carry the executable mode there.
+#[cfg(unix)]
+fn is_executable(perms: &fs::Permissions) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    perms.mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_perms: &fs::Permissions) -> bool {
+    false
+}
+
+/// Create a symlink at `path` pointing to `target`.
+#[cfg(unix)]
+fn symlink(target: &str, path: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, path)
+}
+
+#[cfg(not(unix))]
+fn symlink(target: &str, path: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, path)
+}
+
+/// Set the executable mode on `path`. A no-op on platforms without unix
+/// permission bits.
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut perms = fs::metadata(path)
+        .map_err(|error| Error::Io(path.to_owned(), error))?
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).map_err(|error| Error::Io(path.to_owned(), error))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
@@ -726,8 +764,7 @@ fn write_tree_to_disk(odb: &gix::odb::Handle, tree: ObjectId, dest: &Path) -> Re
                     .data
                     .to_str()
                     .map_err(|_error| Error::NotUtf8(path.clone()))?;
-                std::os::unix::fs::symlink(target, &path)
-                    .map_err(|error| Error::Io(path.clone(), error))?;
+                symlink(target, &path).map_err(|error| Error::Io(path.clone(), error))?;
             }
             EntryKind::BlobExecutable | EntryKind::Blob => {
                 let mut blob_buf = Vec::new();
@@ -736,12 +773,7 @@ fn write_tree_to_disk(odb: &gix::odb::Handle, tree: ObjectId, dest: &Path) -> Re
                     .map_err(|error| git_store::Error::Object(error.to_string()))?;
                 fs::write(&path, blob.data).map_err(|error| Error::Io(path.clone(), error))?;
                 if entry.mode.is_executable() {
-                    let mut perms = fs::metadata(&path)
-                        .map_err(|error| Error::Io(path.clone(), error))?
-                        .permissions();
-                    perms.set_mode(0o755);
-                    fs::set_permissions(&path, perms)
-                        .map_err(|error| Error::Io(path.clone(), error))?;
+                    set_executable(&path)?;
                 }
             }
             EntryKind::Commit => {
@@ -870,7 +902,7 @@ fn extract_component(archive: &[u8], component: &Component, dest_root: &Path) ->
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     #![allow(
         clippy::unwrap_used,
@@ -878,6 +910,8 @@ mod tests {
         clippy::unreachable,
         reason = "unit test"
     )]
+
+    use std::os::unix::fs::PermissionsExt as _;
 
     use git_store::test_support::repo;
 
