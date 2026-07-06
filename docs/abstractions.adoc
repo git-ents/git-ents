@@ -32,20 +32,32 @@ A Rust struct annotated `#[derive(Facet)]` *is* the storage schema.
 `facet-git-tree` maps struct ↔ Git tree directly; no serialization
 format exists to version.
 
-Tradeoff, accepted deliberately: changing a struct is a storage
-migration, not a refactor.
+Changing a struct is a storage migration, not a refactor — and a
+migration is itself a signed push: rewrite the tree under the new
+struct, commit on the ref’s old tip. History keeps the old encoding as
+archive. Every tree carries a one-blob `.schema` version marker (absent
+means version 1) so a mismatched binary fails with “schema 2, I speak
+1” instead of misreading silently.
+
+*Tip invariant:* the tip of a meta-ref is always readable by the
+current binary; history is archival.
 
 === 3. Anchor
 
 A durable pointer into source: blob, optional line range, specific
 commit.
 
-* *Reachability invariant:* the meta-ref commit storing an anchor
-carries the anchored commit as a second parent. Anchored objects are
-reachable from `refs/meta/*` and survive force-push, branch deletion,
-and gc — no gc special-casing.
-* *Projection:* anchors project onto newer commits, so annotations
-follow code as it evolves.
+* *Retention invariant:* the tree storing an anchor embeds the anchored
+blob, plus a context blob of the surrounding lines, as ordinary entries
+— content addressing makes this free. The anchored content is reachable
+from `refs/meta/*` and survives force-push, branch deletion, and gc — no
+gc special-casing, and no pinned ancestry: the anchored commit’s oid is
+recorded as data only. (Gitlinks are not reachability edges and retain
+nothing; embedding is the only mechanism that works.)
+* *Projection:* anchors project onto newer commits at read time — blame
+plus fuzzy matching against the context blob; anchor data is never
+mutated. When the anchored commit has been gc’d, projection degrades to
+context matching instead of breaking.
 
 Anchors are independent of any consumer; comments use them, but reviews,
 TODOs, and blame overlays can too.
@@ -68,6 +80,9 @@ signatures unverifiable.
 `refs/meta/effects/*` is admin-writable only: authoring an effect
 schedules code execution, which requires more trust than pushing a
 branch. This rule must exist explicitly; it is not the default.
+* Bootstrap: an empty member list admits every push so the first member
+can enroll — locally. Hosted, repository creation requires an existing
+account; “first push owns the repo” is not an enrollment path.
 
 === 5. Effect
 
@@ -95,15 +110,21 @@ addressing makes idempotency nearly free.
 . Pushes are never blocked; the durable enqueue is the entire
 synchronous cost.
 . A worker dequeues, materializes declared toolchains from
-`refs/meta/toolchains/*`, executes in a sandbox (Fly.io Sprite hosted;
-host-direct local).
+`refs/meta/toolchains/*`, executes in a sandbox — one trait, two
+backends: Fly.io Sprite hosted, Docker local. Host-direct exists only
+behind an explicit `--unsandboxed`.
 . Results return *only* via signed push to the effect’s results ref, one
 ref per tested commit (`refs/meta/results/<effect>/<short-oid>`), so
 concurrent results never conflict.
 
-Sprites bound the runtime blast radius; the admin-only write rule on
-`refs/meta/effects/*` bounds who can schedule execution at all. Hosted
-mode requires both.
+*Recursion rule:* triggers never match `refs/meta/results/*` or
+`refs/meta/index/*`. Results and indexes are pushes, so effects could
+trigger effects; that closure must be opted into per effect, never
+arrived at by accident.
+
+The sandbox bounds the runtime blast radius; the admin-only write rule
+on `refs/meta/effects/*` bounds who can schedule execution at all.
+Hosted mode requires both.
 
 '''''
 
@@ -133,6 +154,11 @@ import/activation logic is nontrivial; if that shrinks, the subcommand
 dies.
 * *Members, accounts, comments* — typed trees behind meta-refs (1+2),
 written via signed pushes (4).
+* *Fanout indexes* — discovery without ref enumeration:
+`refs/meta/index/*` maps object oids to the entities anchored to them,
+rebuilt by an effect (5) and written via the worker’s signed push (4).
+Clients read the index; a stale or absent index degrades to scanning
+ref tips, never to wrong answers.
 * *Rendering registry* — documents render by MIME type through one
 lookup table (HTML web, plain-text CLI; unknown types pass through).
 Implementation choice.
@@ -196,7 +222,8 @@ git ents serve | server
 |Repositories |Real working repositories |Bare repositories
 |Discovery |Current repo or directory scan |Created on first push
 |Auth |Signed pushes optional by default |Signed pushes required
-|Effects |Execute directly on the host |Execute inside a Fly.io Sprite
+|Effects |Execute inside a Docker container |Execute inside a Fly.io
+Sprite
 |Purpose |Personal forge, development, demos |Production forge
 |===
 
