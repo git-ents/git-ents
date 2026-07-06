@@ -482,10 +482,31 @@ struct Update<'a> {
     ref_name: &'a str,
 }
 
+/// Refname prefixes an effect can never be triggered by, no matter how broad
+/// a trigger pattern gets (even `refs/meta/*` or `refs/*`): a push under
+/// [`crate::results::RESULTS_NS`] is an effect's own recorded outcome, and a
+/// future `refs/meta/index/*` namespace is server-maintained derived state —
+/// letting either enqueue effects would let a result (or an index update)
+/// trigger the effect that produced it, recursing forever. Checked ahead of,
+/// and independently from, the broader `refs/meta/` exclusion in
+/// [`parse_updates`], so the invariant holds even once a per-effect `trigger`
+/// pattern exists and could otherwise opt into these namespaces.
+const NEVER_TRIGGERS: &[&str] = &["refs/meta/results/", "refs/meta/index/"];
+
+/// Whether `ref_name` may ever enqueue effects. Always `false` for
+/// [`NEVER_TRIGGERS`]' namespaces, regardless of any trigger pattern an
+/// effect declares.
+fn triggers_effects(ref_name: &str) -> bool {
+    !NEVER_TRIGGERS
+        .iter()
+        .any(|prefix| ref_name.starts_with(prefix))
+}
+
 /// Parse git's `<old-oid> <new-oid> <ref>` stdin into the updates worth
-/// checking: branch updates with a real new tip. Deletions (a zero new oid) and
-/// the `refs/meta/*` control refs (auth, the effect set itself) are skipped —
-/// the effects gate ordinary content, not the trust plumbing.
+/// checking: branch updates with a real new tip. Deletions (a zero new oid),
+/// the `refs/meta/*` control refs (auth, the effect set itself), and anything
+/// under [`NEVER_TRIGGERS`] are skipped — the effects gate ordinary content,
+/// not the trust plumbing or an effect's own recorded results.
 fn parse_updates(input: &str) -> Vec<Update<'_>> {
     input
         .lines()
@@ -495,7 +516,7 @@ fn parse_updates(input: &str) -> Vec<Update<'_>> {
             let new = fields.next()?;
             let ref_name = fields.next()?;
             let new = ObjectId::from_hex(new.as_bytes()).ok()?;
-            if new.is_null() || ref_name.starts_with("refs/meta/") {
+            if new.is_null() || ref_name.starts_with("refs/meta/") || !triggers_effects(ref_name) {
                 None
             } else {
                 Some(Update { new, ref_name })
@@ -1121,6 +1142,32 @@ mod tests {
         let updates = parse_updates(&input);
         let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
         assert_eq!(refs, vec!["refs/heads/main", "refs/heads/feature"]);
+    }
+
+    // @relation(checks.post-receive, role=Verifies)
+    #[test]
+    fn triggers_effects_hard_excludes_results_and_index_regardless_of_pattern() {
+        // A `refs/*`-broad trigger must never fire on a push under
+        // `refs/meta/results/*` or `refs/meta/index/*` — the exclusion is
+        // independent of how permissive an effect's own trigger pattern is.
+        assert!(!triggers_effects("refs/meta/results/fmt/abc123"));
+        assert!(!triggers_effects("refs/meta/index/abc123"));
+        // Ordinary content refs are unaffected.
+        assert!(triggers_effects("refs/heads/main"));
+        assert!(triggers_effects("refs/meta/effects/fmt"));
+    }
+
+    // @relation(checks.post-receive, role=Verifies)
+    #[test]
+    fn parse_updates_never_enqueues_a_results_ref_push() {
+        let new = "1".repeat(40);
+        let old = "0".repeat(40);
+        let input = format!(
+            "{old} {new} refs/meta/results/fmt/abcdef123456\n{old} {new} refs/heads/main\n"
+        );
+        let updates = parse_updates(&input);
+        let refs: Vec<&str> = updates.iter().map(|u| u.ref_name).collect();
+        assert_eq!(refs, vec!["refs/heads/main"]);
     }
 
     // @relation(checks.sandbox, role=Verifies)
