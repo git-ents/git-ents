@@ -533,6 +533,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "backend-conformance"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "git-store",
+ "gix-hash",
+ "gix-object",
+ "tempfile",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3161,6 +3172,7 @@ dependencies = [
 name = "odb-files"
 version = "0.0.0"
 dependencies = [
+ "backend-conformance",
  "git-backend",
  "git-store",
  "gix",
@@ -3500,6 +3512,7 @@ dependencies = [
 name = "refstore-files"
 version = "0.0.0"
 dependencies = [
+ "backend-conformance",
  "git-backend",
  "git-store",
  "gix",

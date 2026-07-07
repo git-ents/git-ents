@@ -1,5 +1,5 @@
 [package]
-name = "refstore-files"
+name = "backend-conformance"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
@@ -7,12 +7,10 @@ license.workspace = true
 
 [dependencies]
 git-backend = { workspace = true }
-gix = { workspace = true }
-gix-hash = { workspace = true }
-
-[dev-dependencies]
-backend-conformance = { workspace = true }
 git-store = { workspace = true, features = ["test-support"] }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

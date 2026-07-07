@@ -13,6 +13,7 @@ gix-pack = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+backend-conformance = { workspace = true }
 git-store = { workspace = true, features = ["test-support"] }
 gix-object = { workspace = true }
 

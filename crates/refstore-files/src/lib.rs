@@ -163,7 +163,12 @@ fn to_gix_edit(edit: &BackendRefEdit) -> Result<GixRefEdit> {
         Some(oid) => Change::Update {
             log: LogChange {
                 mode: RefLog::AndReference,
-                force_create_reflog: false,
+                // gitoxide only auto-creates a missing reflog for
+                // refs/heads/, refs/remotes/, refs/notes/, and HEAD unless
+                // told otherwise; this project's refs mostly live under
+                // refs/meta/*, which needs `log` to work per the trait's
+                // contract regardless of namespace.
+                force_create_reflog: true,
                 message: LOG_MESSAGE.into(),
             },
             expected: to_previous_value(&edit.expected),
