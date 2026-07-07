@@ -295,7 +295,7 @@ pub(super) async fn files_page(
 ) -> Response {
     let rel = &meta.rel;
     let Some(selected) = browse_path(sub) else {
-        return not_found().into_response();
+        return not_found("No such file or directory.").into_response();
     };
 
     // Classify the selection so the right pane shows a file and the tree expands
@@ -314,7 +314,7 @@ pub(super) async fn files_page(
             .rsplit_once('/')
             .map_or(String::new(), |(d, _)| d.to_owned()),
         _ if selected.is_empty() => String::new(),
-        _ => return not_found().into_response(),
+        _ => return not_found("No such file or directory.").into_response(),
     };
 
     // Expand every ancestor directory of the selection (and the selection itself
@@ -496,7 +496,7 @@ pub(super) async fn tree_page(
 ) -> Response {
     let rel = &meta.rel;
     let Some(dir) = browse_path(sub) else {
-        return not_found().into_response();
+        return not_found("No such directory.").into_response();
     };
     let spec = if dir.is_empty() {
         "HEAD".to_owned()
@@ -505,7 +505,7 @@ pub(super) async fn tree_page(
     };
     let entries = list_tree(repo, &spec).await;
     if entries.is_empty() && !dir.is_empty() {
-        return not_found().into_response();
+        return not_found("No such directory.").into_response();
     }
     let name = meta.name();
     repo_shell(
@@ -563,7 +563,7 @@ pub(super) async fn blob_page(
 ) -> Response {
     let rel = &meta.rel;
     let Some(path) = browse_path(sub).filter(|p| !p.is_empty()) else {
-        return not_found().into_response();
+        return not_found("No such file.").into_response();
     };
     let spec = format!("HEAD:{path}");
     if git_output(repo, &["cat-file", "-t", &spec])
@@ -571,12 +571,12 @@ pub(super) async fn blob_page(
         .as_deref()
         != Some("blob\n")
     {
-        return not_found().into_response();
+        return not_found("No such file.").into_response();
     }
     let Some((bytes, truncated)) =
         git_output_capped(repo, &["cat-file", "-p", &spec], MAX_RENDER_BYTES).await
     else {
-        return not_found().into_response();
+        return not_found("No such file.").into_response();
     };
     let name = path.rsplit('/').next().unwrap_or(&path);
     let displayable = !truncated && !is_binary(&bytes);
@@ -814,7 +814,7 @@ pub(super) async fn commit_page(
     auth: Option<&super::Auth>,
 ) -> Response {
     if sha.is_empty() || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return not_found().into_response();
+        return not_found("No such commit.").into_response();
     }
     let Some(info) = git_output(
         repo,
@@ -822,14 +822,14 @@ pub(super) async fn commit_page(
     )
     .await
     else {
-        return not_found().into_response();
+        return not_found("No such commit.").into_response();
     };
     let mut parts = info.split('\u{0}');
     let Some(oid) = parts
         .next()
         .and_then(|h| ObjectId::from_hex(h.trim().as_bytes()).ok())
     else {
-        return not_found().into_response();
+        return not_found("No such commit.").into_response();
     };
     let author = parts.next().unwrap_or_default().to_owned();
     let when = parts.next().and_then(parse_iso);
@@ -1076,10 +1076,10 @@ pub(super) async fn check_recording_page(
     auth: Option<&super::Auth>,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
-        return not_found().into_response();
+        return not_found("No such check run.").into_response();
     };
     let Some(outcome) = latest_outcome(repo, commit_oid, name).await else {
-        return not_found().into_response();
+        return not_found("No such check run.").into_response();
     };
     let short_commit = commit.get(..8).unwrap_or(commit);
     let rel = &meta.rel;
@@ -1140,7 +1140,7 @@ pub(super) async fn check_live_fragment(
     live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
-        return not_found().into_response();
+        return not_found("No such check run.").into_response();
     };
     let key = (repo.to_owned(), commit_oid, name.to_owned());
     let recording = git_effect::engine::live_snapshot(live_runs, &key);
@@ -1169,10 +1169,10 @@ pub(super) async fn check_recording_download(
     live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
-        return not_found().into_response();
+        return not_found("No such check run.").into_response();
     };
     let Some(outcome) = latest_outcome(repo, commit_oid, name).await else {
-        return not_found().into_response();
+        return not_found("No such check run.").into_response();
     };
     let live = super::render::is_in_progress(outcome.status)
         .then(|| {
@@ -1181,7 +1181,7 @@ pub(super) async fn check_recording_download(
         })
         .flatten();
     let Some(recording) = live.or(outcome.recording) else {
-        return not_found().into_response();
+        return not_found("No recording available for this check run.").into_response();
     };
     let short_commit = commit.get(..8).unwrap_or(commit);
     let filename = format!(

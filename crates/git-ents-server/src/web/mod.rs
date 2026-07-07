@@ -96,7 +96,7 @@ pub(crate) async fn render(
         return route(state, &repo, &rel, rest, query, host, session).await;
     }
 
-    not_found().into_response()
+    not_found("No such repository.").into_response()
 }
 
 /// Resolve the leading path segments to a repository: the shortest valid prefix
@@ -198,12 +198,12 @@ pub(crate) async fn handle_post(
     }
 
     let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) else {
-        return not_found().into_response();
+        return not_found("No such repository.").into_response();
     };
     match rest {
         ["settings"] => save_settings(state, &repo, &rel, cookie, body).await,
         ["comment"] => save_comment(state, &repo, &rel, cookie, body).await,
-        _ => not_found().into_response(),
+        _ => not_found("No such page.").into_response(),
     }
 }
 
@@ -537,7 +537,7 @@ async fn route(
         )
         .await
         .into_response(),
-        _ => not_found().into_response(),
+        _ => not_found("No such page.").into_response(),
     }
 }
 
@@ -763,8 +763,9 @@ fn index(state: &AppState, session: Option<&write::SessionSnapshot>) -> Markup {
     )
 }
 
-/// A `404` page.
-fn not_found() -> (StatusCode, Markup) {
+/// A `404` page reporting `reason`, e.g. "No such file." or "No such commit.",
+/// so a missing sub-resource does not read as a missing repository.
+fn not_found(reason: &str) -> (StatusCode, Markup) {
     (
         StatusCode::NOT_FOUND,
         page(
@@ -772,7 +773,7 @@ fn not_found() -> (StatusCode, Markup) {
             html! {
                 div.blankslate {
                     h2 { "404" }
-                    p { "No such repository." }
+                    p { (reason) }
                     a.btn href="/" { "Back to repositories" }
                 }
             },
