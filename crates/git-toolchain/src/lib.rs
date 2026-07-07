@@ -877,20 +877,19 @@ fn extract_component(archive: &[u8], component: &Component, dest_root: &Path) ->
     };
     fs::create_dir_all(&dest).map_err(|error| Error::Io(dest.clone(), error))?;
     let strip = format!("--strip-components={}", component.strip);
-    let mut child = Command::new("tar")
+    // A seekable file is required: GNU tar can only sniff the compression
+    // format (gzip, xz, ...) on a regular file, not a pipe.
+    let mut archive_file =
+        tempfile::NamedTempFile::new().map_err(|error| Error::Io(dest.clone(), error))?;
+    archive_file
+        .write_all(archive)
+        .map_err(|error| Error::Io(dest.clone(), error))?;
+    let status = Command::new("tar")
         .args(["-x", &strip, "-C"])
         .arg(&dest)
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| Error::Fetch("tar".to_owned(), "no stdin".to_owned()))?
-        .write_all(archive)
-        .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
-    let status = child
-        .wait()
+        .arg("-f")
+        .arg(archive_file.path())
+        .status()
         .map_err(|error| Error::Fetch("tar".to_owned(), error.to_string()))?;
     if status.success() {
         Ok(())
