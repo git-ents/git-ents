@@ -1,0 +1,370 @@
+# git-ents: Development Plan
+
+## Thesis
+
+git-ents is **local-complete**: the full system — forge, effects, caches —
+runs on a laptop against a bare repository. Cloud deployment is additive
+configuration, not a different system. This is the product claim that makes
+the project worth building; everything below is downstream of it.
+
+## Governing invariant
+
+> **IMPORTANT**
+>
+> **One semantics, enforced by conformance.** All application logic operates
+> on the five abstractions (meta-ref, typed tree, anchor, attested push,
+> effect) through backend traits. A conformance suite runs every property
+> against every backend; a backend that cannot pass it is not a backend.
+> Behavior may vary by context (latency, eviction, concurrency limits);
+> semantics may not.
+
+**Single-code-path is a strategy, not the invariant.** It is the preferred
+way to guarantee one semantics, and it is falsifiable: a backend that passes
+conformance more cheaply by wrapping stock git wins. Application code
+branches on trait capabilities, never on deployment identity.
+
+### Decision record: invariant stratification
+
+Earlier drafts stated "no code path branches on deployment" as the
+invariant. Rejected as stronger than the thesis requires: the thesis
+mandates a full-featured local artifact and one semantics; single-code-path
+is an engineering strategy for delivering that. Protocol traits (below)
+permit a stock-git-wrapped backend — a second code path with conforming
+semantics — which the old invariant forbade for no product reason.
+
+## Seams
+
+Two layers of traits. The protocol layer is where most custom code lives;
+earlier drafts omitted it and thereby hid the largest workstream.
+
+### Protocol traits
+
+The server *is* these four:
+
+```rust
+trait Advertise    { fn refs(&self, repo: &RepoId, filter: &AdSpec) -> Result<RefAdvertisement>; }
+trait Negotiate    { fn wants_haves(&self, session: &mut NegotiationState) -> Result<PackPlan>; }
+trait GeneratePack { fn stream(&self, plan: &PackPlan) -> Result<PackStream>; }
+trait IngestPack   { fn receive(&self, push: PushRequest) -> Result<PushOutcome>; }
+```
+
+Stock-git-wrapped backends are expressible behind them: e.g. `IngestPack`
+via `receive-pack` against a scratch repo with Postgres as the commit point
+and local refs demoted to a reconciled-on-read cache. Whether that beats the
+native implementation is empirical, settled by conformance plus cost — not
+by fiat.
+
+### Storage traits
+
+#### RefStore
+
+The unit of correctness. All writes to repository state are ref
+transactions. **Multi-ref compare-and-swap is in the contract** — there is
+no capability query for it; a backend that cannot transact multiple refs
+atomically cannot pass conformance and is not a backend.
+
+```rust
+trait RefStore {
+    fn get(&self, name: &RefName) -> Result<Option<ObjectId>>;
+    fn iter_prefix(&self, prefix: &RefName) -> Result<RefIter>;
+    /// Atomic multi-ref compare-and-swap. All-or-nothing. Contractual.
+    fn transaction(&self, edits: &[RefEdit]) -> Result<TxOutcome>;
+    /// Wakeup hint only. The effect queue table is the source of truth;
+    /// consumers must drain the queue on every wakeup and on reconnect.
+    fn watch(&self, prefix: &RefName) -> Result<RefEventStream>;
+    fn log(&self, name: &RefName) -> Result<RefLogIter>;
+}
+```
+
+`watch` delivery is best-effort. LISTEN/NOTIFY drops notifications on
+disconnect; no notification channel is trusted. The conformance suite kills
+connections mid-stream and asserts no effect is lost — the queue table, not
+the channel, carries the at-least-once guarantee.
+
+| Backend | Mechanism | Notes |
+|---|---|---|
+| `refstore-files` | gitoxide loose refs + packed-refs / reftable | Local default. Atomic multi-ref via gitoxide ref transactions. |
+| `refstore-postgres` | Row per ref; transaction = SQL transaction of conditional UPDATEs | Cloud default. Reflog = append-only table. Queue table + NOTIFY hint. |
+
+#### ObjectStore
+
+```rust
+trait ObjectStore {
+    fn read(&self, id: ObjectId) -> Result<Object>;
+    fn contains(&self, id: ObjectId) -> Result<bool>;
+    /// Staged objects are invisible to reachability walks and GC.
+    fn stage_pack(&self, pack: PackStream) -> Result<QuarantineId>;
+    fn promote(&self, q: QuarantineId) -> Result<()>;
+}
+```
+
+There is no `write_loose`. Earlier drafts exported it; the Tigris backend
+cannot implement it without a tier that didn't exist. Small writes route
+through the tiered store's small-object tier as ordinary staged writes.
+
+| Backend | Mechanism | Notes |
+|---|---|---|
+| `odb-files` | gitoxide ODB on `objects/` (+ alternates) | Local default. Quarantine = tmp objdir, like receive-pack. |
+| `odb-tigris` | Packs, `.idx`, midx in bucket; OID → (pack, offset) via midx; HTTP Range-GET | Binaries un-delta'd (delta chains multiply ranged reads). Quarantine = key prefix; promotion recorded in pack registry (Postgres). |
+| `odb-tiered` | Small-object tier (Postgres, blobs/trees under threshold) over `odb-tigris` | Typed documents are tiny and hot; Tigris per-GET latency is the wrong floor for them. |
+
+The tiered store is composition, not a third semantics: `read` consults
+tiers in order; `contains` is the union. Threshold is measured (Q5), not
+guessed.
+
+#### EffectExecutor
+
+```rust
+trait EffectExecutor {
+    fn spawn(&self, effect: &EffectDef, inputs: MaterializedInputs)
+        -> Result<EffectHandle>;
+}
+```
+
+| Backend | Mechanism |
+|---|---|
+| `exec-local` | Sandboxed subprocess. Same materialization code as remote. |
+| `exec-sprites` | Fly Machines API. Image carries baked toolchain object store (WS8). |
+
+## Attested push
+
+Amends abstraction 4 ("signed push").
+
+**Uniform-strong attestation.** Every push carries a client-signed push
+certificate (SSH-signed, `push.gpgSign = true`). The membership model makes
+this cheap by construction: writes already require enrolled member keys for
+authorization, so every writer has a provisioned signing key before their
+first push. The cost is not zero — it is relocated into enrollment (key
+provisioning, and key availability in every write context: Sprites, CI,
+scripts, which the worker-member-key design already pays).
+
+**Universal server op record.** On every accepted push the server emits a
+server-signed **op record** containing:
+
+- the applied ref edits (old/new OIDs) — the *outcome*, what the commit
+  point actually did;
+- the client push certificate, embedded by OID — the *intent*, what the
+  client signed.
+
+**Push ID = op record OID, uniformly.** Consumers of the op log resolve one
+artifact shape regardless of anything. Intent and outcome coincide on
+success (multi-ref CAS is contractual), but recording both means a dispute
+never reconstructs one from the other. The push-cert nonce is
+session-scoped anti-replay and is not durable state.
+
+**Namespace attestation policy.** Required attestation level is a per-ref-
+namespace knob, currently pinned to `client-cert-required` everywhere. A
+push is evaluated at the **max level over all namespaces it touches** —
+certs are push-scoped, policy is namespace-scoped, and per-ref attestation
+does not exist as a git artifact.
+
+### Decision record: uniform-strong vs. tiered attestation
+
+Tiered (client certs where present, server-attested floor elsewhere) was
+designed and rejected: it solves for unenrolled stock-git writers, a
+population the membership model never admits. Uniform-strong adds no gate
+beyond enrollment, which is already mandatory for authorization. The
+namespace-level knob is retained so reversing this is configuration, not
+schema. **Revisit if git-ents ever accepts writes from unenrolled
+identities.**
+
+## Correctness rules (backend-independent)
+
+1. **Causal collection safety.** *Objects staged for an in-flight or
+   committed transaction are never collected.* This is the conformance
+   property. Promotion-after-commit (native backends) and grace windows
+   with cruft packs (stock-git-wrapped backends) are implementations of it,
+   not the rule itself. Implementations using time-bounded grace must bound
+   staging: a staging session that cannot complete within the grace window
+   aborts rather than becoming collectible mid-flight; the suite tests the
+   boundary.
+2. **Ref transactions are the only commit point.** Objects staged before,
+   refs committed atomically, objects visible to reachability only after.
+   GC never scans quarantine.
+3. **Attested push is the only write path** for repository state, per the
+   attestation design above.
+4. **Cache namespaces** (`refs/cache/*`, `refs/meta/cache/*`) are
+   evictable, reconstructible, and exempt from provenance — but not from
+   verification: materialization checks hashes against manifests regardless
+   of source. Eviction = ref deletion + registry delete. Concurrent cache
+   writers use per-key refs; a consolidation effect (the only multi-ref
+   cache writer) compacts them. Compaction is load-bearing, not hygiene.
+5. **Pack-lifetime rule.** Objects with different lifetimes never share a
+   pack. Cache-namespace objects get their own packs, so eviction is a
+   registry delete, never repack surgery. Within a lifetime class, delta
+   policy is per content class: trees/manifests delta'd, binaries stored
+   raw.
+6. **Materialization is one code path.** manifest → OID lookup →
+   ObjectStore → verify → sandbox. Baked images, warm caches, and cold
+   fetches differ only in which tier answers `read`. No effect can observe
+   which one did.
+7. **Namespace per repo.** No global object dedup across tenants (GC
+   coupling; object-existence oracle). Shared base packs for public
+   toolchains are opt-in and explicit.
+
+## Reachability
+
+A first-class subsystem, not a byproduct. Negotiation, push connectivity
+checking, and GC mark are the same walk, and over a remote ODB that walk is
+the scaling wall: nothing may traverse Tigris object-by-object.
+
+- Maintenance effects generate **commit-graph and reachability bitmaps**,
+  stored beside packs, tracked in the pack registry.
+- All three walkers consume them; a missing artifact degrades to a slow
+  walk, never a wrong answer.
+- Regeneration is scheduled with repack (WS9) and triggered by ref-update
+  volume thresholds.
+
+## Workstreams
+
+### WS0 — Interim hydration backend (short-term)
+
+Stock `git http-backend` over ephemeral disk, hydrated from the durable
+stores. Not a hack outside the architecture: this *is* the
+stock-git-wrapped backend the protocol traits permit, built first.
+
+- **Read path:** first request for a repo copies its packs + `.idx` from
+  Tigris into `objects/pack/`; `packed-refs` regenerated from Postgres on
+  every `info/refs` request (one SELECT, atomic rename) to bound
+  advertisement staleness.
+- **Write path:** `pre-receive` performs the Postgres multi-ref CAS
+  (client old-OIDs must match PG rows; mismatch rejects, fail-closed) and
+  uploads the quarantine pack to Tigris **before** the PG transaction
+  commits. Local refs are a cache; PG is truth. receive-pack's tmp objdir
+  is the quarantine — causal collection safety holds natively.
+- Ephemeral disk death → re-hydrate. Nothing correctness-bearing on disk.
+- **Op replay corpus:** every push logs (push-cert OID, ref edits, pack
+  OIDs). Replaying the log against native backends and asserting identical
+  final refs + reachable object sets is the conformance seed corpus (WS2).
+
+Known limits, accepted short-term: whole-pack hydration makes first-touch
+latency scale with repo size (ranged reads are what WS5 is for); concurrent
+pushes to one repo from multiple serve machines are safe under PG CAS but
+produce spurious rejections from stale advertisements — pin writes per repo
+to one machine or accept retries.
+
+FUSE was considered and rejected: whole-file-caching FUSE degenerates to
+hydration with extra moving parts; ranged-read FUSE under git's pack mmap
+risks SIGBUS on cache eviction — a correctness hazard for no gain.
+
+### WS1 — Backend traits and local implementations
+
+Extract storage traits; implement `refstore-files` and `odb-files` on
+gitoxide; port all git-ents operations onto them. Exit: no direct gitoxide
+repository access outside backend crates; conformance green locally.
+
+Risks: gitoxide gaps (reftable writes, quarantine-style tmp objdirs, midx
+write path — Q4). Survey first; upstream or shim.
+
+### WS2 — Conformance suite
+
+Property tests per trait: multi-ref CAS under concurrency, prefix-iteration
+consistency, quarantine invisibility to reachability, **causal collection
+safety including the staging-timeout boundary**, **watch-loss tolerance
+(kill connections mid-stream, assert queue-table recovery)**. Runs against
+every backend in CI. This suite *is* the invariant; it lands before any
+cloud backend.
+
+### WS3 — Protocol traits and server core
+
+Define Advertise/Negotiate/GeneratePack/IngestPack; implement the native
+server on the storage traits; smart HTTP to stock git clients. Pack
+generation over ranged reads is the largest and riskiest custom component
+in the system — it gets its own risk budget, benchmarks, and Q-list entry
+(Q6), not two sentences.
+
+Read-path interop: clone/fetch works with stock git, zero client config.
+Write-path interop: requires enrollment + `push.gpgSign` — modern git
+versions required (SSH-signed push certs; Q7 verifies the minimum version).
+
+### WS4 — Postgres ref store
+
+Schema: refs, reflog, pack registry, effect queue, op records. Transaction
+mapping; NOTIFY as hint; prefix index. Single write-primary; `fly-replay`
+routes push endpoints to the primary region.
+
+Blocker to verify: Fly managed-Postgres failover semantics (Q1). Refs must
+never split-brain; require synchronous replication or fenced
+single-primary, or pick a provider that has it.
+
+### WS5 — Tigris object store
+
+gitoxide ODB backend with midx-resolved ranged reads; pack writer enforcing
+the pack-lifetime rule and per-class delta policy; quarantine prefix +
+registry promotion; GC driven by RefStore reachability via the reachability
+subsystem — never bucket listing.
+
+Verify: Tigris read-after-write visibility for promoted packs (Q2). All CAS
+stays in Postgres; Tigris needs only durable PUT/GET — keep it that way.
+
+### WS6 — Reachability subsystem
+
+Commit-graph + bitmap generation as maintenance effects; registry storage;
+consumption by negotiation, connectivity check, and GC mark. Correctness
+property: artifacts are an accelerator — absence degrades speed, never
+answers.
+
+### WS7 — Effects and Sprites
+
+Dispatcher (single small machine) drains the effect queue, creates Sprites
+via `exec-sprites`. Results and cache entries return via attested push
+(worker member keys). Concurrency caps per repo (fairness) and global
+(cost). Warm pool default 0; revisit only if measured cold start is not ≪
+effect duration (Q3).
+
+### WS8 — Hydration and toolchains
+
+Image bake is itself an attested effect — the baked tier is not a hole in
+the trust story. Image carries a populated object store keyed by manifest
+hash; verification on match is an ID comparison; miss falls through to
+fetch. Instrument miss rate: a stale image degrades silently otherwise.
+
+sccache: thin GET/PUT proxy. GET = tree-path lookup under the cache
+namespace; PUT = attested push to a per-key ref with the worker's member
+key. sccache never learns git.
+
+### WS9 — GC, compaction, maintenance
+
+Per-repo background effects serialized by advisory lock. Mark from RefStore
+via reachability artifacts; sweep via pack registry; cruft semantics where
+grace-based. Cache-ref TTL deletion; the consolidation effect from rule 4
+lives here and is load-bearing. Reachability-artifact regeneration
+scheduled here.
+
+## Ordering and dependencies
+
+```
+WS0 ──────────────┐ (op corpus)
+WS1 ──> WS2 ──> WS3 ──> WS4 ──┐
+                      └> WS5 ──┼──> WS7 ──> WS8
+                       └> WS6 ──┤
+                               └──> WS9
+```
+
+WS0 is independent and ships first; its op-replay log feeds WS2. It
+requires minimal Postgres (refs + op log) and Tigris (pack storage) but
+none of the trait work. WS2 gates everything cloud-side. WS6 must land before WS5's GC path is
+enabled in production (mark depends on it at scale). WS9 lands before any
+production cache traffic.
+
+## Open questions / facts to verify
+
+| # | Question |
+|---|---|
+| Q1 | Fly Postgres failover semantics (WS4 blocker). Split-brain refs is the one unrecoverable failure. |
+| Q2 | Tigris read-after-write visibility; regional-cache hit rates; benchmark cold toolchain materialization — the latency floor lives there. |
+| Q3 | Sprite image-pull latency with a large baked object store; if pull dominates cold start, the warm-pool-of-zero answer flips. |
+| Q4 | gitoxide gaps: reftable writes, quarantine-style ODB, midx write path. Determines shim-vs-upstream in WS1/WS5. |
+| Q5 | Small-object tier threshold: measure. |
+| Q6 | Pack generation over ranged reads: throughput and cost at realistic repo sizes. Largest custom component; benchmark before WS5 hardens. |
+| Q7 | SSH-signed push certificates at the required minimum git version, in every write context (interactive, CI, Sprites). The write path sits on this; test, don't assert. |
+
+## Non-goals
+
+- Multi-writer ref stores beyond single Postgres primary (no distributed
+  ref consensus; revisit only on evidence of primary saturation).
+- Global cross-tenant dedup (rule 7).
+- Teaching stock git to read Tigris directly; interop lives at the smart
+  HTTP boundary.
+- Per-ref attestation (does not exist as a git artifact; policy is
+  namespace-scoped, evaluated at max over touched namespaces).

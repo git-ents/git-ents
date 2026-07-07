@@ -40,8 +40,10 @@ locale = "en-us"
 # Keep these empty to not ignore anything by default
 extend-ignore-identifiers-re = []
 extend-ignore-words-re = []
+
 # Fly.io 6PN (private network) — a real term, not a typo
-extend-ignore-re = ["6PN"]
+# Plural of UPDATE in CRUD
+extend-ignore-re = ["6PN", "UPDATEs"]
 
 [default.extend-words]
 # COSE (CBOR Object Signing and Encryption) — a real WebAuthn term, not a typo
