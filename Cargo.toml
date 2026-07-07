@@ -18,6 +18,7 @@ members = [
     "crates/git-signed-push",
     "crates/git-store",
     "crates/git-toolchain",
+    "crates/odb-baked",
     "crates/odb-files",
     "crates/odb-tiered",
     "crates/odb-tigris",
@@ -82,6 +83,7 @@ git-reachability = { path = "crates/git-reachability" }
 git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
+odb-baked = { path = "crates/odb-baked" }
 odb-files = { path = "crates/odb-files" }
 odb-tiered = { path = "crates/odb-tiered" }
 odb-tigris = { path = "crates/odb-tigris" }

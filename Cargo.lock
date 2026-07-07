@@ -3604,6 +3604,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "odb-baked"
+version = "0.0.0"
+dependencies = [
+ "backend-conformance",
+ "git-backend",
+ "git-store",
+ "gix-hash",
+ "gix-object",
+ "odb-files",
+ "tempfile",
+]
+
+[[package]]
 name = "odb-files"
 version = "0.0.0"
 dependencies = [
