@@ -227,37 +227,32 @@ pub fn provenance(repo: &Path, id: &str) -> Result<Option<Provenance>, git_store
 /// still [`Projection::Current`], relocated to a new path or shifted lines,
 /// outdated because the anchored region was edited, or gone with its file.
 ///
-/// Tries [`git_anchor::project`] first; if `comment.anchor.commit` has been
-/// garbage collected, falls back to [`git_anchor::project_from_context`]
-/// against the comment's retained `context` blob, read directly off `id`'s
-/// ref rather than recomputed — recomputing would need the very commit that
-/// is gone.
+/// Tries [`git_anchor::project`] first; if the comment's anchored commit has
+/// been garbage collected, falls back to [`git_anchor::project_from_context`]
+/// against the comment's retained `context` blob — recomputing the context
+/// would need the very commit that is gone.
 ///
 /// ## Requirements
 ///
 /// @relation(comments.projection)
-pub fn project(
-    repo: &Path,
-    id: &str,
-    comment: &Comment,
-    target: &str,
-) -> Result<Projection, git_anchor::Error> {
-    match git_anchor::project(repo, &comment.anchor, target) {
+pub fn project(repo: &Path, id: &str, target: &str) -> Result<Projection, git_anchor::Error> {
+    let stored: StoredComment = git_store::Store::open(repo)
+        .and_then(|store| store.load_item(COMMENTS_NS, id))
+        .map_err(|error| git_anchor::Error::Object(error.to_string()))?
+        .ok_or_else(|| git_anchor::Error::Object(format!("{COMMENTS_NS}/{id} does not exist")))?;
+    match git_anchor::project(repo, &stored.anchor, target) {
         Err(git_anchor::Error::AnchorCommitMissing(_)) => {
-            let context = retained_context(repo, id)
+            let context = retained_context(repo, &stored)
                 .map_err(|error| git_anchor::Error::Object(error.to_string()))?;
-            git_anchor::project_from_context(repo, &comment.anchor, target, &context)
+            git_anchor::project_from_context(repo, &stored.anchor, target, &context)
         }
         other => other,
     }
 }
 
-/// Read the `context` blob out of comment `id`'s retained tree (see
-/// [`StoredComment`]) directly off its ref, for [`project`]'s fallback path.
-fn retained_context(repo: &Path, id: &str) -> Result<String, git_store::Error> {
-    let stored: StoredComment = git_store::Store::open(repo)?
-        .load_item(COMMENTS_NS, id)?
-        .ok_or_else(|| git_store::Error::Ref(format!("{COMMENTS_NS}/{id} does not exist")))?;
+/// Read the `context` blob out of `stored`'s retained tree (see
+/// [`StoredComment`]), for [`project`]'s fallback path.
+fn retained_context(repo: &Path, stored: &StoredComment) -> Result<String, git_store::Error> {
     let odb = odb_at(repo)?;
     let mut tree_buf = Vec::new();
     let tree = odb
@@ -496,7 +491,7 @@ mod tests {
         // context fallback `project` reaches for once the anchor commit is
         // gone.
         assert_eq!(
-            project(repo_path, &id, &loaded, &replacement).unwrap(),
+            project(repo_path, &id, &replacement).unwrap(),
             Projection::Relocated {
                 path: "file.txt".to_owned(),
                 lines: Some(LineRange { start: 3, end: 3 }),
@@ -532,7 +527,7 @@ mod tests {
             "two\n"
         );
         assert_eq!(
-            project(dir.path(), &id, &loaded, "HEAD").unwrap(),
+            project(dir.path(), &id, "HEAD").unwrap(),
             Projection::Current
         );
     }

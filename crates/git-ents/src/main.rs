@@ -1031,7 +1031,7 @@ fn location(path: &str, lines: Option<LineRange>) -> String {
 
 /// One-line description of where `comment` (`id`'s document) sits on `rev`.
 fn describe_projection(repo: &Path, id: &str, comment: &Comment, rev: &str) -> String {
-    match git_comment::project(repo, id, comment, rev) {
+    match git_comment::project(repo, id, rev) {
         Ok(Projection::Current) => location(&comment.anchor.path, comment.anchor.lines),
         Ok(Projection::Relocated { path, lines }) => location(&path, lines),
         Ok(Projection::Outdated { path }) => format!("{path} [outdated]"),
