@@ -42,9 +42,11 @@ pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: Heade
         let host = header_value(&headers, "Host");
         let cookie = header_value(&headers, "Cookie");
         let referer = header_value(&headers, "Referer");
+        let query = (!query_string.is_empty()).then_some(query_string.as_str());
         return crate::web::render(
             &state,
             &path_info,
+            query,
             host.as_deref(),
             cookie.as_deref(),
             referer.as_deref(),

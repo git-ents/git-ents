@@ -304,6 +304,9 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .release-foot { display: flex; align-items: center; padding: .7rem 1.1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: .74rem; }
 .release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; }
 
+.notice { font-size: .9rem; font-weight: 600; padding: .6rem 1.1rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem; }
+.notice-success { color: var(--s-func); background: color-mix(in srgb, var(--s-func) 12%, transparent); border: 1px solid color-mix(in srgb, var(--s-func) 30%, transparent); }
+
 .shell-note { color: var(--color-text-muted); font-size: .95rem; max-width: 44rem; margin-bottom: 1.5rem; }
 .card .shell-note { padding: .7rem 1.1rem; margin-bottom: 0; }
 .shell-note code { font-family: var(--font-mono); font-size: .85em; background: var(--color-code-bg); padding: .1rem .35rem; border-radius: 5px; }

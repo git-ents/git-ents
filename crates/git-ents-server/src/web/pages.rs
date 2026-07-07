@@ -555,6 +555,7 @@ pub(super) async fn blob_page(
     auth: Option<&super::Auth>,
     editing: bool,
     view: BlobView,
+    commented: bool,
 ) -> Response {
     let rel = &meta.rel;
     let Some(path) = browse_path(sub).filter(|p| !p.is_empty()) else {
@@ -606,6 +607,9 @@ pub(super) async fn blob_page(
                 }
             }
             (body)
+            @if commented {
+                (super::notice_banner("Comment posted."))
+            }
             (comments_card(&comments, comment_form(rel, &path, auth, editing)))
         },
     )
@@ -1259,6 +1263,7 @@ pub(super) async fn settings_page(
     meta: &RepoMeta,
     auth: Option<&super::Auth>,
     editing: bool,
+    saved: bool,
 ) -> Markup {
     let members = component::load::<git_member::members::Member>(repo).await;
     let checks = component::load::<git_effect::Effect>(repo).await;
@@ -1274,6 +1279,9 @@ pub(super) async fn settings_page(
                 p.shell-note {
                     "The repository's configuration on " code { "refs/meta/config" }
                     " and " code { "refs/meta/members" } "."
+                }
+                @if saved {
+                    (super::notice_banner("Settings saved."))
                 }
                 (settings_auth_banner(auth, editing))
 

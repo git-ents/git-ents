@@ -57,6 +57,7 @@ use self::icons::{icon_branch, icon_chevron, icon_folder, icon_logo, icon_repo, 
 pub(crate) async fn render(
     state: &AppState,
     path: &str,
+    query: Option<&str>,
     host: Option<&str>,
     cookie: Option<&str>,
     referer: Option<&str>,
@@ -72,11 +73,13 @@ pub(crate) async fn render(
             None => write::issue_challenge(&state.challenges).ok(),
         };
         let next = referer_path(referer);
+        let signed_out = query_flag(query, "signed_out");
         return login_page(
             session.as_ref(),
             challenge.as_deref(),
             None,
             next.as_deref(),
+            signed_out,
         )
         .into_response();
     }
@@ -90,16 +93,7 @@ pub(crate) async fn render(
     }
 
     if let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) {
-        return route(
-            &repo,
-            &rel,
-            rest,
-            host,
-            session,
-            editing_enabled(state),
-            &state.live_runs,
-        )
-        .await;
+        return route(state, &repo, &rel, rest, query, host, session).await;
     }
 
     not_found().into_response()
@@ -172,8 +166,14 @@ pub(crate) async fn handle_post(
             ),
             Err(error) => {
                 let challenge = write::issue_challenge(&state.challenges).ok();
-                login_page(None, challenge.as_deref(), Some(&error), next.as_deref())
-                    .into_response()
+                login_page(
+                    None,
+                    challenge.as_deref(),
+                    Some(&error),
+                    next.as_deref(),
+                    false,
+                )
+                .into_response()
             }
         };
     }
@@ -194,7 +194,7 @@ pub(crate) async fn handle_post(
             return redirect("/login", None);
         }
         write::logout(&state.sessions, cookie);
-        return redirect("/login", Some(cleared_cookie(secure)));
+        return redirect("/login?signed_out=1", Some(cleared_cookie(secure)));
     }
 
     let Some((repo, rel, rest)) = resolve_repo(&state.data_dir, &segments) else {
@@ -297,7 +297,7 @@ async fn save_settings(
     .await;
 
     match result {
-        Ok(Ok(())) => redirect(&back, None),
+        Ok(Ok(())) => redirect(&format!("{back}?saved=1"), None),
         Ok(Err(error)) => edit_error(&back, &error).into_response(),
         Err(_join) => edit_error(&back, "the edit did not complete").into_response(),
     }
@@ -377,7 +377,7 @@ async fn save_comment(
     .await;
 
     match result {
-        Ok(Ok(())) => redirect(&back, None),
+        Ok(Ok(())) => redirect(&format!("{back}?commented=1"), None),
         Ok(Err(error)) => edit_error(&back, &error).into_response(),
         Err(_join) => edit_error(&back, "the comment did not complete").into_response(),
     }
@@ -402,6 +402,22 @@ fn safe_redirect_target(path: Option<&str>) -> &str {
         Some(p) if p.starts_with('/') && !p.starts_with("//") && p != "/login" => p,
         _ => "/",
     }
+}
+
+/// Whether `query` (an unparsed `key=value&...` string) carries `key=1` — the
+/// confirmation flag a redirect appends after a write lands, so the page it
+/// sends the visitor back to can show a one-time success notice.
+fn query_flag(query: Option<&str>, key: &str) -> bool {
+    query
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .any(|pair| pair == format!("{key}=1"))
+}
+
+/// A one-time success banner for a redirect target, e.g. after a settings save
+/// or a comment post lands.
+pub(super) fn notice_banner(message: &str) -> Markup {
+    html! { p.notice.notice-success { (message) } }
 }
 
 /// A `303 See Other` redirect to `location`, optionally setting a cookie.
@@ -451,14 +467,16 @@ fn cleared_cookie(secure: bool) -> String {
 ///
 /// @relation(web.server-rendered, web.tabs)
 async fn route(
+    state: &AppState,
     repo: &Path,
     rel: &str,
     rest: &[&str],
+    query: Option<&str>,
     host: Option<&str>,
     session: Option<write::SessionSnapshot>,
-    editing: bool,
-    live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
+    let editing = editing_enabled(state);
+    let live_runs = &state.live_runs;
     let meta = gather_meta(repo, rel).await;
     let auth = resolve_auth(repo, session).await;
     match rest.split_first() {
@@ -475,6 +493,7 @@ async fn route(
                 auth.as_ref(),
                 editing,
                 pages::BlobView::Rendered,
+                query_flag(query, "commented"),
             )
             .await
         }
@@ -486,6 +505,7 @@ async fn route(
                 auth.as_ref(),
                 editing,
                 pages::BlobView::Source,
+                query_flag(query, "commented"),
             )
             .await
         }
@@ -508,9 +528,15 @@ async fn route(
         Some((&"issues", &[])) => pages::issues_page(repo, &meta, auth.as_ref())
             .await
             .into_response(),
-        Some((&"settings", &[])) => pages::settings_page(repo, &meta, auth.as_ref(), editing)
-            .await
-            .into_response(),
+        Some((&"settings", &[])) => pages::settings_page(
+            repo,
+            &meta,
+            auth.as_ref(),
+            editing,
+            query_flag(query, "saved"),
+        )
+        .await
+        .into_response(),
         _ => not_found().into_response(),
     }
 }
@@ -794,12 +820,16 @@ fn login_page(
     challenge: Option<&str>,
     error: Option<&str>,
     next: Option<&str>,
+    signed_out: bool,
 ) -> Markup {
     page(
         "Sign in",
         html! {
             (account_strip(session))
             div.page-header { h1.page-title { "Sign in" } }
+            @if signed_out && session.is_none() {
+                (notice_banner("Signed out."))
+            }
             @if let Some(s) = session {
                 p { "Signed in as " strong { (s.label) } "." }
                 p.muted { "Edits you make in the browser are attributed to your member key." }
