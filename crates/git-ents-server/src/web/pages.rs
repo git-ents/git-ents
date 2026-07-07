@@ -852,7 +852,10 @@ pub(super) async fn commit_page(
         auth,
         html! {
             div.card {
-                div.card-header { (icon_commit()) " Commit " span.sha { (short) } }
+                div.card-header {
+                    (icon_commit()) " Commit "
+                    a.sha href={ "/" (meta.rel) "/tree/" (oid) } { (short) }
+                }
                 div.commit {
                     div.commit-subject { (subject) }
                     @if !body.is_empty() {
@@ -911,7 +914,9 @@ pub(super) async fn releases_page(
                                     div.release-body { p { (release.body) } }
                                 }
                                 div.release-foot {
-                                    span.sha { (icon_commit()) (short_oid(&release.oid)) }
+                                    a.sha href={ "/" (meta.rel) "/commit/" (release.oid) } {
+                                        (icon_commit()) (short_oid(&release.oid))
+                                    }
                                 }
                             }
                         }
@@ -1106,7 +1111,10 @@ pub(super) async fn check_recording_page(
         auth,
         html! {
             div.page-header {
-                h1.page-title { (name) " on " code { (short_commit) } }
+                h1.page-title {
+                    (name) " on "
+                    a href={ "/" (rel) "/commit/" (commit) } { code { (short_commit) } }
+                }
             }
             (body)
         },

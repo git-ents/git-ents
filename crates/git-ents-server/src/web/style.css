@@ -161,6 +161,8 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 
 .card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem; overflow: hidden; }
 .card-header { display: flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); background: var(--color-code-bg); padding: .55rem 1.1rem; border-bottom: 1px solid var(--color-border); }
+.card-header .sha { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
+.card-header .sha:hover { color: var(--color-accent); }
 .card-row { display: flex; align-items: center; gap: .65rem; padding: .7rem 1.1rem; font-family: var(--font-mono); font-size: .9rem; }
 .card-row + .card-row { border-top: 1px solid var(--color-border); }
 .card-row .icon { color: var(--color-text-muted); }
@@ -306,7 +308,8 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .release-body p { white-space: pre-wrap; font-size: .9rem; }
 .release-body .muted { color: var(--color-text-muted); }
 .release-foot { display: flex; align-items: center; padding: .7rem 1.1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: .74rem; }
-.release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; }
+.release-foot .sha { margin-left: auto; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: .35rem; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
+.release-foot .sha:hover { color: var(--color-accent); }
 
 .notice { font-size: .9rem; font-weight: 600; padding: .6rem 1.1rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem; }
 .notice-success { color: var(--s-func); background: color-mix(in srgb, var(--s-func) 12%, transparent); border: 1px solid color-mix(in srgb, var(--s-func) 30%, transparent); }
