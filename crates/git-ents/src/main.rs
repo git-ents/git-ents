@@ -346,6 +346,20 @@ enum ToolchainAction {
         #[facet(args::positional)]
         name: String,
     },
+    /// Bake a remote's toolchain `name` into the WS8 baked-tier directory
+    /// layout at `dest`, then push a record of the manifest hash it was
+    /// baked for (`docs/scale-out.adoc`, "WS8 — Hydration and toolchains").
+    /// Assembling an actual machine image from `dest` is deploy-time work
+    /// outside this command's scope.
+    Bake {
+        /// Name (`toolchains/<name>`) to bake.
+        #[facet(args::positional)]
+        name: String,
+        /// Destination directory for the baked-tier layout (created if
+        /// absent; must be empty if it already exists).
+        #[facet(args::positional)]
+        dest: String,
+    },
     /// Show a remote's toolchain `name`: its recipe/version/platform
     /// provenance and its on-disk footprint (`bin`/`src` byte sizes).
     View {
@@ -621,6 +635,7 @@ fn run_toolchain(action: ToolchainAction, remote: &str) -> Result<(), String> {
         ToolchainAction::Log { name } => toolchain_log(&name, remote),
         ToolchainAction::Export { name, dest } => toolchain_export(&name, &dest, remote),
         ToolchainAction::Remove { name } => toolchain_remove(&name, remote),
+        ToolchainAction::Bake { name, dest } => toolchain_bake(&name, &dest, remote),
         ToolchainAction::View { name } => toolchain_view(&name, remote),
     }
 }
@@ -831,6 +846,29 @@ fn toolchain_remove(name: &str, remote: &str) -> Result<(), String> {
         sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
     push_delete(remote, &refname, &expected)?;
     println!("removed toolchain {name}");
+    Ok(())
+}
+
+// @relation(cli.toolchains, cli.remote-admin)
+/// Bake `remote`'s toolchain `name` into the WS8 baked-tier directory
+/// layout at `dest` (`docs/scale-out.adoc`, "WS8 — Hydration and
+/// toolchains"): materializes the layout locally, records the manifest
+/// hash it was baked for, then pushes that record signed — the same
+/// attested-push path any other CLI write takes, so the baked tier is
+/// never a hole in the trust story. Assembling an actual machine image
+/// from `dest` is deploy-time infrastructure outside this command's scope.
+fn toolchain_bake(name: &str, dest: &str, remote: &str) -> Result<(), String> {
+    let refname = format!("{TOOLCHAINS_NS}/{name}");
+    sync(remote, &refname)?.ok_or_else(|| format!("no toolchain {name} on {remote}"))?;
+    let baked_refname = git_toolchain::bake::baked_ref(name);
+    let expected = sync(remote, &baked_refname)?;
+
+    let repo = repo()?;
+    let manifest = git_toolchain::bake::bake(&repo, name, Path::new(dest))
+        .map_err(|error| error.to_string())?;
+    git_toolchain::bake::record(&repo, name, manifest).map_err(|error| error.to_string())?;
+    push_signed(remote, &baked_refname, expected.as_deref())?;
+    println!("baked toolchain {name} to {dest} (manifest {manifest})");
     Ok(())
 }
 

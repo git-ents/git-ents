@@ -8,9 +8,11 @@ license.workspace = true
 [dependencies]
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
+git-backend = { workspace = true }
 git-store = { workspace = true }
 gix = { workspace = true }
 gix-pack = { workspace = true }
+odb-baked = { workspace = true }
 rayon = { workspace = true }
 semver = { workspace = true }
 spdx = { workspace = true }
@@ -20,6 +22,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 git-store = { workspace = true, features = ["test-support"] }
+odb-files = { workspace = true }
 
 [lints]
 workspace = true

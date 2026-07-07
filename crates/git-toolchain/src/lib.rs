@@ -41,6 +41,8 @@ use gix::prelude::HeaderExt as _;
 use gix_pack::data::input::Entry as PackEntry;
 use rayon::prelude::*;
 
+pub mod bake;
+
 /// The ref namespace holding toolchains, one ref per toolchain:
 /// `refs/meta/toolchains/<name>`. A toolchain's identity is its tip commit's
 /// tree hash, so importing identical contents twice is a no-op churn-wise.
@@ -185,6 +187,10 @@ pub enum Error {
     /// [`import`]'s `platform` argument was not a valid target triple.
     #[error("{0:?} is not a valid target triple")]
     InvalidPlatform(String),
+    /// [`bake::bake`] could not write the baked-tier directory layout at the
+    /// given destination.
+    #[error("could not bake into {0}: {1}")]
+    Bake(PathBuf, String),
 }
 
 /// Import `bin_dir` (and, optionally, `src_dir`) into `repo` as the
@@ -476,7 +482,7 @@ fn tree_size(odb: &gix::odb::Handle, tree: ObjectId) -> Result<u64, Error> {
 }
 
 /// `refs/meta/toolchains/<name>`.
-fn toolchain_ref(name: &str) -> String {
+pub(crate) fn toolchain_ref(name: &str) -> String {
     format!("{TOOLCHAINS_NS}/{name}")
 }
 
@@ -485,7 +491,7 @@ fn toolchain_ref(name: &str) -> String {
 /// walking a directory into a tree (unlike a `Facet` document) is this
 /// crate's own concern rather than something `Store` exposes plumbing for
 /// beyond the finished tree's commit and ref.
-fn odb_at(repo: &Path) -> Result<gix::odb::Handle, Error> {
+pub(crate) fn odb_at(repo: &Path) -> Result<gix::odb::Handle, Error> {
     let opened = gix::open(repo).map_err(|error| git_store::Error::Open(Box::new(error)))?;
     Ok(gix::odb::at(opened.common_dir().join("objects")).map_err(|_io| git_store::Error::Odb)?)
 }

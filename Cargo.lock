@@ -1826,9 +1826,12 @@ version = "0.0.0"
 dependencies = [
  "facet",
  "facet-git-tree",
+ "git-backend",
  "git-store",
  "gix",
  "gix-pack",
+ "odb-baked",
+ "odb-files",
  "rayon",
  "semver",
  "spdx",
