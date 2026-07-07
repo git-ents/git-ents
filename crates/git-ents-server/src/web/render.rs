@@ -177,11 +177,18 @@ pub(super) fn run_row(rel: &str, commit_hex: &str, run: &Run) -> Markup {
 /// recording behind it.
 fn run_result(rel: &str, commit_hex: &str, outcome: &RunOutcome) -> Markup {
     let href = format!("/{rel}/checks/{commit_hex}/{}", outcome.name);
+    let duration = html! {
+        @if let Some(secs) = outcome.duration_secs {
+            " " span.muted { "(" (secs) "s)" }
+        }
+    };
     html! {
         @if outcome.recording.is_some() || is_in_progress(outcome.status) {
             a.run-result href=(href) { (outcome.name) " " (status_badge(outcome.status)) }
+            (duration)
         } @else {
             span.run-result { (outcome.name) " " (status_badge(outcome.status)) }
+            (duration)
         }
     }
 }

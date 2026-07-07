@@ -967,7 +967,12 @@ pub(super) async fn checks_page(
                 "each run is recorded under " code { "refs/meta/results/<effect>/<commit>" } "."
             }
             div.card {
-                div.card-header { "Checks on HEAD" }
+                div.card-header {
+                    "Checks on HEAD"
+                    @if let Some(run) = head_run {
+                        span.muted { " · " (ago_seconds(i64::try_from(run.at).unwrap_or(i64::MAX))) }
+                    }
+                }
                 @match &checks {
                     Err(err) => div.card-row.muted { "Could not read checks: " (err) }
                     Ok(checks) if checks.is_empty() => {
@@ -999,6 +1004,9 @@ pub(super) async fn checks_page(
                                     div.card-row.signer-row {
                                         code.key { (short_oid(&commit.commit)) }
                                         (super::render::run_row(rel, &commit.commit.to_string(), run))
+                                        span.muted {
+                                            (ago_seconds(i64::try_from(run.at).unwrap_or(i64::MAX)))
+                                        }
                                     }
                                 }
                             }
