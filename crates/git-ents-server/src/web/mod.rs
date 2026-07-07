@@ -523,7 +523,7 @@ async fn route(
             pages::check_live_fragment(repo, commit, name, live_runs).await
         }
         Some((&"checks", &[commit, name, "download"])) => {
-            pages::check_recording_download(repo, commit, name).await
+            pages::check_recording_download(repo, commit, name, live_runs).await
         }
         Some((&"issues", &[])) => pages::issues_page(repo, &meta, auth.as_ref())
             .await

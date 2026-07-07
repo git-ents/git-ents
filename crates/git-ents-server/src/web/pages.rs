@@ -1082,11 +1082,15 @@ pub(super) async fn check_recording_page(
     let body = if super::render::is_in_progress(outcome.status) {
         let key = (repo.to_owned(), commit_oid, name.to_owned());
         let fragment_url = format!("/{rel}/checks/{commit}/{name}/live");
-        let initial =
-            super::render::live_fragment_body(git_effect::engine::live_snapshot(live_runs, &key));
+        let live = git_effect::engine::live_snapshot(live_runs, &key);
+        let initial = super::render::live_fragment_body(live.clone());
+        let download_href = format!("/{rel}/checks/{commit}/{name}/download");
         html! {
             p.shell-note {
                 "This check is still " (outcome.status.to_string()) "; the view below updates live."
+                @if live.is_some() {
+                    " " a.btn-quiet href=(download_href) download { "Download raw log so far" }
+                }
             }
             style { (PreEscaped(crate::asciidoc::TERMINAL_VIEW_CSS)) }
             div #live-terminal data-live-check=(fragment_url) { (initial) }
@@ -1145,17 +1149,30 @@ pub(super) async fn check_live_fragment(
 }
 
 /// Download a check's raw asciicast recording, for replaying outside the
-/// browser (`asciinema play <file>`) or archiving. 404s under the same
-/// conditions as [`check_recording_page`] (no run recorded, or none for
-/// `name`), and also when the settled run has no recording to hand out.
-pub(super) async fn check_recording_download(repo: &Path, commit: &str, name: &str) -> Response {
+/// browser (`asciinema play <file>`) or archiving. While the check is still
+/// running this hands out the live buffer captured so far instead of the
+/// (not yet existing) settled recording. 404s under the same conditions as
+/// [`check_recording_page`] (no run recorded, or none for `name`), and also
+/// when neither a settled recording nor a live buffer is available.
+pub(super) async fn check_recording_download(
+    repo: &Path,
+    commit: &str,
+    name: &str,
+    live_runs: &git_effect::engine::LiveRegistry,
+) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
         return not_found().into_response();
     };
-    let Some(recording) = latest_outcome(repo, commit_oid, name)
-        .await
-        .and_then(|outcome| outcome.recording)
-    else {
+    let Some(outcome) = latest_outcome(repo, commit_oid, name).await else {
+        return not_found().into_response();
+    };
+    let live = super::render::is_in_progress(outcome.status)
+        .then(|| {
+            let key = (repo.to_owned(), commit_oid, name.to_owned());
+            git_effect::engine::live_snapshot(live_runs, &key)
+        })
+        .flatten();
+    let Some(recording) = live.or(outcome.recording) else {
         return not_found().into_response();
     };
     let short_commit = commit.get(..8).unwrap_or(commit);
