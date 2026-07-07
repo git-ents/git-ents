@@ -112,14 +112,24 @@ pub fn resolve_toolchains(
     sandbox: &Sandbox,
     runnable: &[Effect],
 ) -> Result<Vec<String>, String> {
-    let mut names: Vec<&str> = runnable
+    let mut names: Vec<String> = runnable
         .iter()
-        .flat_map(|effect| effect.toolchains.iter().map(String::as_str))
+        .flat_map(|effect| effect.toolchains.iter().cloned())
         .collect();
     names.sort_unstable();
     names.dedup();
+    export_toolchains(repo, sandbox, &names)?;
+    Ok(names)
+}
 
-    for name in &names {
+/// Extract each of `names` into `sandbox.toolchains_dir()/<name>` via
+/// [`git_toolchain::export`], once — a name already exported into this
+/// sandbox is left alone. The extraction half of [`resolve_toolchains`],
+/// shared with the `exec-local` executor ([`crate::executor`]), which
+/// receives its toolchain names pre-resolved rather than reading them off
+/// an [`Effect`].
+pub fn export_toolchains(repo: &Path, sandbox: &Sandbox, names: &[String]) -> Result<(), String> {
+    for name in names {
         let dest = sandbox.toolchains_dir().join(name);
         if dest.exists() {
             continue;
@@ -127,7 +137,7 @@ pub fn resolve_toolchains(
         git_toolchain::export(repo, name, &dest)
             .map_err(|e| format!("could not resolve toolchain {name}: {e}"))?;
     }
-    Ok(names.into_iter().map(str::to_owned).collect())
+    Ok(())
 }
 
 /// The container/host-relative path a toolchain named `name` was exported to

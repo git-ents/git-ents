@@ -95,7 +95,7 @@ fn live_finish(registry: &LiveRegistry, key: &LiveKey) {
 /// panicking: a live buffer is best-effort output for a browser to look at,
 /// not something worth tearing the process down over if a prior panic
 /// poisoned it.
-fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -945,7 +945,11 @@ fn components_key(components: &[git_toolchain::Component]) -> String {
 /// ## Requirements
 ///
 /// @relation(checks.sandbox)
-fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>) -> String {
+pub(crate) fn activate(
+    command: &str,
+    toolchains: &[String],
+    dirs: &HashMap<String, String>,
+) -> String {
     if toolchains.is_empty() {
         return command.to_owned();
     }
@@ -967,7 +971,7 @@ fn activate(command: &str, toolchains: &[String], dirs: &HashMap<String, String>
 /// ## Requirements
 ///
 /// @relation(checks.cache)
-fn with_cache_env(command: &str, cache_dir: Option<&str>) -> String {
+pub(crate) fn with_cache_env(command: &str, cache_dir: Option<&str>) -> String {
     match cache_dir {
         Some(dir) => format!("export EFFECT_CACHE_DIR={dir}; {command}"),
         None => command.to_owned(),
@@ -1158,11 +1162,11 @@ const CHECK_PTY_SIZE: PtySize = PtySize {
 /// A finished effect run: its outcome, wall-clock duration, process exit code
 /// (when the command ran to completion), and the full terminal session as an
 /// asciicast v2 recording.
-struct RunResult {
-    status: Status,
-    duration_secs: u64,
-    recording: String,
-    exit_code: Option<i32>,
+pub(crate) struct RunResult {
+    pub(crate) status: Status,
+    pub(crate) duration_secs: u64,
+    pub(crate) recording: String,
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Run one effect in the Sprite's [`WORKDIR`], recording its terminal session —
@@ -1247,7 +1251,7 @@ fn run_one(sprite: &str, name: &str, command: &str, live: &Arc<StdMutex<String>>
 /// ## Requirements
 ///
 /// @relation(checks.sandbox)
-fn run_one_docker(
+pub(crate) fn run_one_docker(
     sandbox: &local::Sandbox,
     name: &str,
     command: &str,
