@@ -3,14 +3,21 @@ document.querySelectorAll('[data-live-check]').forEach((container) => {
   const poll = () => {
     fetch(url, { cache: 'no-store' })
       .then((response) => {
-        if (response.headers.get('X-Check-Live') === 'done') {
-          window.location.reload();
-          return null;
-        }
-        return response.text();
+        const state = response.headers.get('X-Check-Live');
+        return response.text().then((html) => ({ state, html }));
       })
-      .then((html) => {
-        if (html === null) return;
+      .then(({ state, html }) => {
+        if (state === 'done') {
+          window.location.reload();
+          return;
+        }
+        if (state === 'stale') {
+          container.insertAdjacentHTML(
+            'beforeend',
+            '<p class="shell-note">No live output available right now; this check is still marked in progress.</p>'
+          );
+          return;
+        }
         container.innerHTML = html;
         setTimeout(poll, 1000);
       })

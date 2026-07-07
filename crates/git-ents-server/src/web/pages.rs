@@ -1064,11 +1064,14 @@ pub(super) async fn check_recording_page(
 }
 
 /// One poll of a running check's live output — the fragment [`LIVE_SCRIPT`]
-/// swaps into the run page's `#live-terminal` container. Signals completion
-/// (the check no longer has a live buffer: it settled, or was never queued)
-/// via the `X-Check-Live: done` response header rather than the body, so the
-/// script can tell a finished check apart from one that simply has no output
-/// yet.
+/// swaps into the run page's `#live-terminal` container. Reports its state via
+/// the `X-Check-Live` response header rather than the body, so the script can
+/// tell the three cases apart: `running` (a live buffer exists), `done` (no
+/// live buffer, and the persisted result has actually settled), or `stale` (no
+/// live buffer, but the persisted result still reads queued/running — the
+/// worker hasn't caught up yet). Reporting `done` in the `stale` case is what
+/// used to send the script into a reload loop, since the reloaded page would
+/// still pick the live branch and poll straight back into "done".
 ///
 /// [`LIVE_SCRIPT`]: super::assets::LIVE_SCRIPT
 pub(super) async fn check_live_fragment(
@@ -1082,9 +1085,15 @@ pub(super) async fn check_live_fragment(
     };
     let key = (repo.to_owned(), commit_oid, name.to_owned());
     let recording = git_effect::engine::live_snapshot(live_runs, &key);
-    let done = recording.is_none();
+    let header = if recording.is_some() {
+        "running"
+    } else {
+        match latest_outcome(repo, commit_oid, name).await {
+            Some(outcome) if super::render::is_in_progress(outcome.status) => "stale",
+            _ => "done",
+        }
+    };
     let body = super::render::live_fragment_body(recording).into_string();
-    let header = if done { "done" } else { "running" };
     ([("x-check-live", header)], body).into_response()
 }
 
