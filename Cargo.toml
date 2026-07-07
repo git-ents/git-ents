@@ -16,6 +16,7 @@ members = [
     "crates/git-toolchain",
     "crates/odb-files",
     "crates/refstore-files",
+    "crates/refstore-postgres",
 ]
 
 [workspace.package]
@@ -73,6 +74,7 @@ git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
 odb-files = { path = "crates/odb-files" }
 refstore-files = { path = "crates/refstore-files" }
+refstore-postgres = { path = "crates/refstore-postgres" }
 gix = "0.84"
 gix-actor = "0.41"
 gix-date = "0.15"
@@ -98,6 +100,9 @@ tokio = { version = "1", features = [
     "process",
     "io-util",
     "sync",
+] }
+tokio-postgres = { version = "0.7", default-features = false, features = [
+    "runtime",
 ] }
 uuid = { version = "1", features = ["v4"] }
 
