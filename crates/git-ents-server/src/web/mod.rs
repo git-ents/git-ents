@@ -59,6 +59,7 @@ pub(crate) async fn render(
     path: &str,
     host: Option<&str>,
     cookie: Option<&str>,
+    referer: Option<&str>,
 ) -> Response {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let session = write::snapshot(&state.sessions, cookie);
@@ -70,7 +71,14 @@ pub(crate) async fn render(
             Some(_) => None,
             None => write::issue_challenge(&state.challenges).ok(),
         };
-        return login_page(session.as_ref(), challenge.as_deref(), None).into_response();
+        let next = referer_path(referer);
+        return login_page(
+            session.as_ref(),
+            challenge.as_deref(),
+            None,
+            next.as_deref(),
+        )
+        .into_response();
     }
     // The CLI signs in the same way the browser form does, just without the
     // HTML: a bare nonce to sign, and (via `handle_post`) a bare token back.
@@ -156,11 +164,16 @@ pub(crate) async fn handle_post(
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if segments == ["login"] {
+        let next = write::field(&body, "next");
         return match write::login(&state.sessions, &state.challenges, &body) {
-            Ok(token) => redirect("/login", Some(session_cookie(&token, secure))),
+            Ok(token) => redirect(
+                safe_redirect_target(next.as_deref()),
+                Some(session_cookie(&token, secure)),
+            ),
             Err(error) => {
                 let challenge = write::issue_challenge(&state.challenges).ok();
-                login_page(None, challenge.as_deref(), Some(&error)).into_response()
+                login_page(None, challenge.as_deref(), Some(&error), next.as_deref())
+                    .into_response()
             }
         };
     }
@@ -361,6 +374,27 @@ async fn save_comment(
         Ok(Ok(())) => redirect(&back, None),
         Ok(Err(error)) => edit_error(&back, &error).into_response(),
         Err(_join) => edit_error(&back, "the comment did not complete").into_response(),
+    }
+}
+
+/// The path (with query) a same-origin `Referer` points at, so signing in
+/// returns a visitor to the page they came from rather than always to `/`.
+/// Rejects anything that is not a local path (a cross-origin or
+/// protocol-relative value, or `/login` itself, which would just bounce back).
+fn referer_path(referer: Option<&str>) -> Option<String> {
+    let referer = referer?;
+    let after_scheme = referer.split_once("://").map_or(referer, |(_, rest)| rest);
+    let path = after_scheme.find('/').and_then(|i| after_scheme.get(i..))?;
+    (safe_redirect_target(Some(path)) == path).then(|| path.to_owned())
+}
+
+/// A validated redirect target: `path` when it is a local, non-`/login` path,
+/// or `/` otherwise. Guards both the `Referer`-derived value above and the
+/// `next` form field, which a client could otherwise set to anything.
+fn safe_redirect_target(path: Option<&str>) -> &str {
+    match path {
+        Some(p) if p.starts_with('/') && !p.starts_with("//") && p != "/login" => p,
+        _ => "/",
     }
 }
 
@@ -753,6 +787,7 @@ fn login_page(
     session: Option<&write::SessionSnapshot>,
     challenge: Option<&str>,
     error: Option<&str>,
+    next: Option<&str>,
 ) -> Markup {
     page(
         "Sign in",
@@ -783,6 +818,9 @@ fn login_page(
                     }
                     form.edit-form method="post" action="/login" {
                         input type="hidden" name="nonce" value=(nonce);
+                        @if let Some(next) = next {
+                            input type="hidden" name="next" value=(next);
+                        }
                         label { "Public key" }
                         input type="text" name="public_key" spellcheck="false"
                             placeholder="ssh-ed25519 AAAA… you@host";

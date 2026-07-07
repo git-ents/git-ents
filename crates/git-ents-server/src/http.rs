@@ -41,7 +41,15 @@ pub async fn get_request(State(state): State<AppState>, uri: Uri, headers: Heade
     if is_web_get(&path_info, &query_string) {
         let host = header_value(&headers, "Host");
         let cookie = header_value(&headers, "Cookie");
-        return crate::web::render(&state, &path_info, host.as_deref(), cookie.as_deref()).await;
+        let referer = header_value(&headers, "Referer");
+        return crate::web::render(
+            &state,
+            &path_info,
+            host.as_deref(),
+            cookie.as_deref(),
+            referer.as_deref(),
+        )
+        .await;
     }
 
     backend(
