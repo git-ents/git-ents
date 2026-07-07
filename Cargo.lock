@@ -571,9 +571,13 @@ name = "backend-conformance"
 version = "0.0.0"
 dependencies = [
  "git-backend",
+ "git-protocol",
+ "git-reachability",
  "git-store",
  "gix-hash",
  "gix-object",
+ "odb-files",
+ "refstore-files",
  "tempfile",
 ]
 
@@ -4091,6 +4095,7 @@ version = "0.0.0"
 dependencies = [
  "backend-conformance",
  "git-backend",
+ "git-protocol",
  "gix-hash",
  "gix-object",
  "odb-tiered",

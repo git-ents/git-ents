@@ -112,6 +112,25 @@ CREATE TABLE IF NOT EXISTS git_ents_op_records (
 CREATE INDEX IF NOT EXISTS git_ents_op_records_repo_idx
     ON git_ents_op_records (repo_id, created_at DESC);
 
+-- Op-replay corpus (WS0, `docs/scale-out.adoc`'s "op replay corpus" /
+-- WS2's conformance seed corpus): one row per accepted push through the
+-- hydration write path, carrying enough to replay it against any
+-- RefStore+ObjectStore pair — see `git_protocol::corpus::CorpusEntry`,
+-- which this table's rows serialize. `ref_edits` is one `name\told\tnew`
+-- line per edit (`-` for a missing old/new); `pack` is the exact bytes
+-- staged for the push (may be empty, e.g. a pure ref deletion).
+CREATE TABLE IF NOT EXISTS git_ents_corpus_log (
+    id BIGSERIAL PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    push_cert_oid TEXT,
+    ref_edits TEXT NOT NULL,
+    pack BYTEA NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS git_ents_corpus_log_repo_idx
+    ON git_ents_corpus_log (repo_id, id);
+
 -- Reachability artifacts (WS6, `docs/scale-out.adoc`'s "Reachability"
 -- section): the commit-graph and reachable-set accelerators
 -- `git-reachability`'s maintenance effect generates, tracked here rather

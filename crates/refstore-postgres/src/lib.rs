@@ -31,6 +31,7 @@
 //! (`fly-replay`, replica topology), not this crate's job — there is no
 //! fencing code here, deliberately.
 
+mod corpus;
 mod notify;
 mod pack_registry;
 mod queue;

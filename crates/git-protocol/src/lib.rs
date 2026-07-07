@@ -19,12 +19,14 @@
 //! server-signed op record every accepted push emits.
 
 pub mod attestation;
+pub mod corpus;
 pub mod native;
 pub mod pack;
 mod traits;
 pub mod types;
 pub mod walk;
 
+pub use corpus::CorpusEntry;
 pub use traits::{Advertise, GeneratePack, IngestPack, Negotiate};
 pub use types::{
     AdSpec, AppliedRefEdit, NegotiationState, PackPlan, PushCertificate, PushOutcome, PushRequest,

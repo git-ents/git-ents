@@ -25,6 +25,7 @@
 //! to use it.
 
 mod collector;
+mod corpus;
 mod fixture_oids;
 mod object_store;
 mod ref_store;
@@ -32,6 +33,7 @@ mod scratch_repo;
 mod support;
 
 pub use collector::{Collector, NoopCollector};
+pub use corpus::{reachable_object_set, replay_corpus};
 pub use fixture_oids::FixtureOids;
 pub use object_store::{
     causal_collection_safety, object_store_properties, quarantine_invisibility,
