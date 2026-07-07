@@ -8,7 +8,6 @@
 //! a toolchain.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -408,12 +407,26 @@ fn stage_sccache(bytes: &[u8], tag: &str, target: &str, staging: &Path) -> Resul
     let dest = staging.join("sccache");
     fs::copy(&binary, &dest)
         .map_err(|error| format!("could not copy {}: {error}", binary.display()))?;
-    let mut perms = fs::metadata(&dest)
-        .map_err(|error| format!("could not read {}: {error}", dest.display()))?
+    make_executable(&dest)
+}
+
+/// Mark `path` executable. A no-op on platforms without a permission bit for
+/// it (Windows determines executability from the file extension instead).
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut perms = fs::metadata(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?
         .permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&dest, perms)
-        .map_err(|error| format!("could not set permissions on {}: {error}", dest.display()))
+    fs::set_permissions(path, perms)
+        .map_err(|error| format!("could not set permissions on {}: {error}", path.display()))
+}
+
+#[cfg(windows)]
+fn make_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// The manifest name for a version rustc reported: nightly builds collapse
@@ -501,12 +514,7 @@ fn stage_bin(bin_src: &Path, lib_src: &Path, staging: &Path) -> Result<(), Strin
         let dest = staging.join(entry.file_name());
         fs::copy(entry.path(), &dest)
             .map_err(|error| format!("could not copy {}: {error}", entry.path().display()))?;
-        let mut perms = fs::metadata(&dest)
-            .map_err(|error| format!("could not read {}: {error}", dest.display()))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&dest, perms)
-            .map_err(|error| format!("could not set permissions on {}: {error}", dest.display()))?;
+        make_executable(&dest)?;
         relink_rpath(&dest)?;
     }
     copy_dir_all(lib_src, &staging.join("lib"))
@@ -570,7 +578,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
             let target = fs::read_link(entry.path()).map_err(|error| {
                 format!("could not read symlink {}: {error}", entry.path().display())
             })?;
-            std::os::unix::fs::symlink(&target, &dest_path)
+            symlink(&target, &dest_path)
                 .map_err(|error| format!("could not symlink {}: {error}", dest_path.display()))?;
         } else {
             fs::copy(entry.path(), &dest_path)
@@ -587,6 +595,21 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Create a symlink at `link` pointing to `original`.
+#[cfg(unix)]
+fn symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(original, link)
+}
+
+#[cfg(windows)]
+fn symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+    if original.is_dir() {
+        std::os::windows::fs::symlink_dir(original, link)
+    } else {
+        std::os::windows::fs::symlink_file(original, link)
+    }
 }
 
 /// Run `rustc <toolchain_arg> <args>` and return its stdout, so a missing
