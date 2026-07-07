@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use git_ents_core::config;
+use git_ents_core::config::{self, Config};
 use git_member::members::{self, Member, Provenance};
 use git_member::revocations;
 
@@ -61,14 +61,49 @@ pub fn pre_receive() -> Result<(), String> {
     }
 
     let certificate = cat_blob(&repo, &cert_oid)?;
-    verify_certificate(&authorized, &certificate)?;
+    let config =
+        config::load_with(&store).map_err(|e| format!("could not read configuration: {e}"))?;
+    let refs: Vec<&str> = ref_updates.iter().map(String::as_str).collect();
+    authorize(authorized, &config, Some(&certificate), &refs)?;
+    Ok(())
+}
 
-    let signer = identify_signer(&authorized, &certificate);
-    if let Some(member) = signer {
-        let config =
-            config::load_with(&store).map_err(|e| format!("could not read configuration: {e}"))?;
-        for ref_name in &ref_updates {
-            if !git_member::ref_allowed(&config, member.role.as_deref(), ref_name) {
+/// Authorize a push's ref updates against `members` (already
+/// revocation-filtered) and `config`'s per-role rules, given the raw
+/// `certificate` text the client signed — the reusable core both the
+/// `pre-receive` hook above and a native [`IngestPack`](../git_protocol/trait.IngestPack.html)
+/// implementation call, so signature verification and per-ref authorization
+/// have one implementation regardless of which write path is in effect.
+///
+/// Returns the identified signer, or `Ok(None)` only during the bootstrap
+/// window (`members` empty), when every push is allowed so the first member
+/// can be enrolled. Once `members` is non-empty, `certificate` is required
+/// and must verify against one of them; that signer's `role` then gates every
+/// ref in `ref_names` per `config`, with authoring an effect (`refs/meta/
+/// effects/*`) further restricted to admin-registered members.
+///
+/// ## Requirements
+///
+/// @relation(auth.signed-push, auth.bootstrap, checks.admin-only)
+pub fn authorize(
+    members: Vec<Member>,
+    config: &Config,
+    certificate: Option<&str>,
+    ref_names: &[&str],
+) -> Result<Option<Member>, String> {
+    // @relation(auth.bootstrap)
+    if members.is_empty() {
+        return Ok(None);
+    }
+    let certificate = certificate.ok_or_else(|| {
+        "this repository requires a signed push: rerun with `git push --signed`".to_owned()
+    })?;
+    verify_certificate(&members, certificate)?;
+
+    let signer = identify_signer(&members, certificate).cloned();
+    if let Some(member) = &signer {
+        for ref_name in ref_names {
+            if !git_member::ref_allowed(config, member.role.as_deref(), ref_name) {
                 return Err(format!(
                     "{} (role {:?}) is not permitted to push to {ref_name:?}",
                     member.principal, member.role
@@ -85,7 +120,7 @@ pub fn pre_receive() -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(signer)
 }
 
 /// The ref names git is about to update, read from the hook's own stdin
@@ -107,7 +142,7 @@ fn read_ref_updates() -> Result<Vec<String>, String> {
 /// against each member's own key set individually. `verify_certificate`
 /// already established the signature matches *someone* in `authorized`; this
 /// narrows it to a specific member so their `role` can gate the ref update.
-fn identify_signer<'a>(authorized: &'a [Member], certificate: &str) -> Option<&'a Member> {
+pub fn identify_signer<'a>(authorized: &'a [Member], certificate: &str) -> Option<&'a Member> {
     authorized
         .iter()
         .find(|member| verify_certificate(std::slice::from_ref(member), certificate).is_ok())
@@ -120,7 +155,7 @@ fn identify_signer<'a>(authorized: &'a [Member], certificate: &str) -> Option<&'
 /// ## Requirements
 ///
 /// @relation(auth.signed-push, compat.ssh-keygen)
-fn verify_certificate(authorized: &[Member], certificate: &str) -> Result<(), String> {
+pub fn verify_certificate(authorized: &[Member], certificate: &str) -> Result<(), String> {
     const MARKER: &str = "-----BEGIN SSH SIGNATURE-----";
     let split = certificate
         .find(MARKER)
