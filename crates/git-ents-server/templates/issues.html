@@ -1,5 +1,5 @@
 <div class="issues-head">
-  <h1 class="page-title">Bug reports</h1>
+  <h1 class="page-title">Issues</h1>
   <button class="btn-primary" type="button" disabled title="Not available yet">{{ icons.icon_plus()|safe }}New issue</button>
 </div>
 {% if let Some(err) = error %}
@@ -8,7 +8,7 @@
 <div class="filter-row">
   <div class="filter-search">
     {{ icons.icon_search()|safe }}
-    <input type="search" placeholder="Filter bug reports" aria-label="Filter" disabled>
+    <input type="search" placeholder="Filter issues" aria-label="Filter" disabled>
   </div>
   <span class="chip active">All</span>
   {% for label in labels %}<span class="chip">{{ label }}</span>{% endfor %}
@@ -20,8 +20,8 @@
   </div>
   {% if open.is_empty() %}
   <div class="blankslate">
-    <h2>No open bug reports</h2>
-    <p>Open one to start tracking a bug.</p>
+    <h2>No open issues</h2>
+    <p>Open one to start tracking an issue.</p>
   </div>
   {% else %}
   {% for card in open %}{{ card|safe }}{% endfor %}

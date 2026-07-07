@@ -1225,7 +1225,7 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_effect::CommitRuns>, String> {
         .map_err(|err| err.to_string())
 }
 
-/// The Issues ("Bug reports") tab: the real issue list from
+/// The Issues tab: the real issue list from
 /// `refs/meta/issues/<id>`, split into open and closed, with the filter chips
 /// derived from the labels that exist. Issue creation is a write path that does
 /// not exist yet, so the "New issue" button stays disabled.
@@ -1270,7 +1270,7 @@ pub(super) async fn issues_page(
             }
         }
     };
-    repo_shell(meta, Tab::Issues, "Bug reports", auth, render_body(&tpl))
+    repo_shell(meta, Tab::Issues, "Issues", auth, render_body(&tpl))
 }
 
 /// The Issues tab body: the open/closed filter and per-issue cards.
@@ -1330,7 +1330,7 @@ pub(super) async fn settings_page(
 
                 div.card {
                     div.card-header { "Features" }
-                    (feature_row("Bug reports", "Track and triage bugs.", meta.issues > 0))
+                    (feature_row("Issues", "Track and triage bugs.", meta.issues > 0))
                     (feature_row("Releases", "Publish tagged releases.", meta.releases > 0))
                     (feature_row("Checks (CI)", "Run signed CI records on push.", matches!(&checks, Ok(c) if !c.is_empty())))
                 }
