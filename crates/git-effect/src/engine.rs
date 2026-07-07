@@ -1670,6 +1670,10 @@ mod tests {
 
     // @relation(checks.sandbox, role=Verifies)
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "windows runners use Windows containers; no Linux image support"
+    )]
     fn docker_backend_runs_a_trivial_effect() {
         if docker::ensure_docker().is_err() {
             eprintln!("skipping docker_backend_runs_a_trivial_effect: docker is not available");
