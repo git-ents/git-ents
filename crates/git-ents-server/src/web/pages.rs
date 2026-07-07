@@ -49,7 +49,12 @@ fn render_body<T: Template>(tpl: &T) -> Markup {
 
 /// A single repository's overview: the rendered README beside an aside of
 /// clone, about, releases, and language cards.
-pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) -> Markup {
+pub(super) async fn repo_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    host: Option<&str>,
+    auth: Option<&super::Auth>,
+) -> Markup {
     let rel = &meta.rel;
     let updated = git_output(repo, &["log", "-1", "--format=%ar"])
         .await
@@ -158,6 +163,7 @@ pub(super) async fn repo_page(repo: &Path, meta: &RepoMeta, host: Option<&str>) 
         meta,
         Tab::Overview,
         name,
+        auth,
         html! { div.overview { div { (main) } (aside) } },
     )
 }
@@ -351,6 +357,7 @@ pub(super) async fn files_page(
         meta,
         Tab::Files,
         name,
+        auth,
         html! {
             div.files {
                 div.tree-pane {
@@ -479,7 +486,12 @@ fn plural(n: i64, unit: &str) -> String {
 }
 
 /// A directory listing at `sub` within the repository.
-pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Response {
+pub(super) async fn tree_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    sub: &[&str],
+    auth: Option<&super::Auth>,
+) -> Response {
     let rel = &meta.rel;
     let Some(dir) = browse_path(sub) else {
         return not_found().into_response();
@@ -498,6 +510,7 @@ pub(super) async fn tree_page(repo: &Path, meta: &RepoMeta, sub: &[&str]) -> Res
         meta,
         Tab::Files,
         name,
+        auth,
         html! {
             (crumbs(rel, &dir, false))
             div.card {
@@ -581,6 +594,7 @@ pub(super) async fn blob_page(
         meta,
         Tab::Files,
         name,
+        auth,
         html! {
             (crumbs(rel, &path, true))
             @if displayable && is_doc(name) {
@@ -785,7 +799,12 @@ fn comment_form(
 /// ## Requirements
 ///
 /// @relation(web.tabs)
-pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Response {
+pub(super) async fn commit_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    sha: &str,
+    auth: Option<&super::Auth>,
+) -> Response {
     if sha.is_empty() || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return not_found().into_response();
     }
@@ -822,6 +841,7 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
         meta,
         Tab::Files,
         &subject,
+        auth,
         html! {
             div.card {
                 div.card-header { (icon_commit()) " Commit " span.sha { (short) } }
@@ -847,12 +867,17 @@ pub(super) async fn commit_page(repo: &Path, meta: &RepoMeta, sha: &str) -> Resp
 /// ## Requirements
 ///
 /// @relation(web.tabs)
-pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
+pub(super) async fn releases_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    auth: Option<&super::Auth>,
+) -> Markup {
     let releases = releases(repo).await;
     repo_shell(
         meta,
         Tab::Releases,
         "Releases",
+        auth,
         html! {
             div.page-header { h1.page-title { "Releases" } }
             @if releases.is_empty() {
@@ -900,7 +925,11 @@ pub(super) async fn releases_page(repo: &Path, meta: &RepoMeta) -> Markup {
 /// ## Requirements
 ///
 /// @relation(web.tabs)
-pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
+pub(super) async fn checks_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    auth: Option<&super::Auth>,
+) -> Markup {
     let rel = &meta.rel;
     let checks = component::load::<git_effect::Effect>(repo).await;
     let runs = load_runs(repo).await;
@@ -921,6 +950,7 @@ pub(super) async fn checks_page(repo: &Path, meta: &RepoMeta) -> Markup {
         meta,
         Tab::Checks,
         "Checks",
+        auth,
         html! {
             div.page-header { h1.page-title { "Checks" } }
             p.shell-note {
@@ -1023,6 +1053,7 @@ pub(super) async fn check_recording_page(
     commit: &str,
     name: &str,
     live_runs: &git_effect::engine::LiveRegistry,
+    auth: Option<&super::Auth>,
 ) -> Response {
     let Some(commit_oid) = ObjectId::from_hex(commit.as_bytes()).ok() else {
         return not_found().into_response();
@@ -1053,6 +1084,7 @@ pub(super) async fn check_recording_page(
         meta,
         Tab::Checks,
         &format!("{name} @ {short_commit}"),
+        auth,
         html! {
             div.page-header {
                 h1.page-title { (name) " on " code { (short_commit) } }
@@ -1161,7 +1193,11 @@ async fn load_runs(repo: &Path) -> Result<Vec<git_effect::CommitRuns>, String> {
 /// ## Requirements
 ///
 /// @relation(web.tabs)
-pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
+pub(super) async fn issues_page(
+    repo: &Path,
+    meta: &RepoMeta,
+    auth: Option<&super::Auth>,
+) -> Markup {
     let tpl = match component::load::<git_ents_core::issues::Issue>(repo).await {
         Err(err) => IssuesTemplate {
             icons: Icons,
@@ -1194,7 +1230,7 @@ pub(super) async fn issues_page(repo: &Path, meta: &RepoMeta) -> Markup {
             }
         }
     };
-    repo_shell(meta, Tab::Issues, "Bug reports", render_body(&tpl))
+    repo_shell(meta, Tab::Issues, "Bug reports", auth, render_body(&tpl))
 }
 
 /// The Issues tab body: the open/closed filter and per-issue cards.
@@ -1231,6 +1267,7 @@ pub(super) async fn settings_page(
         meta,
         Tab::Settings,
         "Repository settings",
+        auth,
         html! {
             div.settings {
                 div.page-header { h1.page-title { "Repository settings" } }

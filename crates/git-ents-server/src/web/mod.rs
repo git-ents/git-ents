@@ -420,15 +420,14 @@ async fn route(
     live_runs: &git_effect::engine::LiveRegistry,
 ) -> Response {
     let meta = gather_meta(repo, rel).await;
+    let auth = resolve_auth(repo, session).await;
     match rest.split_first() {
-        None => pages::repo_page(repo, &meta, host).await.into_response(),
-        Some((&"files", sub)) => {
-            let auth = resolve_auth(repo, session).await;
-            pages::files_page(repo, &meta, sub, auth.as_ref(), editing).await
-        }
-        Some((&"tree", sub)) => pages::tree_page(repo, &meta, sub).await,
+        None => pages::repo_page(repo, &meta, host, auth.as_ref())
+            .await
+            .into_response(),
+        Some((&"files", sub)) => pages::files_page(repo, &meta, sub, auth.as_ref(), editing).await,
+        Some((&"tree", sub)) => pages::tree_page(repo, &meta, sub, auth.as_ref()).await,
         Some((&"blob", sub)) => {
-            let auth = resolve_auth(repo, session).await;
             pages::blob_page(
                 repo,
                 &meta,
@@ -440,7 +439,6 @@ async fn route(
             .await
         }
         Some((&"source", sub)) => {
-            let auth = resolve_auth(repo, session).await;
             pages::blob_page(
                 repo,
                 &meta,
@@ -451,11 +449,15 @@ async fn route(
             )
             .await
         }
-        Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha).await,
-        Some((&"releases", &[])) => pages::releases_page(repo, &meta).await.into_response(),
-        Some((&"checks", &[])) => pages::checks_page(repo, &meta).await.into_response(),
+        Some((&"commit", &[sha])) => pages::commit_page(repo, &meta, sha, auth.as_ref()).await,
+        Some((&"releases", &[])) => pages::releases_page(repo, &meta, auth.as_ref())
+            .await
+            .into_response(),
+        Some((&"checks", &[])) => pages::checks_page(repo, &meta, auth.as_ref())
+            .await
+            .into_response(),
         Some((&"checks", &[commit, name])) => {
-            pages::check_recording_page(repo, &meta, commit, name, live_runs).await
+            pages::check_recording_page(repo, &meta, commit, name, live_runs, auth.as_ref()).await
         }
         Some((&"checks", &[commit, name, "live"])) => {
             pages::check_live_fragment(repo, commit, name, live_runs).await
@@ -463,13 +465,12 @@ async fn route(
         Some((&"checks", &[commit, name, "download"])) => {
             pages::check_recording_download(repo, commit, name).await
         }
-        Some((&"issues", &[])) => pages::issues_page(repo, &meta).await.into_response(),
-        Some((&"settings", &[])) => {
-            let auth = resolve_auth(repo, session).await;
-            pages::settings_page(repo, &meta, auth.as_ref(), editing)
-                .await
-                .into_response()
-        }
+        Some((&"issues", &[])) => pages::issues_page(repo, &meta, auth.as_ref())
+            .await
+            .into_response(),
+        Some((&"settings", &[])) => pages::settings_page(repo, &meta, auth.as_ref(), editing)
+            .await
+            .into_response(),
         _ => not_found().into_response(),
     }
 }
@@ -577,10 +578,16 @@ async fn open_issue_count(repo: &Path) -> usize {
 
 /// Wrap a repository view in the shared header band and tab bar, then the page
 /// shell. `active` highlights the current tab.
-fn repo_shell(meta: &RepoMeta, active: Tab, title: &str, body: Markup) -> Markup {
+fn repo_shell(
+    meta: &RepoMeta,
+    active: Tab,
+    title: &str,
+    auth: Option<&Auth>,
+    body: Markup,
+) -> Markup {
     page(
         title,
-        html! { (repo_header(meta)) (tab_bar(meta, active)) (body) },
+        html! { (account_strip_auth(auth)) (repo_header(meta)) (tab_bar(meta, active)) (body) },
     )
 }
 
@@ -708,15 +715,16 @@ fn not_found() -> (StatusCode, Markup) {
 }
 
 /// A small right-aligned strip showing who is signed in, with a sign-in or
-/// sign-out control.
-fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
+/// sign-out control. Shared by every page shell so auth state is never
+/// ambiguous, whichever tab a visitor lands on.
+fn account_strip_view(identity: Option<(&str, &str)>) -> Markup {
     html! {
         div.account-strip {
-            @match session {
-                Some(s) => {
-                    span.muted { "Signed in · " (s.label) }
+            @match identity {
+                Some((label, csrf)) => {
+                    span.muted { "Signed in · " (label) }
                     form method="post" action="/logout" {
-                        input type="hidden" name="csrf" value=(s.csrf);
+                        input type="hidden" name="csrf" value=(csrf);
                         button.btn.btn-quiet type="submit" { "Sign out" }
                     }
                 }
@@ -724,6 +732,14 @@ fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
             }
         }
     }
+}
+
+fn account_strip(session: Option<&write::SessionSnapshot>) -> Markup {
+    account_strip_view(session.map(|s| (s.label.as_str(), s.csrf.as_str())))
+}
+
+fn account_strip_auth(auth: Option<&Auth>) -> Markup {
+    account_strip_view(auth.map(|a| (a.label.as_str(), a.csrf.as_str())))
 }
 
 /// The sign-in page: prove control of a member key by signing a one-time
