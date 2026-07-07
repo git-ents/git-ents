@@ -28,7 +28,7 @@ mod effect;
 mod object_store;
 mod ref_store;
 
-pub use effect::{EffectDef, EffectExecutor, EffectHandle, MaterializedInputs};
+pub use effect::{EffectDef, EffectExecutor, EffectHandle, EffectStatus, MaterializedInputs};
 pub use object_store::{Object, ObjectStore, PackStream, QuarantineId};
 pub use ref_store::{
     Expected, RefEdit, RefEvent, RefEventStream, RefIter, RefLogEntry, RefLogIter, RefName,
