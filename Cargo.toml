@@ -10,6 +10,7 @@ members = [
     "crates/git-ents-core",
     "crates/git-ents-server",
     "crates/git-member",
+    "crates/git-protocol",
     "crates/git-signed-push",
     "crates/git-store",
     "crates/git-toolchain",
@@ -66,18 +67,20 @@ git-effect = { path = "crates/git-effect" }
 git-ents-core = { path = "crates/git-ents-core" }
 git-ents-server = { path = "crates/git-ents-server" }
 git-member = { path = "crates/git-member" }
+git-protocol = { path = "crates/git-protocol" }
 git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
 odb-files = { path = "crates/odb-files" }
 refstore-files = { path = "crates/refstore-files" }
 gix = "0.84"
+gix-actor = "0.41"
+gix-date = "0.15"
+gix-features = { version = "0.48", features = ["zlib"] }
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-object = "0.61"
 gix-odb = "0.81"
 gix-pack = "0.71"
-gix-actor = "0.41"
-gix-date = "0.15"
 iddqd = "0.4"
 maud = { version = "0.27", features = ["axum"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

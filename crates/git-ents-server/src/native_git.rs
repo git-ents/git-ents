@@ -1,0 +1,404 @@
+//! Smart-HTTP through the native `git-protocol` traits (WS3), mounted
+//! additively under `/_native/` alongside the existing `git http-backend`
+//! CGI gateway (`crate::http`).
+//!
+//! `docs/scale-out.adoc`'s "Protocol traits" section explicitly permits more
+//! than one conforming implementation behind `Advertise`/`Negotiate`/
+//! `GeneratePack`/`IngestPack` — "whether that beats the native
+//! implementation is empirical, settled by conformance plus cost, not by
+//! fiat." `crate::http`'s CGI gateway already *is* the stock-git-wrapped
+//! backend the plan describes as WS0, shipped first and load-bearing (hooks,
+//! the checks queue, signed-push nonces); replacing it outright to satisfy
+//! WS3 would be the larger, riskier change for no correctness gain over
+//! mounting the native path beside it. This module is that native path:
+//! `GET .../info/refs` and `POST .../git-upload-pack` are fully wired
+//! end-to-end (a stock `git clone`/`fetch` works against them with zero
+//! client configuration). `POST .../git-receive-pack` ingests real pushes
+//! through [`git_protocol::IngestPack`] — the same staged-then-atomic-then-
+//! promoted ordering and attestation check the unit tests in
+//! `git-protocol` exercise directly — but does not yet parse a push
+//! certificate off the wire (see `push_cert` below), so a push only
+//! succeeds during a repository's bootstrap window. Wiring real
+//! `git push --signed` end-to-end over this endpoint is follow-on work;
+//! `IngestPack::receive` itself already enforces attestation regardless of
+//! transport.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use git_backend::{Expected, PackStream, RefEdit, RefName};
+use git_protocol::native::{BackendResolver, NativeBackend, RepoBackends};
+use git_protocol::{
+    AdSpec, Advertise as _, GeneratePack as _, IngestPack as _, Negotiate as _, NegotiationState,
+    PushRequest, RepoId,
+};
+use gix_hash::ObjectId;
+
+use crate::AppState;
+
+/// Resolves a [`RepoId`] to `refstore-files`/`odb-files` backends opened
+/// against `data_dir.join(repo)`, and to that repository's currently
+/// enrolled members/config — loaded fresh per call, exactly what
+/// `pre-receive` does, so both write paths see the identical trust set.
+struct DiskResolver {
+    data_dir: PathBuf,
+}
+
+impl BackendResolver for DiskResolver {
+    fn resolve(&self, repo: &RepoId) -> git_protocol::Result<RepoBackends> {
+        let path = self.data_dir.join(repo.as_str());
+        let refs = refstore_files::FilesRefStore::open(&path)
+            .map_err(|error| git_protocol::Error::UnknownRepo(error.to_string()))?;
+        let objects = odb_files::OdbFiles::open(&path)
+            .map_err(|error| git_protocol::Error::UnknownRepo(error.to_string()))?;
+        let members = git_member::members::load_all(&path)
+            .map_err(|error| git_protocol::Error::UnknownRepo(error.to_string()))?;
+        let revoked = git_member::revocations::fingerprints(&path)
+            .map_err(|error| git_protocol::Error::UnknownRepo(error.to_string()))?;
+        let config = git_ents_core::config::load(&path)
+            .map_err(|error| git_protocol::Error::UnknownRepo(error.to_string()))?;
+        Ok(RepoBackends {
+            refs: Arc::new(refs),
+            objects: Arc::new(objects),
+            authorized_members: git_member::members::without_revoked(members, &revoked),
+            config,
+        })
+    }
+}
+
+fn backend(state: &AppState) -> NativeBackend<DiskResolver> {
+    let signer: Arc<dyn git_protocol::attestation::OpSigner> = match &state.web_signing_key {
+        Some(key) => Arc::new(git_protocol::attestation::SshOpSigner::new(key.clone())),
+        // No server signing key configured: op records still build, but
+        // fail to sign — acceptable for the additive native path, whose
+        // push side is already limited to the bootstrap window (see the
+        // module doc comment).
+        None => Arc::new(git_protocol::attestation::SshOpSigner::new(PathBuf::from(
+            "/dev/null",
+        ))),
+    };
+    NativeBackend::new(
+        DiskResolver {
+            data_dir: state.data_dir.clone(),
+        },
+        signer,
+    )
+}
+
+/// Serve `GET /_native/<repo>/info/refs?service=<git-upload-pack|git-receive-pack>`.
+pub async fn get_request(State(state): State<AppState>, uri: Uri) -> Response {
+    let Some((repo_rel, "info/refs")) = split(uri.path()) else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let query = uri.query().unwrap_or_default();
+    let service = crate::http::query_service(query).unwrap_or("git-upload-pack");
+    if service != "git-upload-pack" && service != "git-receive-pack" {
+        return (StatusCode::BAD_REQUEST, "unknown service").into_response();
+    }
+    let receive = service == "git-receive-pack";
+
+    let repo_path = state.data_dir.join(repo_rel);
+    if receive {
+        if let Err(response) = crate::http::ensure_repo(&state, &repo_path).await {
+            return response;
+        }
+    } else if !crate::http::is_bare_repo(&repo_path) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+
+    let ad = match backend(&state).refs(&RepoId::new(repo_rel), &AdSpec::everything()) {
+        Ok(ad) => ad,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+
+    let mut body = pkt_line(format!("# service={service}\n").as_bytes());
+    body.extend_from_slice(FLUSH_PKT);
+    body.extend(advertisement_lines(&ad, receive));
+
+    Response::builder()
+        .header(
+            "Content-Type",
+            format!("application/x-{service}-advertisement"),
+        )
+        .header("Cache-Control", "no-cache")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Serve `POST /_native/<repo>/git-upload-pack` or `.../git-receive-pack`.
+pub async fn post_request(
+    State(state): State<AppState>,
+    uri: Uri,
+    _headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    match split(uri.path()) {
+        Some((repo_rel, "git-upload-pack")) => upload_pack(&state, repo_rel, &body).await,
+        Some((repo_rel, "git-receive-pack")) => receive_pack(&state, repo_rel, &body).await,
+        _ => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+async fn upload_pack(state: &AppState, repo_rel: &str, body: &[u8]) -> Response {
+    let (wants, haves) = parse_upload_request(body);
+    let backend = backend(state);
+    let mut session = NegotiationState {
+        repo: RepoId::new(repo_rel),
+        wants,
+        haves,
+    };
+    let plan = match backend.wants_haves(&mut session) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+        }
+    };
+    let mut stream = match backend.stream(&plan) {
+        Ok(stream) => stream,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let mut pack_bytes = Vec::new();
+    if let Err(error) = std::io::Read::read_to_end(&mut stream, &mut pack_bytes) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+
+    let mut out = pkt_line(b"NAK\n");
+    out.extend(pack_bytes);
+    Response::builder()
+        .header("Content-Type", "application/x-git-upload-pack-result")
+        .body(axum::body::Body::from(out))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn receive_pack(state: &AppState, repo_rel: &str, body: &[u8]) -> Response {
+    let (commands, pack) = split_commands(body);
+    let ref_edits: Vec<RefEdit> = commands
+        .iter()
+        .filter_map(|line| parse_command(line))
+        .collect();
+    let names: Vec<RefName> = ref_edits.iter().map(|edit| edit.name.clone()).collect();
+
+    let push = PushRequest {
+        repo: RepoId::new(repo_rel),
+        ref_edits,
+        pack: PackStream::new(std::io::Cursor::new(pack.to_vec())),
+        // Not yet parsed off the wire — see the module doc comment. A push
+        // only succeeds during the bootstrap window until this is wired.
+        push_cert: None,
+    };
+    let outcome = backend(state).receive(push);
+
+    let mut out = pkt_line(b"unpack ok\n");
+    match outcome {
+        Ok(git_protocol::PushOutcome::Accepted { .. }) => {
+            for name in &names {
+                out.extend(pkt_line(format!("ok {name}\n").as_bytes()));
+            }
+        }
+        Ok(git_protocol::PushOutcome::Rejected { reason }) => {
+            for name in &names {
+                out.extend(pkt_line(format!("ng {name} {reason}\n").as_bytes()));
+            }
+        }
+        Err(error) => {
+            for name in &names {
+                out.extend(pkt_line(format!("ng {name} {error}\n").as_bytes()));
+            }
+        }
+    }
+    out.extend_from_slice(FLUSH_PKT);
+    Response::builder()
+        .header("Content-Type", "application/x-git-receive-pack-result")
+        .body(axum::body::Body::from(out))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Split `/_native/<repo>/<suffix>` into `(repo, suffix)` for `suffix` in
+/// `{"info/refs", "git-upload-pack", "git-receive-pack"}`, validating every
+/// repo path segment exactly as the CGI gateway does.
+fn split(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/_native/")?;
+    for suffix in ["info/refs", "git-upload-pack", "git-receive-pack"] {
+        if let Some(repo) = rest.strip_suffix(suffix) {
+            let repo = repo.strip_suffix('/')?;
+            let segments: Vec<&str> = repo.split('/').filter(|s| !s.is_empty()).collect();
+            if segments.is_empty()
+                || segments.len() > crate::http::MAX_REPO_DEPTH
+                || !segments
+                    .iter()
+                    .all(|segment| crate::http::valid_segment(segment))
+            {
+                return None;
+            }
+            return Some((repo, suffix));
+        }
+    }
+    None
+}
+
+const FLUSH_PKT: &[u8] = b"0000";
+
+fn pkt_line(data: &[u8]) -> Vec<u8> {
+    let mut out = format!("{:04x}", data.len().saturating_add(4)).into_bytes();
+    out.extend_from_slice(data);
+    out
+}
+
+/// Every pkt-line in `body`, in order, skipping flush markers — correct for
+/// `git-upload-pack`'s request, which is pkt-lines from start to end with no
+/// trailing binary payload.
+fn pkt_lines(mut body: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    while body.len() >= 4 {
+        let Ok(len_str) = std::str::from_utf8(body.get(..4).unwrap_or_default()) else {
+            break;
+        };
+        let Ok(len) = usize::from_str_radix(len_str, 16) else {
+            break;
+        };
+        if len == 0 {
+            body = body.get(4..).unwrap_or_default();
+            continue;
+        }
+        if len < 4 || body.len() < len {
+            break;
+        }
+        out.push(body.get(4..len).unwrap_or_default().to_vec());
+        body = body.get(len..).unwrap_or_default();
+    }
+    out
+}
+
+/// Pkt-line commands up to (and past) the first flush, and the raw bytes
+/// remaining after it — `git-receive-pack`'s request is pkt-line commands
+/// followed by a flush, then the pack as an unframed byte stream.
+fn split_commands(body: &[u8]) -> (Vec<Vec<u8>>, &[u8]) {
+    let mut commands = Vec::new();
+    let mut offset = 0usize;
+    while offset.saturating_add(4) <= body.len() {
+        let Some(len_hex) = body.get(offset..offset.saturating_add(4)) else {
+            break;
+        };
+        let Ok(len_str) = std::str::from_utf8(len_hex) else {
+            break;
+        };
+        let Ok(len) = usize::from_str_radix(len_str, 16) else {
+            break;
+        };
+        if len == 0 {
+            offset = offset.saturating_add(4);
+            break;
+        }
+        if len < 4 {
+            break;
+        }
+        let Some(end) = offset.checked_add(len).filter(|end| *end <= body.len()) else {
+            break;
+        };
+        commands.push(
+            body.get(offset.saturating_add(4)..end)
+                .unwrap_or_default()
+                .to_vec(),
+        );
+        offset = end;
+    }
+    (commands, body.get(offset..).unwrap_or_default())
+}
+
+fn parse_upload_request(body: &[u8]) -> (Vec<ObjectId>, Vec<ObjectId>) {
+    let mut wants = Vec::new();
+    let mut haves = Vec::new();
+    for line in pkt_lines(body) {
+        let text = String::from_utf8_lossy(&line);
+        let text = text.trim_end_matches('\n');
+        if let Some(rest) = text.strip_prefix("want ") {
+            if let Some(hex) = rest.split_whitespace().next()
+                && let Ok(oid) = ObjectId::from_hex(hex.as_bytes())
+            {
+                wants.push(oid);
+            }
+        } else if let Some(hex) = text.strip_prefix("have ")
+            && let Ok(oid) = ObjectId::from_hex(hex.as_bytes())
+        {
+            haves.push(oid);
+        }
+    }
+    (wants, haves)
+}
+
+fn parse_command(line: &[u8]) -> Option<RefEdit> {
+    let text = String::from_utf8_lossy(line);
+    let text = text.trim_end_matches('\n');
+    // The first command carries a NUL-separated capability list.
+    let text = text.split('\0').next().unwrap_or(text);
+    let mut parts = text.split_whitespace();
+    let old_hex = parts.next()?;
+    let new_hex = parts.next()?;
+    let name = parts.next()?;
+    let old = ObjectId::from_hex(old_hex.as_bytes()).ok()?;
+    let new = ObjectId::from_hex(new_hex.as_bytes()).ok()?;
+    let null = ObjectId::null(gix_hash::Kind::Sha1);
+    Some(RefEdit {
+        name: RefName::new(name),
+        expected: if old == null {
+            Expected::MustNotExist
+        } else {
+            Expected::MustExistAndMatch(old)
+        },
+        new: (new != null).then_some(new),
+    })
+}
+
+/// The advertised ref lines: `HEAD` first (carrying capabilities and, when
+/// resolved, a `symref=HEAD:<name>` hint so `git clone` knows its default
+/// branch) if resolved, then every other ref.
+fn advertisement_lines(ad: &git_protocol::RefAdvertisement, receive: bool) -> Vec<u8> {
+    let mut caps = if receive {
+        "report-status delete-refs ofs-delta agent=git-ents/1.0".to_owned()
+    } else {
+        "ofs-delta agent=git-ents/1.0".to_owned()
+    };
+    if let Some(head) = &ad.head {
+        caps = format!("{caps} symref=HEAD:{head}");
+    }
+
+    let mut out = Vec::new();
+    if ad.refs.is_empty() {
+        let null = ObjectId::null(gix_hash::Kind::Sha1);
+        out.extend(pkt_line(
+            format!("{null} capabilities^{{}}\0{caps}\n").as_bytes(),
+        ));
+        out.extend_from_slice(FLUSH_PKT);
+        return out;
+    }
+
+    let head_oid = ad
+        .head
+        .as_ref()
+        .and_then(|name| ad.refs.iter().find(|(n, _)| n == name))
+        .map(|(_, oid)| *oid);
+    let mut first = true;
+    if let Some(oid) = head_oid {
+        out.extend(pkt_line(format!("{oid} HEAD\0{caps}\n").as_bytes()));
+        first = false;
+    }
+    for (name, oid) in &ad.refs {
+        let line = if first {
+            first = false;
+            format!("{oid} {name}\0{caps}\n")
+        } else {
+            format!("{oid} {name}\n")
+        };
+        out.extend(pkt_line(line.as_bytes()));
+    }
+    out.extend_from_slice(FLUSH_PKT);
+    out
+}

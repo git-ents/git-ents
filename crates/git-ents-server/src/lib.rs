@@ -6,6 +6,7 @@
 mod asciidoc;
 mod http;
 mod markdown;
+mod native_git;
 /// MIME-keyed document rendering (HTML and plain-text), shared by the web
 /// UI and the `git-ents` CLI, which embeds this crate as a library.
 pub mod render;
@@ -197,6 +198,13 @@ async fn serve(args: Args) -> ExitCode {
         .route("/", get(http::get_request))
         // @relation(checks.debug)
         .route("/_debug/{*path}", get(web::handshake))
+        // The native protocol-trait smart-HTTP path (WS3), additive
+        // alongside the `git http-backend` CGI gateway below — see
+        // `native_git`'s module doc comment.
+        .route(
+            "/_native/{*path}",
+            get(native_git::get_request).post(native_git::post_request),
+        )
         .route("/{*path}", get(http::get_request).post(http::post_request))
         .layer(DefaultBodyLimit::disable())
         .with_state(state);

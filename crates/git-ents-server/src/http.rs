@@ -338,7 +338,7 @@ fn is_receive_pack(path_info: &str, query: &str) -> bool {
 }
 
 /// The value of the `service` query parameter, if present.
-fn query_service(query: &str) -> Option<&str> {
+pub(crate) fn query_service(query: &str) -> Option<&str> {
     query
         .split('&')
         .find_map(|pair| pair.strip_prefix("service="))
@@ -351,7 +351,7 @@ fn query_service(query: &str) -> Option<&str> {
 /// concurrent first pushes to the same name cannot both initialize it, and
 /// refuses paths that collide with an existing repository: one nested inside a
 /// repo, or one that already exists as a namespace directory.
-async fn ensure_repo(state: &AppState, repo: &Path) -> Result<(), Response> {
+pub(crate) async fn ensure_repo(state: &AppState, repo: &Path) -> Result<(), Response> {
     let _guard = state.init_lock.lock().await;
     if enclosing_repo(&state.data_dir, repo).is_some() {
         return Err((

@@ -1545,10 +1545,12 @@ dependencies = [
  "form_urlencoded",
  "getrandom 0.4.3",
  "git-anchor",
+ "git-backend",
  "git-comment",
  "git-effect",
  "git-ents-core",
  "git-member",
+ "git-protocol",
  "git-signed-push",
  "git-store",
  "git-toolchain",
@@ -1557,8 +1559,10 @@ dependencies = [
  "gix-hash",
  "gix-object",
  "maud",
+ "odb-files",
  "portable-pty",
  "pulldown-cmark",
+ "refstore-files",
  "rstest",
  "tempfile",
  "tokio",
@@ -1574,6 +1578,28 @@ dependencies = [
  "git-store",
  "gix",
  "iddqd",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "git-protocol"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "git-ents-core",
+ "git-member",
+ "git-signed-push",
+ "gix",
+ "gix-actor",
+ "gix-date",
+ "gix-features",
+ "gix-hash",
+ "gix-object",
+ "gix-pack",
+ "odb-files",
+ "refstore-files",
+ "rstest",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

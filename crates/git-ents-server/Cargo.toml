@@ -19,9 +19,11 @@ figue = { workspace = true }
 form_urlencoded = { workspace = true }
 getrandom = { workspace = true }
 git-anchor = { workspace = true }
+git-backend = { workspace = true }
 git-comment = { workspace = true }
 git-effect = { workspace = true }
 git-member = { workspace = true }
+git-protocol = { workspace = true }
 git-signed-push = { workspace = true }
 git-store = { workspace = true }
 git-toolchain = { workspace = true }
@@ -30,7 +32,9 @@ gix-date = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 maud = { workspace = true }
+odb-files = { workspace = true }
 pulldown-cmark = { workspace = true }
+refstore-files = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
