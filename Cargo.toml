@@ -15,6 +15,7 @@ members = [
     "crates/git-store",
     "crates/git-toolchain",
     "crates/odb-files",
+    "crates/odb-tigris",
     "crates/refstore-files",
     "crates/refstore-postgres",
 ]
@@ -73,6 +74,7 @@ git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
 odb-files = { path = "crates/odb-files" }
+odb-tigris = { path = "crates/odb-tigris" }
 refstore-files = { path = "crates/refstore-files" }
 refstore-postgres = { path = "crates/refstore-postgres" }
 gix = "0.84"
@@ -84,6 +86,9 @@ gix-object = "0.61"
 gix-odb = "0.81"
 gix-pack = "0.71"
 iddqd = "0.4"
+object_store = { version = "0.14", default-features = false, features = [
+    "aws",
+] }
 maud = { version = "0.27", features = ["axum"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 rayon = "1"
