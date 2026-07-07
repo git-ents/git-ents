@@ -17,15 +17,6 @@
 //! type incompatibly; each type carries a load test against a hand-built
 //! fixture in the real layout to catch a regression at compile-and-test time
 //! rather than in production.
-//!
-//! Every tree-rooted document also carries a one-blob `.schema` entry at its
-//! root (see [`SchemaVersion`]), a sibling of the document's own fields
-//! naming the shape's on-disk version. A tree missing the entry is version 1
-//! — the pre-marker format, which must keep reading fine — and a tree naming
-//! a version newer than the binary's [`SchemaVersion::VERSION`] fails with
-//! [`Error::UnsupportedSchema`] rather than however far a mismatched decode
-//! happens to get. Migrating is then just a normal write: a new tree
-//! committed on the ref's old tip, no separate migration step.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -39,9 +30,6 @@ use gix::refs::transaction::PreviousValue;
 
 pub mod component;
 mod merge;
-mod schema;
-
-pub use schema::SchemaVersion;
 
 /// The author and committer identity stamped on every write, fixed so a write
 /// is self-contained and independent of any ambient git config.
@@ -85,17 +73,6 @@ pub enum Error {
     /// rather than the document's own content.
     #[error("{0}")]
     Invalid(String),
-    /// A document's tree names a `.schema` version newer than this binary's
-    /// [`SchemaVersion::VERSION`] for the type — a future format this binary
-    /// was never taught to read, reported cleanly rather than surfacing as a
-    /// decode failure.
-    #[error("schema {found}, this binary reads {supported}")]
-    UnsupportedSchema {
-        /// The version named by the tree's `.schema` marker.
-        found: u32,
-        /// The newest version this binary's copy of the type supports.
-        supported: u32,
-    },
 }
 
 /// Whether `segment` is safe as a single ref-path or tree-entry segment: one
@@ -176,16 +153,11 @@ impl Store {
     }
 
     /// Load the document on `refname`, or `None` when the ref is absent.
-    pub fn load<T: for<'a> Facet<'a> + SchemaVersion>(
-        &self,
-        refname: &str,
-    ) -> Result<Option<T>, Error> {
+    pub fn load<T: for<'a> Facet<'a>>(&self, refname: &str) -> Result<Option<T>, Error> {
         let Some(commit) = self.ref_commit(refname)? else {
             return Ok(None);
         };
         let tree = self.read_commit(&commit)?.tree;
-        let (tree, version) = schema::strip(&self.odb, tree)?;
-        schema::check::<T>(version)?;
         Ok(Some(facet_git_tree::deserialize(&tree, &self.odb)?))
     }
 
@@ -200,7 +172,7 @@ impl Store {
     /// ## Requirements
     ///
     /// @relation(storage.concurrency)
-    pub fn store<T: for<'a> Facet<'a> + SchemaVersion>(
+    pub fn store<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
         value: &T,
@@ -213,7 +185,7 @@ impl Store {
     /// (a `(name, email)` pair) while the committer stays the git-ents system
     /// identity — the way a web edit records the human who made the change while
     /// the server is the committer.
-    pub fn store_authored<T: for<'a> Facet<'a> + SchemaVersion>(
+    pub fn store_authored<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
         value: &T,
@@ -226,7 +198,7 @@ impl Store {
     /// ## Requirements
     ///
     /// @relation(storage.concurrency)
-    fn store_impl<T: for<'a> Facet<'a> + SchemaVersion>(
+    fn store_impl<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
         value: &T,
@@ -234,14 +206,10 @@ impl Store {
         author: Option<(&str, &str)>,
     ) -> Result<(), Error> {
         let mut expected = self.ref_commit(refname)?;
-        // Bare (unmarked) tree throughout: the `.schema` marker is added only
-        // at the point of writing, so a retry's structural merge never has to
-        // know about it.
         let mut tree = facet_git_tree::serialize_into(value, &self.odb)?;
         for _ in 0..=MAX_MERGE_RETRIES {
-            let versioned = schema::inject(&self.odb, tree, T::VERSION)?;
             let parents = expected.into_iter().collect();
-            let commit = self.write_commit(versioned, parents, message, author)?;
+            let commit = self.write_commit(tree, parents, message, author)?;
             match self.try_set_ref(refname, expected, commit) {
                 Ok(()) => return Ok(()),
                 Err(Error::Conflict) => {
@@ -251,12 +219,8 @@ impl Store {
                         return Err(Error::Conflict);
                     };
                     let theirs = self.ref_commit(refname)?.ok_or(Error::Conflict)?;
-                    let (base_tree, base_version) =
-                        schema::strip(&self.odb, self.read_commit(&base)?.tree)?;
-                    let (theirs_tree, theirs_version) =
-                        schema::strip(&self.odb, self.read_commit(&theirs)?.tree)?;
-                    schema::check::<T>(base_version)?;
-                    schema::check::<T>(theirs_version)?;
+                    let base_tree = self.read_commit(&base)?.tree;
+                    let theirs_tree = self.read_commit(&theirs)?.tree;
                     tree = merge::three_way_merge::<T>(base_tree, tree, theirs_tree, &self.odb)?;
                     expected = Some(theirs);
                 }
@@ -279,14 +243,13 @@ impl Store {
     /// ## Requirements
     ///
     /// @relation(storage.concurrency)
-    pub fn amend<T: for<'a> Facet<'a> + SchemaVersion>(
+    pub fn amend<T: for<'a> Facet<'a>>(
         &self,
         refname: &str,
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
         let tree = facet_git_tree::serialize_into(value, &self.odb)?;
-        let tree = schema::inject(&self.odb, tree, T::VERSION)?;
         let expected = self.ref_commit(refname)?;
         let parents = match &expected {
             Some(tip) => self.read_commit(tip)?.parents,
@@ -462,21 +425,13 @@ impl Store {
     /// incompatible format change to `T`: such a commit is unreadable forever,
     /// not transiently, so returning the readable prefix beats letting one
     /// stale commit blank out every newer entry that parses fine. A real I/O
-    /// or repository-corruption error still propagates — including a `.schema`
-    /// marker newer than `T::VERSION`, which names a real, actionable problem
-    /// (this binary needs upgrading) rather than the shape drift the
-    /// stop-on-first-miss rule is built for.
-    pub fn history<T: for<'a> Facet<'a> + SchemaVersion>(
-        &self,
-        refname: &str,
-    ) -> Result<Vec<(u64, T)>, Error> {
+    /// or repository-corruption error still propagates.
+    pub fn history<T: for<'a> Facet<'a>>(&self, refname: &str) -> Result<Vec<(u64, T)>, Error> {
         let mut out = Vec::new();
         let mut cursor = self.ref_commit(refname)?;
         while let Some(oid) = cursor {
             let commit = self.read_commit(&oid)?;
-            let (tree, version) = schema::strip(&self.odb, commit.tree)?;
-            schema::check::<T>(version)?;
-            match facet_git_tree::deserialize(&tree, &self.odb) {
+            match facet_git_tree::deserialize(&commit.tree, &self.odb) {
                 Ok(value) => out.push((commit.seconds, value)),
                 Err(facet_git_tree::Error::Message(_)) => break,
                 Err(error) => return Err(error.into()),
@@ -1245,64 +1200,5 @@ mod tests {
             .unwrap();
         let result = store.try_set_ref(refname, stale, commit);
         assert!(matches!(result, Err(Error::Conflict)));
-    }
-
-    #[test]
-    fn store_then_load_round_trips_through_the_schema_marker() {
-        let dir = repo();
-        let store = Store::open(dir.path()).unwrap();
-        let item = Item {
-            id: "a".into(),
-            value: "1".into(),
-        };
-        store.store("refs/meta/doc", &item, "write").unwrap();
-
-        // The written tree carries a `.schema` marker alongside the
-        // document's own fields.
-        let tree = store.ref_tree("refs/meta/doc").unwrap();
-        let (_stripped, version) = schema::strip(&store.odb, tree).unwrap();
-        assert_eq!(version, 1);
-
-        assert_eq!(store.load::<Item>("refs/meta/doc").unwrap(), Some(item));
-    }
-
-    #[test]
-    fn a_tree_with_no_schema_marker_reads_as_version_1() {
-        let dir = repo();
-        let store = Store::open(dir.path()).unwrap();
-        let item = Item {
-            id: "a".into(),
-            value: "1".into(),
-        };
-        // Written directly through `facet_git_tree`, bypassing `Store::store`
-        // and so its `.schema` injection — the on-disk shape of data written
-        // before the marker existed.
-        let tree = facet_git_tree::serialize_into(&item, &store.odb).unwrap();
-        store.store_tree("refs/meta/legacy", tree, "write").unwrap();
-
-        assert_eq!(store.load::<Item>("refs/meta/legacy").unwrap(), Some(item));
-    }
-
-    #[test]
-    fn a_schema_version_newer_than_supported_errors_cleanly() {
-        let dir = repo();
-        let store = Store::open(dir.path()).unwrap();
-        let item = Item {
-            id: "a".into(),
-            value: "1".into(),
-        };
-        let tree = facet_git_tree::serialize_into(&item, &store.odb).unwrap();
-        let tree = schema::inject(&store.odb, tree, 2).unwrap();
-        store.store_tree("refs/meta/future", tree, "write").unwrap();
-
-        let error = store.load::<Item>("refs/meta/future").unwrap_err();
-        assert!(matches!(
-            error,
-            Error::UnsupportedSchema {
-                found: 2,
-                supported: 1
-            }
-        ));
-        assert_eq!(error.to_string(), "schema 2, this binary reads 1");
     }
 }

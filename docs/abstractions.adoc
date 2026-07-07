@@ -35,9 +35,11 @@ format exists to version.
 Changing a struct is a storage migration, not a refactor — and a
 migration is itself a signed push: rewrite the tree under the new
 struct, commit on the ref’s old tip. History keeps the old encoding as
-archive. Every tree carries a one-blob `.schema` version marker (absent
-means version 1) so a mismatched binary fails with “schema 2, I speak
-1” instead of misreading silently.
+archive. Trees stay pure struct representations — no version marker
+entry. If explicit version detection is ever needed, it belongs in a
+`Schema-Version:` commit-message trailer: the commit is already the
+storage unit, so versioning the encoding there pollutes neither the
+tree nor the merge path.
 
 *Tip invariant:* the tip of a meta-ref is always readable by the
 current binary; history is archival.
