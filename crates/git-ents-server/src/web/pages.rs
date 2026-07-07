@@ -355,10 +355,15 @@ pub(super) async fn files_page(
     };
 
     let name = meta.name();
+    let title = if selected.is_empty() {
+        format!("Files · {name}")
+    } else {
+        format!("{selected} · {name}")
+    };
     repo_shell(
         meta,
         Tab::Files,
-        name,
+        &title,
         auth,
         html! {
             div.files {
@@ -508,10 +513,15 @@ pub(super) async fn tree_page(
         return not_found("No such directory.").into_response();
     }
     let name = meta.name();
+    let title = if dir.is_empty() {
+        format!("Files · {name}")
+    } else {
+        format!("{dir} · {name}")
+    };
     repo_shell(
         meta,
         Tab::Files,
-        name,
+        &title,
         auth,
         html! {
             (crumbs(rel, &dir, false))
@@ -595,10 +605,11 @@ pub(super) async fn blob_page(
         }
     };
     let comments = file_comments(repo, &path).await;
+    let title = format!("{path} · {}", meta.name());
     repo_shell(
         meta,
         Tab::Files,
-        name,
+        &title,
         auth,
         html! {
             (crumbs(rel, &path, true))
@@ -884,10 +895,11 @@ pub(super) async fn releases_page(
     auth: Option<&super::Auth>,
 ) -> Markup {
     let releases = releases(repo).await;
+    let title = format!("Releases · {}", meta.name());
     repo_shell(
         meta,
         Tab::Releases,
-        "Releases",
+        &title,
         auth,
         html! {
             div.page-header { h1.page-title { "Releases" } }
@@ -959,10 +971,11 @@ pub(super) async fn checks_page(
             .and_then(|commits| commits.iter().find(|commit| commit.commit == head_oid))
             .and_then(|commit| commit.runs.first())
     });
+    let title = format!("Checks · {}", meta.name());
     repo_shell(
         meta,
         Tab::Checks,
-        "Checks",
+        &title,
         auth,
         html! {
             div.page-header { h1.page-title { "Checks" } }
@@ -1270,7 +1283,8 @@ pub(super) async fn issues_page(
             }
         }
     };
-    repo_shell(meta, Tab::Issues, "Issues", auth, render_body(&tpl))
+    let title = format!("Issues · {}", meta.name());
+    repo_shell(meta, Tab::Issues, &title, auth, render_body(&tpl))
 }
 
 /// The Issues tab body: the open/closed filter and per-issue cards.
@@ -1304,10 +1318,11 @@ pub(super) async fn settings_page(
     let members = component::load::<git_member::members::Member>(repo).await;
     let checks = component::load::<git_effect::Effect>(repo).await;
     let config = load_repo_config(repo).await;
+    let title = format!("Settings · {}", meta.name());
     repo_shell(
         meta,
         Tab::Settings,
-        "Repository settings",
+        &title,
         auth,
         html! {
             div.settings {
