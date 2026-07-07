@@ -191,3 +191,58 @@ fn conforms_to_object_store_properties_over_postgres() {
     let url = pg.url().to_owned();
     backend_conformance::object_store_properties(|| WithPostgres::new(&url), &NoopCollector);
 }
+
+#[test]
+fn reachability_artifact_registry_round_trips_over_postgres() {
+    use odb_tigris::registry::{ArtifactKind, ArtifactRecord, PackRegistry};
+
+    let pg = require_postgres!("reachability_artifact_registry_round_trips_over_postgres");
+    let repo_id = format!("ws6-artifact-{}", uuid::Uuid::new_v4());
+    let registry = PostgresRefStore::connect(pg.url(), repo_id.clone()).expect("connect registry");
+
+    assert!(
+        registry
+            .get_artifact(&repo_id, ArtifactKind::CommitGraph)
+            .expect("get_artifact")
+            .is_none()
+    );
+
+    registry
+        .record_artifact(ArtifactRecord {
+            repo_id: repo_id.clone(),
+            kind: ArtifactKind::CommitGraph,
+            key: "some/key.bin".to_owned(),
+        })
+        .expect("record_artifact");
+
+    let record = registry
+        .get_artifact(&repo_id, ArtifactKind::CommitGraph)
+        .expect("get_artifact")
+        .expect("artifact was just recorded");
+    assert_eq!(record.key, "some/key.bin");
+
+    // Recording again for the same `(repo_id, kind)` replaces it, rather
+    // than accumulating a second row.
+    registry
+        .record_artifact(ArtifactRecord {
+            repo_id: repo_id.clone(),
+            kind: ArtifactKind::CommitGraph,
+            key: "new/key.bin".to_owned(),
+        })
+        .expect("re-record_artifact");
+    let record = registry
+        .get_artifact(&repo_id, ArtifactKind::CommitGraph)
+        .expect("get_artifact")
+        .expect("artifact still present");
+    assert_eq!(record.key, "new/key.bin");
+
+    registry
+        .delete_artifact(&repo_id, ArtifactKind::CommitGraph)
+        .expect("delete_artifact");
+    assert!(
+        registry
+            .get_artifact(&repo_id, ArtifactKind::CommitGraph)
+            .expect("get_artifact")
+            .is_none()
+    );
+}

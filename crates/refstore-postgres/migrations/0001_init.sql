@@ -111,3 +111,18 @@ CREATE TABLE IF NOT EXISTS git_ents_op_records (
 
 CREATE INDEX IF NOT EXISTS git_ents_op_records_repo_idx
     ON git_ents_op_records (repo_id, created_at DESC);
+
+-- Reachability artifacts (WS6, `docs/scale-out.adoc`'s "Reachability"
+-- section): the commit-graph and reachable-set accelerators
+-- `git-reachability`'s maintenance effect generates, tracked here rather
+-- than by bucket listing, same as packs above. One row per `(repo_id,
+-- kind)` — regenerating overwrites the existing row instead of
+-- accumulating snapshots, so `kind` alone (not a generated id) is enough to
+-- look one up.
+CREATE TABLE IF NOT EXISTS git_ents_reachability_artifacts (
+    repo_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (repo_id, kind)
+);

@@ -2,15 +2,17 @@
 //! same reachability walk ([`crate::walk`]) negotiation, push connectivity
 //! checking, and GC mark all share (`docs/scale-out.adoc`, "Reachability").
 //!
-//! This walks every object one at a time through
-//! [`git_backend::ObjectStore::read`] — correct, not fast. A commit-graph
-//! accelerator (WS6) is what turns this into the ranged, sublinear
-//! negotiation the doc's Q6 calls out; this is the correctness-first
-//! baseline it replaces.
+//! Routed through [`git_reachability::engine::accelerated_reachable`]
+//! (WS6): a commit-graph and, whenever a client's `haves` happen to equal a
+//! server-known tip-frontier, a cached reachable-set snapshot both
+//! accelerate this — absent either artifact, it is exactly the
+//! correctness-first, one-object-at-a-time walk it always was.
+
+use git_reachability::engine::accelerated_reachable;
 
 use super::{BackendResolver, NativeBackend};
 use crate::types::{NegotiationState, PackPlan};
-use crate::walk::{self, StoreSource};
+use crate::walk::StoreSource;
 use crate::{Negotiate, Result};
 
 impl<R: BackendResolver> Negotiate for NativeBackend<R> {
@@ -22,18 +24,24 @@ impl<R: BackendResolver> Negotiate for NativeBackend<R> {
         // not resend anything behind — tolerate a have the server never
         // actually had (a stale or misremembered claim) rather than fail
         // the whole negotiation over it.
-        let haves_closure =
-            walk::reachable(session.haves.iter().copied(), &source, |_id| false, true)?;
+        let haves_closure = accelerated_reachable(
+            session.haves.iter().copied(),
+            &source,
+            |_id| false,
+            true,
+            &backends.reachability,
+        )?;
 
         // Everything reachable from `wants`, not descending past the haves
         // boundary. A want neither the haves boundary nor the store itself
         // can resolve is a real negotiation failure, so this walk is
         // strict.
-        let wants_seen = walk::reachable(
+        let wants_seen = accelerated_reachable(
             session.wants.iter().copied(),
             &source,
             |id| haves_closure.contains(id),
             false,
+            &backends.reachability,
         )?;
 
         let objects = wants_seen.difference(&haves_closure).copied().collect();

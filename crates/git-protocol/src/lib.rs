@@ -41,6 +41,12 @@ pub enum Error {
     /// the promoted object store could resolve.
     #[error("missing object {0}: push rejected, connectivity check failed")]
     MissingObject(gix_hash::ObjectId),
+    /// The reachability walk (`git-reachability`, WS6) itself failed —
+    /// distinct from [`Self::MissingObject`], which is this crate's own
+    /// mapping of that same failure at the negotiation/ingest call sites
+    /// that need a typed reason to report back to a client.
+    #[error(transparent)]
+    Reachability(#[from] git_reachability::Error),
     /// Decoding a commit, tree, or tag object failed.
     #[error("could not decode object: {0}")]
     Decode(String),

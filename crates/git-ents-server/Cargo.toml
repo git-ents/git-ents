@@ -24,6 +24,7 @@ git-comment = { workspace = true }
 git-effect = { workspace = true }
 git-member = { workspace = true }
 git-protocol = { workspace = true }
+git-reachability = { workspace = true }
 git-signed-push = { workspace = true }
 git-store = { workspace = true }
 git-toolchain = { workspace = true }

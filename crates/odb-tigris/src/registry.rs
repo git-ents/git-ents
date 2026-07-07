@@ -61,9 +61,66 @@ pub struct PackRecord {
     pub object_count: Option<u64>,
 }
 
+/// Which reachability accelerator an [`ArtifactRecord`] holds — see
+/// `git-reachability` (`docs/scale-out.adoc`, "Reachability" / WS6) for the
+/// binary formats themselves. Named here, rather than in `git-reachability`,
+/// because the registry (this trait) is the thing both that crate and its
+/// Postgres implementation (`refstore-postgres`) need to agree on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactKind {
+    /// A serialized commit graph: OID -> (tree, parents, generation).
+    CommitGraph,
+    /// A reachable-object-set snapshot for one tip-frontier.
+    ReachableSet,
+}
+
+impl ArtifactKind {
+    /// A stable string form, used as the on-disk/column discriminator by
+    /// every [`PackRegistry`] implementation.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CommitGraph => "commit-graph",
+            Self::ReachableSet => "reachable-set",
+        }
+    }
+
+    /// Parse [`Self::as_str`]'s output back, or `None` for anything else —
+    /// forward-compatible with a future kind an older reader doesn't know.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "commit-graph" => Some(Self::CommitGraph),
+            "reachable-set" => Some(Self::ReachableSet),
+            _ => None,
+        }
+    }
+}
+
+/// One reachability artifact registered for a repo: enough to fetch its
+/// bytes from the bucket. A repo has at most one live artifact per
+/// [`ArtifactKind`] — regenerating (`git-reachability`'s maintenance effect)
+/// overwrites it, rather than accumulating snapshots, so lookup is by
+/// `(repo_id, kind)` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRecord {
+    /// The repo this artifact belongs to.
+    pub repo_id: String,
+    /// Which accelerator this artifact holds.
+    pub kind: ArtifactKind,
+    /// The bucket key holding the artifact's bytes.
+    pub key: String,
+}
+
 /// Registry of promoted packs: the commit point [`crate::OdbTigris::promote`]
 /// writes to, and the only thing [`crate::OdbTigris::read`] and
 /// [`crate::OdbTigris::contains`] consult to learn which packs exist.
+///
+/// Also the discovery point for reachability artifacts (`docs/
+/// scale-out.adoc`, "Reachability": "stored beside packs, tracked in the
+/// pack registry") — a minimal extension over the pack-only shape WS5
+/// introduced, since both are "what has this repo got, and where" lookups
+/// against the same store.
 pub trait PackRegistry: Send + Sync {
     /// Record `record` as promoted and live. Called once per pack, after its
     /// bytes are durably in the bucket at the live keys `record` names.
@@ -88,4 +145,30 @@ pub trait PackRegistry: Send + Sync {
     ///
     /// Returns an error if the registry cannot be written.
     fn delete(&self, repo_id: &str, id: &PackId) -> Result<()>;
+
+    /// Record `record` as `repo_id`'s current artifact of its kind,
+    /// replacing whatever was previously registered for that
+    /// `(repo_id, kind)` pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record cannot be durably written.
+    fn record_artifact(&self, record: ArtifactRecord) -> Result<()>;
+
+    /// `repo_id`'s current artifact of `kind`, or `None` if it has never
+    /// been generated — the "absent artifact" case every consumer must
+    /// degrade gracefully from (`docs/scale-out.adoc`, "Reachability").
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry cannot be read.
+    fn get_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<Option<ArtifactRecord>>;
+
+    /// Remove `repo_id`'s artifact of `kind`, if any. Not an error if
+    /// already absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry cannot be written.
+    fn delete_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<()>;
 }

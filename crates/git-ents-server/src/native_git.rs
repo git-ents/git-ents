@@ -74,6 +74,14 @@ impl BackendResolver for DiskResolver {
             objects: Arc::new(objects),
             authorized_members: git_member::members::without_revoked(members, &revoked),
             config,
+            // No reachability artifacts for the disk-hydrated backend yet:
+            // `git-reachability`'s maintenance effect and artifact storage
+            // target the cloud stack (`odb-tigris` + its pack registry);
+            // wiring generation/loading for this resolver is future work,
+            // and negotiation/ingest degrade to the plain walk in the
+            // meantime (`docs/scale-out.adoc`: "absence ... degrades
+            // speed, never answers").
+            reachability: git_reachability::ArtifactBundle::empty(),
         })
     }
 }

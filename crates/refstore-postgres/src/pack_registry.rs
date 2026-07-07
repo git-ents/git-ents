@@ -9,7 +9,7 @@
 //! already owns the Postgres connection) implements it.
 
 use git_backend::{Error, Result};
-use odb_tigris::registry::{PackId, PackRecord, PackRegistry};
+use odb_tigris::registry::{ArtifactKind, ArtifactRecord, PackId, PackRecord, PackRegistry};
 
 use crate::{PostgresRefStore, pg_err};
 
@@ -90,6 +90,67 @@ impl PackRegistry for PostgresRefStore {
                     .execute(
                         "DELETE FROM git_ents_pack_registry WHERE repo_id = $1 AND pack_id = $2",
                         &[&repo_id, &id.as_str()],
+                    )
+                    .await
+            })
+            .map_err(pg_err)
+            .map(|_rows_affected| ())
+    }
+
+    fn record_artifact(&self, record: ArtifactRecord) -> Result<()> {
+        self.runtime
+            .block_on(async {
+                let client = self.client.lock().await;
+                client
+                    .execute(
+                        "INSERT INTO git_ents_reachability_artifacts
+                             (repo_id, kind, key, updated_at)
+                         VALUES ($1, $2, $3, now())
+                         ON CONFLICT (repo_id, kind) DO UPDATE SET
+                             key = EXCLUDED.key,
+                             updated_at = EXCLUDED.updated_at",
+                        &[&record.repo_id, &record.kind.as_str(), &record.key],
+                    )
+                    .await
+            })
+            .map_err(pg_err)
+            .map(|_rows_affected| ())
+    }
+
+    fn get_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<Option<ArtifactRecord>> {
+        let row = self
+            .runtime
+            .block_on(async {
+                let client = self.client.lock().await;
+                client
+                    .query_opt(
+                        "SELECT key FROM git_ents_reachability_artifacts
+                         WHERE repo_id = $1 AND kind = $2",
+                        &[&repo_id, &kind.as_str()],
+                    )
+                    .await
+            })
+            .map_err(pg_err)?;
+        row.map(|row| {
+            let key: String = row.try_get(0).map_err(pg_err)?;
+            Ok(ArtifactRecord {
+                repo_id: repo_id.to_owned(),
+                kind,
+                key,
+            })
+        })
+        .transpose()
+    }
+
+    fn delete_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<()> {
+        self.runtime
+            .block_on(async {
+                let client = self.client.lock().await;
+                client
+                    .execute(
+                        "DELETE FROM git_ents_reachability_artifacts
+                         WHERE repo_id = $1 AND kind = $2",
+                        &[&repo_id, &kind.as_str()],
                     )
                     .await
             })

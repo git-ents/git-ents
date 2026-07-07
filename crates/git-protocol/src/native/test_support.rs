@@ -79,6 +79,9 @@ pub struct FixedResolver {
     pub authorized_members: Vec<Member>,
     /// The config `authorized_members`' roles are checked against.
     pub config: git_ents_core::config::Config,
+    /// Reachability artifacts every test sees — empty by default, so tests
+    /// exercise the plain-walk fallback unless a test explicitly sets this.
+    pub reachability: git_reachability::ArtifactBundle,
 }
 
 impl FixedResolver {
@@ -90,6 +93,7 @@ impl FixedResolver {
             objects: Arc::new(odb_files::OdbFiles::open(path).unwrap()),
             authorized_members: Vec::new(),
             config: git_ents_core::config::Config::default(),
+            reachability: git_reachability::ArtifactBundle::empty(),
         }
     }
 }
@@ -101,6 +105,7 @@ impl BackendResolver for FixedResolver {
             objects: self.objects.clone(),
             authorized_members: self.authorized_members.clone(),
             config: self.config.clone(),
+            reachability: self.reachability.clone(),
         })
     }
 }

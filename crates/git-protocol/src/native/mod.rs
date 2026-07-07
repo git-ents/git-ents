@@ -45,6 +45,12 @@ pub struct RepoBackends {
     pub authorized_members: Vec<Member>,
     /// The config `authorized_members`' roles are checked against.
     pub config: git_ents_core::config::Config,
+    /// This repository's reachability artifacts (WS6), if any have been
+    /// generated — [`git_reachability::ArtifactBundle::empty`] for a
+    /// resolver that hasn't wired artifact loading yet, which is exactly
+    /// the "absent artifact" case negotiation/ingest must (and do) degrade
+    /// gracefully from.
+    pub reachability: git_reachability::ArtifactBundle,
 }
 
 /// Resolves a [`RepoId`] to the backends that serve it.

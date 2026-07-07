@@ -6,12 +6,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use git_backend::Result;
 
-use super::{PackId, PackRecord, PackRegistry};
+use super::{ArtifactKind, ArtifactRecord, PackId, PackRecord, PackRegistry};
 
 /// A [`PackRegistry`] held entirely in memory, scoped to one process.
 #[derive(Default)]
 pub struct InMemoryRegistry {
     records: Mutex<Vec<PackRecord>>,
+    artifacts: Mutex<Vec<ArtifactRecord>>,
 }
 
 impl InMemoryRegistry {
@@ -38,6 +39,27 @@ impl PackRegistry for InMemoryRegistry {
 
     fn delete(&self, repo_id: &str, id: &PackId) -> Result<()> {
         lock(&self.records).retain(|record| !(record.repo_id == repo_id && &record.id == id));
+        Ok(())
+    }
+
+    fn record_artifact(&self, record: ArtifactRecord) -> Result<()> {
+        let mut artifacts = lock(&self.artifacts);
+        artifacts.retain(|existing| {
+            !(existing.repo_id == record.repo_id && existing.kind == record.kind)
+        });
+        artifacts.push(record);
+        Ok(())
+    }
+
+    fn get_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<Option<ArtifactRecord>> {
+        Ok(lock(&self.artifacts)
+            .iter()
+            .find(|record| record.repo_id == repo_id && record.kind == kind)
+            .cloned())
+    }
+
+    fn delete_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<()> {
+        lock(&self.artifacts).retain(|record| !(record.repo_id == repo_id && record.kind == kind));
         Ok(())
     }
 }

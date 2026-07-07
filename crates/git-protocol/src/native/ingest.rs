@@ -26,11 +26,13 @@ use git_backend::{Expected, PackStream, RefEdit, RefName, TxOutcome};
 use gix_hash::ObjectId;
 use gix_object::Kind;
 
+use git_reachability::engine::accelerated_reachable;
+
 use super::{BackendResolver, NativeBackend};
 use crate::attestation::{self, OP_LOG_REF};
 use crate::pack::{PackObject, build_pack};
 use crate::types::{AppliedRefEdit, PushOutcome, PushRequest};
-use crate::walk::{self, ObjectSource};
+use crate::walk::ObjectSource;
 use crate::{Error, IngestPack, Result};
 
 /// An [`ObjectSource`] over the incoming pack's own scratch bundle (staged
@@ -44,14 +46,14 @@ struct IncomingPackSource<'a> {
 }
 
 impl ObjectSource for IncomingPackSource<'_> {
-    fn find(&self, id: &ObjectId) -> Result<Option<(Kind, Vec<u8>)>> {
+    fn find(&self, id: &ObjectId) -> git_reachability::Result<Option<(Kind, Vec<u8>)>> {
         if let Some(bundle) = self.bundle {
             let mut buf = Vec::new();
             let mut inflate = gix_features::zlib::Inflate::default();
             let mut cache = gix_pack::cache::Never;
             if let Some((data, _location)) = bundle
                 .find(id, &mut buf, &mut inflate, &mut cache)
-                .map_err(|error| Error::Pack(error.to_string()))?
+                .map_err(|error| git_reachability::Error::Decode(error.to_string()))?
             {
                 return Ok(Some((data.kind, data.data.to_vec())));
             }
@@ -126,20 +128,21 @@ impl<R: BackendResolver> IngestPack for NativeBackend<R> {
         };
 
         let roots: Vec<ObjectId> = ref_edits.iter().filter_map(|edit| edit.new).collect();
-        let connectivity = walk::reachable(
+        let connectivity = accelerated_reachable(
             roots,
             &source,
             |id| backends.objects.contains(*id).unwrap_or(false),
             false,
+            &backends.reachability,
         );
         match connectivity {
             Ok(_reachable) => {}
-            Err(Error::MissingObject(id)) => {
+            Err(git_reachability::Error::MissingObject(id)) => {
                 return Ok(PushOutcome::Rejected {
                     reason: format!("connectivity check failed: missing object {id}"),
                 });
             }
-            Err(other) => return Err(other),
+            Err(other) => return Err(other.into()),
         }
 
         let quarantine = backends
