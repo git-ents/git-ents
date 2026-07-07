@@ -38,7 +38,7 @@ mod queue;
 mod ref_store;
 mod small_tier;
 
-pub use queue::{ClaimedEffect, EffectId};
+pub use queue::{ClaimedEffect, DispatchedEffect, EffectId};
 
 use git_backend::{Error, Result};
 
@@ -55,7 +55,11 @@ const LOG_MESSAGE: &str = "git-backend: transaction";
 /// [`git_backend::RefStore`] over a Postgres database: one row per ref,
 /// scoped to a single `repo_id` (`docs/scale-out.adoc`'s "namespace per
 /// repo" rule — no cross-repo query this store issues ever omits the
-/// `repo_id` filter).
+/// `repo_id` filter, with one deliberate exception: the effect queue's
+/// `dispatcher_*` surface in [`queue`], which the WS7 dispatcher — one
+/// small machine serving every repository — drains across repos; the
+/// queue table carries jobs, never repository state, so the namespace
+/// rule's GC/oracle concerns do not apply to it).
 ///
 /// Holds one [`tokio_postgres::Client`] behind a [`tokio::sync::Mutex`],
 /// per the dependency policy: no connection pool. `transaction` needs
