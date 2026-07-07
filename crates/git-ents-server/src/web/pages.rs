@@ -56,10 +56,10 @@ pub(super) async fn repo_page(
     auth: Option<&super::Auth>,
 ) -> Markup {
     let rel = &meta.rel;
-    let updated = git_output(repo, &["log", "-1", "--format=%ar"])
+    let updated = git_output(repo, &["log", "-1", "--format=%at"])
         .await
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty());
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .map(ago_seconds);
     let is_empty = updated.is_none();
     let tree = root_tree(repo, !is_empty).await;
     let readme = readme(repo, &tree).await;
