@@ -242,24 +242,28 @@ async fn save_settings(
     cookie: Option<&str>,
     body: Bytes,
 ) -> Response {
+    let back = format!("/{rel}/settings");
     let (Some(seed), Some(hooks), Some(signing_key)) = (
         state.cert_nonce_seed.clone(),
         state.hooks_dir.clone(),
         state.web_signing_key.clone(),
     ) else {
         return edit_error(
-            &format!("/{rel}/settings"),
+            &back,
             "Editing is disabled: this server has no web signing key or signed-push gate.",
         )
         .into_response();
     };
+    if write::snapshot(&state.sessions, cookie).is_none() {
+        return edit_error(&back, "you are not signed in; sign in and try again").into_response();
+    }
     if !write::csrf_ok(
         &state.sessions,
         cookie,
         &write::field(&body, "csrf").unwrap_or_default(),
     ) {
         return edit_error(
-            &format!("/{rel}/settings"),
+            &back,
             "the edit could not be verified; reload and try again",
         )
         .into_response();
@@ -292,7 +296,6 @@ async fn save_settings(
     })
     .await;
 
-    let back = format!("/{rel}/settings");
     match result {
         Ok(Ok(())) => redirect(&back, None),
         Ok(Err(error)) => edit_error(&back, &error).into_response(),
@@ -326,6 +329,9 @@ async fn save_comment(
         )
         .into_response();
     };
+    if write::snapshot(&state.sessions, cookie).is_none() {
+        return edit_error(&back, "you are not signed in; sign in and try again").into_response();
+    }
     if !write::csrf_ok(
         &state.sessions,
         cookie,
