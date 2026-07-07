@@ -23,10 +23,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use facet::Facet;
+use git_backend::{Expected, RefEdit, RefName, RefStore as _, TxOutcome};
 use gix::ObjectId;
 use gix::objs::{Commit, FindExt as _, Write as _};
-use gix::refs::Target;
-use gix::refs::transaction::PreviousValue;
+use refstore_files::FilesRefStore;
 
 pub mod component;
 mod merge;
@@ -133,13 +133,14 @@ pub fn new_id<T: for<'a> Facet<'a>>(origin: Option<&str>, content: &T) -> Result
 // @relation(storage.meta-ref, nonfunctional.object-store)
 /// A repository's typed `refs/meta/*` store.
 ///
-/// Refs are read and updated through the high-level [`gix`] API, while all
+/// Refs are read and updated through [`git_backend::RefStore`] (backed by
+/// [`refstore_files`], gitoxide's own loose refs and packed-refs), while all
 /// object IO uses an object database opened on the *common* git directory
 /// rather than `--git-path objects`: inside a hook git points the latter at a
 /// receive-pack quarantine holding only the incoming pack, while the documents
 /// we read and write live in the durable store.
 pub struct Store {
-    repo: gix::Repository,
+    refs: FilesRefStore,
     odb: gix::odb::Handle,
 }
 
@@ -147,9 +148,10 @@ impl Store {
     // @relation(nonfunctional.object-store)
     /// Open the typed store for the repository at `repo`.
     pub fn open(repo: &Path) -> Result<Self, Error> {
-        let repo = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
-        let odb = gix::odb::at(repo.common_dir().join("objects")).map_err(|_io| Error::Odb)?;
-        Ok(Self { repo, odb })
+        let refs = FilesRefStore::open(repo).map_err(|error| Error::Ref(error.to_string()))?;
+        let opened = gix::open(repo).map_err(|error| Error::Open(Box::new(error)))?;
+        let odb = gix::odb::at(opened.common_dir().join("objects")).map_err(|_io| Error::Odb)?;
+        Ok(Self { refs, odb })
     }
 
     /// Load the document on `refname`, or `None` when the ref is absent.
@@ -337,13 +339,24 @@ impl Store {
     /// rather than by rewriting a map document (e.g. `git-toolchain`'s
     /// `remove`).
     pub fn delete_ref(&self, refname: &str) -> Result<(), Error> {
-        let reference = self
-            .repo
-            .find_reference(refname)
-            .map_err(|error| Error::Ref(error.to_string()))?;
-        reference
-            .delete()
-            .map_err(|error| Error::Ref(error.to_string()))
+        let name = RefName::new(refname);
+        let current = self
+            .refs
+            .get(&name)
+            .map_err(|error| Error::Ref(error.to_string()))?
+            .ok_or_else(|| Error::Ref(format!("{refname} does not exist")))?;
+        let edit = RefEdit {
+            name,
+            expected: Expected::MustExistAndMatch(current),
+            new: None,
+        };
+        match self.refs.transaction(&[edit]) {
+            Ok(TxOutcome::Applied) => Ok(()),
+            Ok(TxOutcome::Rejected { .. }) => {
+                Err(Error::Ref(format!("{refname}: changed concurrently")))
+            }
+            Err(error) => Err(Error::Ref(error.to_string())),
+        }
     }
 
     /// Load the item `id` under the collection ref namespace `prefix`
@@ -528,22 +541,14 @@ impl Store {
 
     /// The full names of the refs under `prefix`, newest committer date first.
     pub fn list(&self, prefix: &str) -> Result<Vec<String>, Error> {
-        let platform = self
-            .repo
-            .references()
-            .map_err(|error| Error::Ref(error.to_string()))?;
-        let iter = platform
-            .prefixed(prefix)
+        let iter = self
+            .refs
+            .iter_prefix(&RefName::new(prefix))
             .map_err(|error| Error::Ref(error.to_string()))?;
         let mut refs = Vec::new();
-        for reference in iter {
-            let mut reference = reference.map_err(|error| Error::Ref(error.to_string()))?;
-            let name = reference.name().as_bstr().to_string();
-            let oid = reference
-                .peel_to_id()
-                .map_err(|error| Error::Ref(error.to_string()))?
-                .detach();
-            refs.push((self.read_commit(&oid)?.seconds, name));
+        for item in iter {
+            let (name, oid) = item.map_err(|error| Error::Ref(error.to_string()))?;
+            refs.push((self.read_commit(&oid)?.seconds, name.as_str().to_owned()));
         }
         refs.sort_by_key(|(seconds, _name)| Reverse(*seconds));
         Ok(refs.into_iter().map(|(_seconds, name)| name).collect())
@@ -554,19 +559,9 @@ impl Store {
     /// itself (e.g. to parent another commit on it), not just the document
     /// [`load`](Self::load) reads out of it.
     pub fn ref_commit(&self, refname: &str) -> Result<Option<ObjectId>, Error> {
-        match self
-            .repo
-            .try_find_reference(refname)
-            .map_err(|error| Error::Ref(error.to_string()))?
-        {
-            Some(mut reference) => {
-                let id = reference
-                    .peel_to_id()
-                    .map_err(|error| Error::Ref(error.to_string()))?;
-                Ok(Some(id.detach()))
-            }
-            None => Ok(None),
-        }
+        self.refs
+            .get(&RefName::new(refname))
+            .map_err(|error| Error::Ref(error.to_string()))
     }
 
     /// Read `oid`'s tree, parents, author, and committer date from the
@@ -649,19 +644,18 @@ impl Store {
         commit: ObjectId,
     ) -> Result<(), Error> {
         let constraint = match expected {
-            Some(oid) => PreviousValue::MustExistAndMatch(Target::Object(oid)),
-            None => PreviousValue::MustNotExist,
+            Some(oid) => Expected::MustExistAndMatch(oid),
+            None => Expected::MustNotExist,
         };
-        match self
-            .repo
-            .reference(refname, commit, constraint, "git-ents: update")
-        {
-            Ok(_reference) => Ok(()),
-            Err(error) => match self.ref_commit(refname) {
-                Ok(current) if current == expected => Err(Error::Ref(error.to_string())),
-                Ok(_current) => Err(Error::Conflict),
-                Err(error) => Err(error),
-            },
+        let edit = RefEdit {
+            name: RefName::new(refname),
+            expected: constraint,
+            new: Some(commit),
+        };
+        match self.refs.transaction(&[edit]) {
+            Ok(TxOutcome::Applied) => Ok(()),
+            Ok(TxOutcome::Rejected { .. }) => Err(Error::Conflict),
+            Err(error) => Err(Error::Ref(error.to_string())),
         }
     }
 }

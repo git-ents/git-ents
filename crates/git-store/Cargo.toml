@@ -8,7 +8,9 @@ license.workspace = true
 [dependencies]
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
+git-backend = { workspace = true }
 gix = { workspace = true }
+refstore-files = { workspace = true }
 tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 

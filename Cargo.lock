@@ -1449,6 +1449,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-backend"
+version = "0.0.0"
+dependencies = [
+ "gix-hash",
+ "gix-object",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "git-comment"
 version = "0.0.0"
 dependencies = [
@@ -1573,7 +1582,9 @@ version = "0.0.0"
 dependencies = [
  "facet",
  "facet-git-tree",
+ "git-backend",
  "gix",
+ "refstore-files",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -3147,6 +3158,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "odb-files"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "git-store",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-pack",
+ "uuid",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3470,6 +3494,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags 2.13.0",
+]
+
+[[package]]
+name = "refstore-files"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "git-store",
+ "gix",
+ "gix-hash",
 ]
 
 [[package]]

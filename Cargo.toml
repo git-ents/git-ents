@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/git-anchor",
+    "crates/git-backend",
     "crates/git-comment",
     "crates/git-effect",
     "crates/git-ents",
@@ -11,6 +12,8 @@ members = [
     "crates/git-signed-push",
     "crates/git-store",
     "crates/git-toolchain",
+    "crates/odb-files",
+    "crates/refstore-files",
 ]
 
 [workspace.package]
@@ -55,6 +58,7 @@ getrandom = "0.4"
 facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
 form_urlencoded = "1"
 git-anchor = { path = "crates/git-anchor" }
+git-backend = { path = "crates/git-backend" }
 git-comment = { path = "crates/git-comment" }
 git-effect = { path = "crates/git-effect" }
 git-ents-core = { path = "crates/git-ents-core" }
@@ -63,6 +67,8 @@ git-member = { path = "crates/git-member" }
 git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
+odb-files = { path = "crates/odb-files" }
+refstore-files = { path = "crates/refstore-files" }
 gix = "0.84"
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-object = "0.61"

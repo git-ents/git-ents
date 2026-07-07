@@ -1,0 +1,17 @@
+[package]
+name = "refstore-files"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+git-backend = { workspace = true }
+gix = { workspace = true }
+gix-hash = { workspace = true }
+
+[dev-dependencies]
+git-store = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
