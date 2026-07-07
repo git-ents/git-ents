@@ -380,6 +380,9 @@ enum CommentAction {
         /// Genesis id of the issue the comment belongs to.
         #[facet(args::named)]
         issue: Option<String>,
+        /// Genesis id of the comment this one replies to.
+        #[facet(args::named)]
+        reply_to: Option<String>,
     },
     /// List the comments on a remote, each projected onto a revision.
     List {
@@ -842,7 +845,8 @@ fn run_comment(action: CommentAction, remote: &str) -> Result<(), String> {
             lines,
             rev,
             issue,
-        } => comment_add(path, body, lines.as_deref(), &rev, issue, remote),
+            reply_to,
+        } => comment_add(path, body, lines.as_deref(), &rev, issue, reply_to, remote),
         CommentAction::List { rev } => comment_list(remote, &rev),
         CommentAction::Show { id, rev } => comment_show(&id, remote, &rev),
         CommentAction::Remove { id } => comment_remove(&id, remote),
@@ -863,6 +867,7 @@ fn comment_add(
     lines: Option<&str>,
     rev: &str,
     issue: Option<String>,
+    reply_to: Option<String>,
     remote: &str,
 ) -> Result<(), String> {
     let path = interactive::text_or(path, "File path")?;
@@ -875,9 +880,13 @@ fn comment_add(
         body,
         anchor,
         issue,
+        reply_to: reply_to.clone(),
     };
     let id = git_comment::new_id(None, &comment).map_err(|error| error.to_string())?;
     let refname = format!("{COMMENTS_NS}/{id}");
+    if let Some(parent_id) = &reply_to {
+        sync(remote, &format!("{COMMENTS_NS}/{parent_id}"))?;
+    }
     let expected = sync(remote, &refname)?;
     let name = config_get("user.name").ok_or("user.name is unset")?;
     let email = config_get("user.email").ok_or("user.email is unset")?;
@@ -946,6 +955,9 @@ fn comment_show(id: &str, remote: &str, rev: &str) -> Result<(), String> {
     );
     if let Some(issue) = &comment.issue {
         println!("issue   {issue}");
+    }
+    if let Some(reply_to) = &comment.reply_to {
+        println!("reply   {reply_to}");
     }
     if comment.anchor.lines.is_some()
         && let Ok(snippet) = git_anchor::snippet(&repo, &comment.anchor)

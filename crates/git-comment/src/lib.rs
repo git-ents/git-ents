@@ -37,6 +37,18 @@
 //! renamed: the object id of the object the comment derives from, or the hash
 //! of its own initial content when it derives from nothing. Cross-references
 //! key off this identifier, matching the issues collection's scheme.
+//!
+//! # Replies
+//!
+//! A reply is an ordinary comment whose [`Comment::reply_to`] names the
+//! parent comment's genesis id — but the edge is also cut into the commit
+//! graph itself: [`store`] resolves the parent's ref to its current tip and
+//! carries that commit as a second parent on the reply's genesis commit. That
+//! makes the reply a cryptographic happens-after proof of exactly which
+//! revision of the parent it answered, and gives thread reachability for
+//! free, without a second ref or an aggregation index. First-parent ancestry
+//! is unaffected: it stays the reply's own edit history, exactly as for any
+//! other comment (see [`provenance`]).
 
 use std::path::Path;
 
@@ -69,6 +81,10 @@ pub struct Comment {
     /// The genesis id of the issue the comment belongs to, or `None` for a
     /// free-standing comment.
     pub issue: Option<String>,
+    /// The genesis id of the comment this one replies to, or `None` for a
+    /// top-level comment. The reply edge itself lives in the commit graph
+    /// (see [`store`]); this field is a cheap-lookup mirror of it.
+    pub reply_to: Option<String>,
 }
 
 /// The document actually written to and read from a comment's ref: [`Comment`]
@@ -93,6 +109,7 @@ struct StoredComment {
     body: String,
     anchor: Anchor,
     issue: Option<String>,
+    reply_to: Option<String>,
     retained: RawTree,
 }
 
@@ -102,6 +119,7 @@ impl From<StoredComment> for Comment {
             body: stored.body,
             anchor: stored.anchor,
             issue: stored.issue,
+            reply_to: stored.reply_to,
         }
     }
 }
@@ -128,6 +146,14 @@ pub fn load(repo: &Path, id: &str) -> Result<Option<Comment>, git_store::Error> 
 /// [`StoredComment`]), so the content the comment is anchored to stays
 /// reachable independently of whether `comment.anchor.commit` itself survives.
 ///
+/// When `comment.reply_to` is `Some`, the parent comment's ref must already
+/// exist: its current tip commit is looked up and carried as a second parent
+/// on the commit this call writes. Comment creation always starts a fresh
+/// ref, so that second parent lands on the reply's genesis commit — a
+/// cryptographic happens-after proof that the reply was written against
+/// exactly that revision of the parent, on top of the reachability edge it
+/// gives the parent against gc.
+///
 /// ## Requirements
 ///
 /// @relation(comments.ref, comments.authorship, anchor.reachability)
@@ -145,14 +171,27 @@ pub fn store(
         body: comment.body.clone(),
         anchor: comment.anchor.clone(),
         issue: comment.issue.clone(),
+        reply_to: comment.reply_to.clone(),
         retained,
     };
-    git_store::Store::open(repo)?.store_item_authored(
+    let store = git_store::Store::open(repo)?;
+    let extra_parents = match &comment.reply_to {
+        Some(parent_id) => {
+            let parent_ref = format!("{COMMENTS_NS}/{parent_id}");
+            let tip = store.ref_commit(&parent_ref)?.ok_or_else(|| {
+                git_store::Error::Invalid(format!("reply_to comment {parent_id} does not exist"))
+            })?;
+            vec![tip]
+        }
+        None => Vec::new(),
+    };
+    store.store_item_authored_with_parents(
         COMMENTS_NS,
         id,
         &stored,
         "Update comment",
         author,
+        &extra_parents,
     )
 }
 
@@ -306,6 +345,7 @@ mod tests {
                 lines: Some(LineRange { start: 3, end: 4 }),
             },
             issue: issue.map(str::to_owned),
+            reply_to: None,
         }
     }
 
@@ -318,6 +358,66 @@ mod tests {
         let written = comment(dir.path(), "Why is this 1?", Some("deadbeef"));
         store(dir.path(), "1", &written, AUTHOR).unwrap();
         assert_eq!(load(dir.path(), "1").unwrap(), Some(written));
+    }
+
+    /// The object id `refname` currently resolves to.
+    fn rev_parse(dir: &Path, refname: &str) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", refname])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    /// `commit`'s parent object ids, in order, read straight off the commit
+    /// object rather than through [`git_store`] — the DAG shape is exactly
+    /// what this test is checking, so it must not go through the code under
+    /// test to observe it.
+    fn commit_parents(dir: &Path, commit: &str) -> Vec<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["log", "-1", "--pretty=%P", commit])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    // @relation(comments.ref, role=Verifies)
+    #[test]
+    fn a_reply_carries_the_parent_comments_tip_as_a_second_parent_and_round_trips_reply_to() {
+        let dir = repo();
+        let repo_path = dir.path();
+
+        let parent = comment(repo_path, "parent comment", None);
+        let parent_id = new_id(None, &parent).unwrap();
+        store(repo_path, &parent_id, &parent, AUTHOR).unwrap();
+        let parent_tip = rev_parse(repo_path, &format!("{COMMENTS_NS}/{parent_id}"));
+
+        let mut reply = comment(repo_path, "a reply", None);
+        reply.reply_to = Some(parent_id.clone());
+        let reply_id = new_id(None, &reply).unwrap();
+        store(repo_path, &reply_id, &reply, AUTHOR).unwrap();
+
+        assert_eq!(
+            load(repo_path, &reply_id).unwrap().unwrap().reply_to,
+            Some(parent_id)
+        );
+
+        // The reply's ref is brand new, so its genesis commit has no prior
+        // tip of its own to chain from — the parent comment's tip, carried
+        // via `extra_parents`, is its only parent.
+        let reply_tip = rev_parse(repo_path, &format!("{COMMENTS_NS}/{reply_id}"));
+        let parents = commit_parents(repo_path, &reply_tip);
+        assert_eq!(parents, vec![parent_tip]);
     }
 
     #[test]
@@ -427,6 +527,7 @@ mod tests {
             body: "why two?".to_owned(),
             anchor,
             issue: None,
+            reply_to: None,
         };
         let id = new_id(None, &written).unwrap();
         store(repo_path, &id, &written, AUTHOR).unwrap();
@@ -517,6 +618,7 @@ mod tests {
             body: "Why two?".to_owned(),
             anchor,
             issue: None,
+            reply_to: None,
         };
         let id = new_id(None, &written).unwrap();
         store(dir.path(), &id, &written, AUTHOR).unwrap();
@@ -538,9 +640,10 @@ mod tests {
         // A fixture written as the real on-disk layout — a `body` blob, an
         // `anchor/` subtree of `commit`/`path`/`blob` blobs with a
         // `lines/some/{start,end}` Option subtree, an `issue/some` Option
-        // blob, and a `retained/{blob,context}` passthrough tree — must keep
-        // loading, guarding the document's shape against an incompatible
-        // change to data already on a ref.
+        // blob, an empty `reply_to` Option tree (`None`), and a
+        // `retained/{blob,context}` passthrough tree — must keep loading,
+        // guarding the document's shape against an incompatible change to
+        // data already on a ref.
         let dir = repo();
         let repo = dir.path();
         let blob = |value: &str| git_with_stdin(repo, &["hash-object", "-w", "--stdin"], value);
@@ -591,6 +694,7 @@ mod tests {
                 blob("one\ntwo\nthree\nfour\n"),
             ),
         );
+        let reply_to_tree = git_with_stdin(repo, &["mktree"], "");
         let root = git_with_stdin(
             repo,
             &["mktree"],
@@ -598,6 +702,7 @@ mod tests {
                 "100644 blob {}\tbody\n\
                  040000 tree {anchor_tree}\tanchor\n\
                  040000 tree {issue_tree}\tissue\n\
+                 040000 tree {reply_to_tree}\treply_to\n\
                  040000 tree {retained_tree}\tretained\n",
                 blob(&expected.body),
             ),

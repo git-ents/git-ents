@@ -302,6 +302,7 @@ pub(super) fn add_comment(
         body: edit.body.clone(),
         anchor,
         issue: None,
+        reply_to: None,
     };
     let id = git_comment::new_id(None, &comment)
         .map_err(|e| format!("could not derive the comment id: {e}"))?;
