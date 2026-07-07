@@ -10,21 +10,29 @@
 //! backend the plan describes as WS0, shipped first and load-bearing (hooks,
 //! the checks queue, signed-push nonces); replacing it outright to satisfy
 //! WS3 would be the larger, riskier change for no correctness gain over
-//! mounting the native path beside it. This module is that native path:
-//! `GET .../info/refs` and `POST .../git-upload-pack` are fully wired
-//! end-to-end (a stock `git clone`/`fetch` works against them with zero
-//! client configuration). `POST .../git-receive-pack` ingests real pushes
-//! through [`git_protocol::IngestPack`] — the same staged-then-atomic-then-
-//! promoted ordering and attestation check the unit tests in
-//! `git-protocol` exercise directly — but does not yet parse a push
-//! certificate off the wire (see `push_cert` below), so a push only
-//! succeeds during a repository's bootstrap window. Wiring real
-//! `git push --signed` end-to-end over this endpoint is follow-on work;
-//! `IngestPack::receive` itself already enforces attestation regardless of
-//! transport.
+//! mounting the native path beside it. This module is that native path,
+//! wired end-to-end: `GET .../info/refs` and `POST .../git-upload-pack`
+//! serve a stock `git clone`/`fetch` with zero client configuration, and
+//! `POST .../git-receive-pack` ingests real pushes — including a stock
+//! `git push --signed` (`push.gpgSign`) — through
+//! [`git_protocol::IngestPack`], the same staged-then-atomic-then-promoted
+//! ordering and attestation check the unit tests in `git-protocol`
+//! exercise directly.
+//!
+//! The push-certificate wire protocol: the receive-pack advertisement
+//! carries a `push-cert=<nonce>` capability; a signing client answers with
+//! a `push-cert` pkt-line block in place of the plain command list —
+//! certificate header (echoing the nonce), the commands themselves, and an
+//! SSH signature — which [`parse_receive_request`] reassembles into the
+//! exact payload the client signed. The nonce is session-scoped
+//! anti-replay, never durable state (`docs/scale-out.adoc`, "Attested
+//! push"): it is a keyed hash of a per-process secret, the repository, and
+//! a timestamp, verified by recomputation within a slop window rather than
+//! by storing anything.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -34,7 +42,7 @@ use git_backend::{Expected, PackStream, RefEdit, RefName};
 use git_protocol::native::{BackendResolver, NativeBackend, RepoBackends};
 use git_protocol::{
     AdSpec, Advertise as _, GeneratePack as _, IngestPack as _, Negotiate as _, NegotiationState,
-    PushRequest, RepoId,
+    PushCertificate, PushRequest, RepoId,
 };
 use gix_hash::ObjectId;
 
@@ -73,10 +81,11 @@ impl BackendResolver for DiskResolver {
 fn backend(state: &AppState) -> NativeBackend<DiskResolver> {
     let signer: Arc<dyn git_protocol::attestation::OpSigner> = match &state.web_signing_key {
         Some(key) => Arc::new(git_protocol::attestation::SshOpSigner::new(key.clone())),
-        // No server signing key configured: op records still build, but
-        // fail to sign — acceptable for the additive native path, whose
-        // push side is already limited to the bootstrap window (see the
-        // module doc comment).
+        // No server signing key configured: op records fail to sign, so
+        // every otherwise-acceptable push over this endpoint is rejected —
+        // fail-closed, since an accepted push without its op record would
+        // break the "universal server op record" rule. Reads are
+        // unaffected.
         None => Arc::new(git_protocol::attestation::SshOpSigner::new(PathBuf::from(
             "/dev/null",
         ))),
@@ -117,9 +126,10 @@ pub async fn get_request(State(state): State<AppState>, uri: Uri) -> Response {
         }
     };
 
+    let nonce = if receive { issue_nonce(repo_rel) } else { None };
     let mut body = pkt_line(format!("# service={service}\n").as_bytes());
     body.extend_from_slice(FLUSH_PKT);
-    body.extend(advertisement_lines(&ad, receive));
+    body.extend(advertisement_lines(&ad, receive, nonce.as_deref()));
 
     Response::builder()
         .header(
@@ -180,36 +190,63 @@ async fn upload_pack(state: &AppState, repo_rel: &str, body: &[u8]) -> Response 
 
 async fn receive_pack(state: &AppState, repo_rel: &str, body: &[u8]) -> Response {
     let (commands, pack) = split_commands(body);
-    let ref_edits: Vec<RefEdit> = commands
+    let parsed = parse_receive_request(&commands);
+    let names: Vec<RefName> = parsed
+        .ref_edits
         .iter()
-        .filter_map(|line| parse_command(line))
+        .map(|edit| edit.name.clone())
         .collect();
-    let names: Vec<RefName> = ref_edits.iter().map(|edit| edit.name.clone()).collect();
+
+    // The nonce echo check — transport-level anti-replay, ahead of the
+    // signature/authorization checks IngestPack::receive itself makes. A
+    // certificate whose nonce is not one this process recently issued for
+    // this repository is a replayed (or cross-repo) certificate, rejected
+    // before anything is staged.
+    if parsed.cert.is_some() {
+        let nonce_ok = parsed
+            .nonce
+            .as_deref()
+            .is_some_and(|nonce| nonce_valid(repo_rel, nonce));
+        if !nonce_ok {
+            return report_status(
+                &names,
+                &Ok(git_protocol::PushOutcome::Rejected {
+                    reason: "push certificate nonce was missing or stale".to_owned(),
+                }),
+            );
+        }
+    }
 
     let push = PushRequest {
         repo: RepoId::new(repo_rel),
-        ref_edits,
+        ref_edits: parsed.ref_edits,
         pack: PackStream::new(std::io::Cursor::new(pack.to_vec())),
-        // Not yet parsed off the wire — see the module doc comment. A push
-        // only succeeds during the bootstrap window until this is wired.
-        push_cert: None,
+        push_cert: parsed.cert.map(PushCertificate::new),
     };
     let outcome = backend(state).receive(push);
+    report_status(&names, &outcome)
+}
 
+/// The report-status response for one push: `unpack ok`, then one `ok`/`ng`
+/// line per ref.
+fn report_status(
+    names: &[RefName],
+    outcome: &git_protocol::Result<git_protocol::PushOutcome>,
+) -> Response {
     let mut out = pkt_line(b"unpack ok\n");
     match outcome {
         Ok(git_protocol::PushOutcome::Accepted { .. }) => {
-            for name in &names {
+            for name in names {
                 out.extend(pkt_line(format!("ok {name}\n").as_bytes()));
             }
         }
         Ok(git_protocol::PushOutcome::Rejected { reason }) => {
-            for name in &names {
+            for name in names {
                 out.extend(pkt_line(format!("ng {name} {reason}\n").as_bytes()));
             }
         }
         Err(error) => {
-            for name in &names {
+            for name in names {
                 out.extend(pkt_line(format!("ng {name} {error}\n").as_bytes()));
             }
         }
@@ -357,15 +394,149 @@ fn parse_command(line: &[u8]) -> Option<RefEdit> {
     })
 }
 
+/// A parsed receive-pack request: the ref edits it asks for, plus — when
+/// the client answered the `push-cert` capability — the reassembled
+/// certificate text (exactly the bytes the client signed, then its
+/// signature) and the nonce it echoed.
+struct ParsedReceive {
+    ref_edits: Vec<RefEdit>,
+    cert: Option<String>,
+    nonce: Option<String>,
+}
+
+/// Parse a receive-pack request's pkt-lines: either a plain command list,
+/// or a `push-cert` block (`pack-protocol.txt`: a `push-cert` line carrying
+/// the client's capabilities, the certificate header ending at a blank
+/// line, the command lines, the SSH signature block, then
+/// `push-cert-end`). With a certificate, the commands inside it are the
+/// authoritative ones — a client using `push-cert` sends no plain command
+/// list at all.
+fn parse_receive_request(commands: &[Vec<u8>]) -> ParsedReceive {
+    let first_is_cert = commands.first().is_some_and(|line| {
+        String::from_utf8_lossy(line)
+            .split('\0')
+            .next()
+            .unwrap_or_default()
+            .trim_end()
+            == "push-cert"
+    });
+    if !first_is_cert {
+        return ParsedReceive {
+            ref_edits: commands
+                .iter()
+                .filter_map(|line| parse_command(line))
+                .collect(),
+            cert: None,
+            nonce: None,
+        };
+    }
+
+    let mut cert = String::new();
+    let mut nonce = None;
+    let mut ref_edits = Vec::new();
+    let mut past_header = false;
+    let mut in_signature = false;
+    for line in commands.iter().skip(1) {
+        let text = String::from_utf8_lossy(line);
+        if text.trim_end() == "push-cert-end" {
+            break;
+        }
+        // Certificate pkt-lines carry their own LF; concatenating them
+        // as-is reconstructs the exact payload the client signed.
+        cert.push_str(&text);
+        let trimmed = text.trim_end_matches('\n');
+        if !past_header {
+            if let Some(value) = trimmed.strip_prefix("nonce ") {
+                nonce = Some(value.to_owned());
+            }
+            if trimmed.is_empty() {
+                past_header = true;
+            }
+            continue;
+        }
+        if trimmed.starts_with("-----BEGIN") {
+            in_signature = true;
+        }
+        if !in_signature && let Some(edit) = parse_command(line) {
+            ref_edits.push(edit);
+        }
+    }
+    ParsedReceive {
+        ref_edits,
+        cert: Some(cert),
+        nonce,
+    }
+}
+
+/// How long an issued nonce stays echoable. The advertisement and the push
+/// are two HTTP requests seconds apart; anything older is a replay. The
+/// nonce is session-scoped anti-replay only, never durable state.
+const NONCE_SLOP_SECONDS: u64 = 300;
+
+/// The per-process secret nonces are keyed with. Process-scoped on
+/// purpose: a nonce must survive exactly the advertisement→push window
+/// within one server process, nothing longer.
+fn nonce_secret() -> &'static str {
+    static SECRET: OnceLock<String> = OnceLock::new();
+    SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+}
+
+/// The keyed hash binding a nonce to this process, `repo`, and `stamp`.
+/// The secret is prepended, so recomputing it requires holding the secret.
+fn nonce_mac(repo: &str, stamp: u64) -> Option<String> {
+    let data = format!("{}:{repo}:{stamp}", nonce_secret());
+    gix_object::compute_hash(
+        gix_hash::Kind::Sha1,
+        gix_object::Kind::Blob,
+        data.as_bytes(),
+    )
+    .ok()
+    .map(|oid| oid.to_hex().to_string())
+}
+
+/// A fresh nonce for `repo`, advertised as `push-cert=<nonce>` and expected
+/// back in the certificate's `nonce` header.
+fn issue_nonce(repo: &str) -> Option<String> {
+    let stamp = unix_now();
+    nonce_mac(repo, stamp).map(|mac| format!("{stamp}-{mac}"))
+}
+
+/// Whether `nonce` is one this process issued for `repo` within the slop
+/// window — verified by recomputation, storing nothing.
+fn nonce_valid(repo: &str, nonce: &str) -> bool {
+    let Some((stamp, mac)) = nonce.split_once('-') else {
+        return false;
+    };
+    let Ok(stamp) = stamp.parse::<u64>() else {
+        return false;
+    };
+    nonce_mac(repo, stamp).as_deref() == Some(mac)
+        && unix_now().saturating_sub(stamp) <= NONCE_SLOP_SECONDS
+}
+
 /// The advertised ref lines: `HEAD` first (carrying capabilities and, when
 /// resolved, a `symref=HEAD:<name>` hint so `git clone` knows its default
 /// branch) if resolved, then every other ref.
-fn advertisement_lines(ad: &git_protocol::RefAdvertisement, receive: bool) -> Vec<u8> {
+fn advertisement_lines(
+    ad: &git_protocol::RefAdvertisement,
+    receive: bool,
+    push_cert_nonce: Option<&str>,
+) -> Vec<u8> {
     let mut caps = if receive {
         "report-status delete-refs ofs-delta agent=git-ents/1.0".to_owned()
     } else {
         "ofs-delta agent=git-ents/1.0".to_owned()
     };
+    if let Some(nonce) = push_cert_nonce {
+        caps = format!("{caps} push-cert={nonce}");
+    }
     if let Some(head) = &ad.head {
         caps = format!("{caps} symref=HEAD:{head}");
     }
