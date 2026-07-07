@@ -19,7 +19,9 @@ document.querySelectorAll('[data-live-check]').forEach((container) => {
           );
           return;
         }
-        if (html !== lastHtml) {
+        const isPlaceholder = html.includes('terminal-empty');
+        const hadRealOutput = !lastHtml.includes('terminal-empty');
+        if (html !== lastHtml && !(isPlaceholder && hadRealOutput)) {
           lastHtml = html;
           container.innerHTML = html;
         }
