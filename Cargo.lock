@@ -1131,6 +1131,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "effect-dispatcher"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "gix-hash",
+ "refstore-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1172,6 +1182,14 @@ name = "evalexpr"
 version = "13.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25929004897f2bbab309121a60400d36992f6d911d09baa6c172f6cc55706601"
+
+[[package]]
+name = "exec-sprites"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "gix-hash",
+]
 
 [[package]]
 name = "facet"

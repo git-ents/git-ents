@@ -1,0 +1,17 @@
+[package]
+name = "effect-dispatcher"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+git-backend = { workspace = true }
+gix-hash = { workspace = true }
+refstore-postgres = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
+
+[lints]
+workspace = true
