@@ -31,8 +31,11 @@ CREATE TABLE IF NOT EXISTS git_ents_reflog (
 CREATE INDEX IF NOT EXISTS git_ents_reflog_lookup_idx
     ON git_ents_reflog (repo_id, name, id DESC);
 
--- Pack registry: minimal columns only. WS5 (Tigris object store) consumes
--- this to record promotion of staged packs; nothing here reads it yet.
+-- Pack registry: WS5 (Tigris object store) records promoted packs here, and
+-- `odb_tigris::OdbTigris::read`/`contains` (via `PostgresRefStore`'s
+-- `odb_tigris::registry::PackRegistry` impl, see `pack_registry.rs`) consult
+-- only this table — never a bucket listing (`docs/scale-out.adoc`,
+-- "Reachability").
 CREATE TABLE IF NOT EXISTS git_ents_pack_registry (
     id BIGSERIAL PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -40,8 +43,43 @@ CREATE TABLE IF NOT EXISTS git_ents_pack_registry (
     promoted_at TIMESTAMPTZ
 );
 
+-- `location_key` predates the `PackRegistry` trait (WS5) and is unused by
+-- it; dropping its `NOT NULL` rather than removing it keeps this migration
+-- idempotent against a database that already has rows from before this
+-- change, without inventing a fake value for a column nothing here writes
+-- anymore.
+ALTER TABLE git_ents_pack_registry ALTER COLUMN location_key DROP NOT NULL;
+
+ALTER TABLE git_ents_pack_registry ADD COLUMN IF NOT EXISTS pack_id TEXT;
+ALTER TABLE git_ents_pack_registry ADD COLUMN IF NOT EXISTS pack_key TEXT;
+ALTER TABLE git_ents_pack_registry ADD COLUMN IF NOT EXISTS idx_key TEXT;
+ALTER TABLE git_ents_pack_registry ADD COLUMN IF NOT EXISTS object_count BIGINT;
+
 CREATE INDEX IF NOT EXISTS git_ents_pack_registry_repo_idx
     ON git_ents_pack_registry (repo_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS git_ents_pack_registry_repo_pack_idx
+    ON git_ents_pack_registry (repo_id, pack_id);
+
+-- Small-object tier (WS5, `docs/scale-out.adoc`'s `odb-tiered` row): blobs
+-- and trees under `odb_tiered::OdbTiered`'s size threshold, staged then
+-- promoted like any other object storage tier (correctness rules 1 and 2
+-- apply here too). `stage_id` identifies an in-flight batch; `promoted`
+-- flips to true (and `stage_id` clears) in the single `UPDATE` that is this
+-- tier's whole promotion transaction (see `small_tier.rs`).
+CREATE TABLE IF NOT EXISTS git_ents_small_objects (
+    repo_id TEXT NOT NULL,
+    oid TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    bytes BYTEA NOT NULL,
+    stage_id TEXT,
+    promoted BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (repo_id, oid)
+);
+
+CREATE INDEX IF NOT EXISTS git_ents_small_objects_stage_idx
+    ON git_ents_small_objects (stage_id)
+    WHERE stage_id IS NOT NULL;
 
 -- Effect queue: the at-least-once source of truth `watch`'s NOTIFY hint
 -- points consumers back at (`docs/scale-out.adoc`, "RefStore": "the effect

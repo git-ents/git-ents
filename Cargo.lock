@@ -3553,6 +3553,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "odb-tiered"
+version = "0.0.0"
+dependencies = [
+ "backend-conformance",
+ "git-backend",
+ "gix-features",
+ "gix-hash",
+ "gix-object",
+ "gix-pack",
+ "odb-tigris",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "odb-tigris"
 version = "0.0.0"
 dependencies = [
@@ -4059,6 +4074,10 @@ dependencies = [
  "backend-conformance",
  "git-backend",
  "gix-hash",
+ "gix-object",
+ "odb-tiered",
+ "odb-tigris",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "uuid",

@@ -10,6 +10,13 @@
 //! [`queue`]) is what an at-least-once consumer actually drains (see
 //! [`notify`], and the trait contract on [`git_backend::RefStore::watch`]).
 //!
+//! This crate also implements two WS5 traits against the same connection,
+//! rather than have `odb-tigris`/`odb-tiered` depend on `tokio-postgres`
+//! themselves: [`odb_tigris::registry::PackRegistry`] (see
+//! [`pack_registry`], over `git_ents_pack_registry`) and
+//! [`odb_tiered::small_tier::SmallObjectTier`] (see [`small_tier`], over
+//! `git_ents_small_objects`).
+//!
 //! # Q1: single write-primary
 //!
 //! This store assumes exactly one writable Postgres primary at a time. Fly
@@ -25,8 +32,10 @@
 //! fencing code here, deliberately.
 
 mod notify;
+mod pack_registry;
 mod queue;
 mod ref_store;
+mod small_tier;
 
 pub use queue::{ClaimedEffect, EffectId};
 

@@ -15,6 +15,7 @@ members = [
     "crates/git-store",
     "crates/git-toolchain",
     "crates/odb-files",
+    "crates/odb-tiered",
     "crates/odb-tigris",
     "crates/refstore-files",
     "crates/refstore-postgres",
@@ -74,6 +75,7 @@ git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
 odb-files = { path = "crates/odb-files" }
+odb-tiered = { path = "crates/odb-tiered" }
 odb-tigris = { path = "crates/odb-tigris" }
 refstore-files = { path = "crates/refstore-files" }
 refstore-postgres = { path = "crates/refstore-postgres" }
