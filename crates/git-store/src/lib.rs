@@ -178,7 +178,25 @@ impl Store {
         value: &T,
         message: &str,
     ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, None)
+        self.store_impl(refname, value, message, None, &[])
+    }
+
+    /// Like [`store`](Self::store), but also parenting the written commit on
+    /// each of `extra_parents`, beyond the ref's own prior tip. This records a
+    /// cross-document provenance edge — e.g. a reply comment's genesis commit
+    /// carries the replied-to comment's tip as a second parent, a
+    /// happens-after proof of exactly what was replied to — while
+    /// first-parent ancestry stays the document's own history, so
+    /// [`history`](Self::history) and [`provenance`](Self::provenance) are
+    /// unaffected.
+    pub fn store_with_parents<T: for<'a> Facet<'a>>(
+        &self,
+        refname: &str,
+        value: &T,
+        message: &str,
+        extra_parents: &[ObjectId],
+    ) -> Result<(), Error> {
+        self.store_impl(refname, value, message, None, extra_parents)
     }
 
     /// Like [`store`](Self::store), but attributing authorship to `author`
@@ -192,7 +210,21 @@ impl Store {
         message: &str,
         author: (&str, &str),
     ) -> Result<(), Error> {
-        self.store_impl(refname, value, message, Some(author))
+        self.store_impl(refname, value, message, Some(author), &[])
+    }
+
+    /// Like [`store_authored`](Self::store_authored), but also parenting the
+    /// written commit on each of `extra_parents`, per
+    /// [`store_with_parents`](Self::store_with_parents).
+    pub fn store_authored_with_parents<T: for<'a> Facet<'a>>(
+        &self,
+        refname: &str,
+        value: &T,
+        message: &str,
+        author: (&str, &str),
+        extra_parents: &[ObjectId],
+    ) -> Result<(), Error> {
+        self.store_impl(refname, value, message, Some(author), extra_parents)
     }
 
     /// ## Requirements
@@ -204,11 +236,15 @@ impl Store {
         value: &T,
         message: &str,
         author: Option<(&str, &str)>,
+        extra_parents: &[ObjectId],
     ) -> Result<(), Error> {
         let mut expected = self.ref_commit(refname)?;
         let mut tree = facet_git_tree::serialize_into(value, &self.odb)?;
         for _ in 0..=MAX_MERGE_RETRIES {
-            let parents = expected.into_iter().collect();
+            let parents = expected
+                .into_iter()
+                .chain(extra_parents.iter().copied())
+                .collect();
             let commit = self.write_commit(tree, parents, message, author)?;
             match self.try_set_ref(refname, expected, commit) {
                 Ok(()) => return Ok(()),
@@ -349,6 +385,27 @@ impl Store {
         author: (&str, &str),
     ) -> Result<(), Error> {
         self.store_authored(&item_ref(prefix, id)?, value, message, author)
+    }
+
+    /// Like [`store_item_authored`](Self::store_item_authored), but also
+    /// parenting the written commit on each of `extra_parents`, per
+    /// [`store_with_parents`](Self::store_with_parents).
+    pub fn store_item_authored_with_parents<T: for<'a> Facet<'a>>(
+        &self,
+        prefix: &str,
+        id: &str,
+        value: &T,
+        message: &str,
+        author: (&str, &str),
+        extra_parents: &[ObjectId],
+    ) -> Result<(), Error> {
+        self.store_authored_with_parents(
+            &item_ref(prefix, id)?,
+            value,
+            message,
+            author,
+            extra_parents,
+        )
     }
 
     /// Like [`store_item`](Self::store_item), but for a [`HasId`] value that
@@ -492,8 +549,11 @@ impl Store {
         Ok(refs.into_iter().map(|(_seconds, name)| name).collect())
     }
 
-    /// Resolve `refname` to the object id of its commit, or `None` when absent.
-    fn ref_commit(&self, refname: &str) -> Result<Option<ObjectId>, Error> {
+    /// Resolve `refname` to the object id of its tip commit, or `None` when
+    /// absent — the primitive a caller reaches for when it needs the commit
+    /// itself (e.g. to parent another commit on it), not just the document
+    /// [`load`](Self::load) reads out of it.
+    pub fn ref_commit(&self, refname: &str) -> Result<Option<ObjectId>, Error> {
         match self
             .repo
             .try_find_reference(refname)
