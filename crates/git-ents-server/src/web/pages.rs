@@ -85,8 +85,10 @@ pub(super) async fn repo_page(
                 @for entry in &tree {
                     @let name = entry.filename.to_str_lossy();
                     div.card-row.is-dir[entry.mode.is_tree()] {
-                        @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
-                        a href=(entry_href(rel, "", entry)) { (name.as_ref()) }
+                        a.row-link href=(entry_href(rel, "", entry)) {
+                            @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
+                            (name.as_ref())
+                        }
                     }
                 }
             }
@@ -521,8 +523,10 @@ pub(super) async fn tree_page(
                 @for entry in &entries {
                     @let name = entry.filename.to_str_lossy();
                     div.card-row.is-dir[entry.mode.is_tree()] {
-                        @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
-                        a href=(entry_href(rel, &dir, entry)) { (name.as_ref()) }
+                        a.row-link href=(entry_href(rel, &dir, entry)) {
+                            @if entry.mode.is_tree() { (icon_folder()) } @else { (icon_file()) }
+                            (name.as_ref())
+                        }
                     }
                 }
             }

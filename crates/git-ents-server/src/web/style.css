@@ -185,6 +185,8 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 
 .card-row a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); flex: 1; min-width: 0; word-break: break-all; }
 .card-row a:hover { color: var(--color-accent); }
+.card-row a.row-link { display: flex; align-items: center; gap: .65rem; }
+.card-row:has(.row-link):hover { background: var(--color-code-bg); }
 .commit-subject a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .commit-subject a:hover { color: var(--color-accent); }
 
