@@ -159,11 +159,30 @@ impl WebComponent for Member {
     }
 }
 
-/// A run is a set of per-check outcomes; collapse them to one summary line
-/// rather than a row per outcome.
-impl Render for Run {
-    fn render(&self) -> Markup {
-        html! { span.muted { (run_summary(self)) } }
+/// A run's per-check outcomes, each colored by [`status_badge`] and linked to
+/// its recording when it has one — the same treatment "Checks on HEAD" gives
+/// each check, rather than one plain summary line.
+pub(super) fn run_row(rel: &str, commit_hex: &str, run: &Run) -> Markup {
+    html! {
+        div.run-results {
+            @for outcome in &run.results {
+                (run_result(rel, commit_hex, outcome))
+            }
+        }
+    }
+}
+
+/// One outcome within a run row: its check name and status badge, linked to
+/// `/{rel}/checks/{commit_hex}/{name}` when there's a live view or a
+/// recording behind it.
+fn run_result(rel: &str, commit_hex: &str, outcome: &RunOutcome) -> Markup {
+    let href = format!("/{rel}/checks/{commit_hex}/{}", outcome.name);
+    html! {
+        @if outcome.recording.is_some() || is_in_progress(outcome.status) {
+            a.run-result href=(href) { (outcome.name) " " (status_badge(outcome.status)) }
+        } @else {
+            span.run-result { (outcome.name) " " (status_badge(outcome.status)) }
+        }
     }
 }
 
@@ -238,15 +257,6 @@ fn signer_label(key: &str) -> String {
     } else {
         format!("{kind} · {comment}")
     }
-}
-
-/// A one-line summary of a run's outcomes, e.g. `fmt pass · test fail`.
-fn run_summary(run: &Run) -> String {
-    run.results
-        .iter()
-        .map(|result| format!("{} {}", result.name, result.status))
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 /// Whether `status` is still on its way to a terminal outcome — the check has

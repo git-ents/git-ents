@@ -359,6 +359,11 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .status-fail { color: var(--s-keyword); font-weight: 600; }
 .status-running { color: var(--color-accent); font-weight: 600; }
 .status-pending { color: var(--color-text-muted); }
+
+.run-results { display: flex; flex-wrap: wrap; gap: .3rem .9rem; flex: 1; min-width: 0; }
+.run-results .run-result { flex: none; color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: .3rem; }
+.run-results a.run-result { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
+.run-results a.run-result:hover { color: var(--color-accent); }
 .check-summary { display: flex; align-items: center; gap: .85rem; margin-bottom: 1.25rem; font-family: var(--font-mono); font-size: .9rem; }
 .check-summary .btn-quiet { margin-left: auto; }
 .terminal-empty { color: var(--color-text-muted); font-size: .9rem; background: var(--color-code-bg); border: 1px dashed var(--color-border); border-radius: var(--radius-sm); padding: 1rem 1.2rem; }

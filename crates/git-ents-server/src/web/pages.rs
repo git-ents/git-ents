@@ -998,7 +998,7 @@ pub(super) async fn checks_page(
                                 @for run in &commit.runs {
                                     div.card-row.signer-row {
                                         code.key { (short_oid(&commit.commit)) }
-                                        (run.render())
+                                        (super::render::run_row(rel, &commit.commit.to_string(), run))
                                     }
                                 }
                             }
