@@ -1,5 +1,6 @@
 document.querySelectorAll('[data-live-check]').forEach((container) => {
   const url = container.dataset.liveCheck;
+  let lastHtml = container.innerHTML;
   const poll = () => {
     fetch(url, { cache: 'no-store' })
       .then((response) => {
@@ -18,7 +19,10 @@ document.querySelectorAll('[data-live-check]').forEach((container) => {
           );
           return;
         }
-        container.innerHTML = html;
+        if (html !== lastHtml) {
+          lastHtml = html;
+          container.innerHTML = html;
+        }
         setTimeout(poll, 1000);
       })
       .catch(() => setTimeout(poll, 2000));
