@@ -380,7 +380,8 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 .account-strip form { margin: 0; }
 .btn-quiet { margin-top: 0; padding: .3rem .75rem; font-size: .82rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); text-decoration: none; cursor: pointer; }
 .btn-quiet:hover { border-color: var(--color-accent); color: var(--color-accent); }
-.shell-note.can-edit { color: var(--color-accent); }
+.auth-banner { font-size: .9rem; max-width: 44rem; margin-bottom: 1.5rem; padding: .7rem 1.1rem; border-radius: var(--radius-sm); background: var(--color-code-bg); border: 1px solid var(--color-border); }
+.auth-banner-active { color: var(--color-accent); background: var(--color-accent-subtle); border-color: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 .edit-form { display: flex; flex-direction: column; gap: .4rem; max-width: 40rem; }
 .edit-form label { font-family: var(--font-sans); font-size: .82rem; font-weight: 600; color: var(--color-text-muted); }
 .edit-form input, .edit-form textarea, .inline-edit input { font-family: var(--font-mono); font-size: .85rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem; }

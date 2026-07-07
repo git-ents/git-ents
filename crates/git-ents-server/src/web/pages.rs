@@ -1348,17 +1348,17 @@ async fn load_repo_config(repo: &Path) -> Result<git_ents_core::config::Config, 
 fn settings_auth_banner(auth: Option<&super::Auth>, editing: bool) -> Markup {
     html! {
         @match auth {
-            None => p.shell-note {
+            None => p.auth-banner {
                 a href="/login" { "Sign in" } " with a member web key to edit these settings."
             }
-            Some(auth) if auth.username.is_some() && editing => p.shell-note.can-edit {
+            Some(auth) if auth.username.is_some() && editing => p.auth-banner.auth-banner-active {
                 "Signed in as " strong { (auth.label) } " — you can edit this repository."
             }
-            Some(auth) if auth.username.is_some() => p.shell-note {
+            Some(auth) if auth.username.is_some() => p.auth-banner {
                 "Signed in as " strong { (auth.label) } ", but this server has browser editing "
                 "disabled, so settings are read-only."
             }
-            Some(auth) => p.shell-note {
+            Some(auth) => p.auth-banner {
                 "Signed in as " strong { (auth.label) } ", but this key is not a member of this "
                 "repository, so settings are read-only."
             }
