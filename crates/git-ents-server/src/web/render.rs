@@ -267,17 +267,27 @@ fn status_badge(status: Status) -> Markup {
     html! { span class=(class) { (status.to_string()) } }
 }
 
-/// One check's row on the "Checks on HEAD" card: a status badge, linked to
-/// `href` when there's a live view or a recording behind it, or "no run yet"
-/// when `outcome` is absent (just added, or its run has not landed).
-pub(super) fn check_list_row(outcome: Option<&RunOutcome>, href: &str) -> Markup {
+/// One check's row on the "Checks on HEAD" card: the check's `name` and a
+/// status badge, both part of one link to `href` when there's a live view or
+/// a recording behind it, or "no run yet" when `outcome` is absent (just
+/// added, or its run has not landed).
+pub(super) fn check_list_row(name: &str, outcome: Option<&RunOutcome>, href: &str) -> Markup {
     html! {
         @match outcome {
-            None => span.muted { "no run yet" }
-            Some(outcome) if outcome.recording.is_some() || is_in_progress(outcome.status) => {
-                a href=(href) { (status_badge(outcome.status)) }
+            None => {
+                code.key { (name) }
+                span.muted { "no run yet" }
             }
-            Some(outcome) => (status_badge(outcome.status))
+            Some(outcome) if outcome.recording.is_some() || is_in_progress(outcome.status) => {
+                a.row-link href=(href) {
+                    code.key { (name) }
+                    (status_badge(outcome.status))
+                }
+            }
+            Some(outcome) => {
+                code.key { (name) }
+                (status_badge(outcome.status))
+            }
         }
     }
 }

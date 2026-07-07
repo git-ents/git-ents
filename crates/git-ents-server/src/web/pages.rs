@@ -1026,8 +1026,7 @@ fn head_check_row(
     let href = format!("/{rel}/checks/{head}/{}", check.name);
     html! {
         div.card-row.signer-row {
-            code.key { (check.name) }
-            (super::render::check_list_row(outcome, &href))
+            (super::render::check_list_row(&check.name, outcome, &href))
         }
     }
 }
