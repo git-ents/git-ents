@@ -357,6 +357,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 
 .status-pass { color: var(--s-func); font-weight: 600; }
 .status-fail { color: var(--s-keyword); font-weight: 600; }
+.status-running { color: var(--color-accent); font-weight: 600; }
 .status-pending { color: var(--color-text-muted); }
 .check-summary { display: flex; align-items: center; gap: .85rem; margin-bottom: 1.25rem; font-family: var(--font-mono); font-size: .9rem; }
 .check-summary .btn-quiet { margin-left: auto; }

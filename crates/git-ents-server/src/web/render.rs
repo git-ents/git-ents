@@ -262,7 +262,8 @@ fn status_badge(status: Status) -> Markup {
     let class = match status {
         Status::Pass => "status-pass",
         Status::Fail | Status::Error => "status-fail",
-        Status::Queued | Status::Running | Status::Skipped => "status-pending",
+        Status::Running => "status-running",
+        Status::Queued | Status::Skipped => "status-pending",
     };
     html! { span class=(class) { (status.to_string()) } }
 }
