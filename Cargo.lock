@@ -1673,6 +1673,7 @@ dependencies = [
  "arborium",
  "askama",
  "axum",
+ "backend-conformance",
  "facet",
  "figue",
  "form_urlencoded",
@@ -1682,6 +1683,7 @@ dependencies = [
  "git-comment",
  "git-effect",
  "git-ents-core",
+ "git-hydrate",
  "git-member",
  "git-protocol",
  "git-reachability",
@@ -1694,12 +1696,34 @@ dependencies = [
  "gix-object",
  "maud",
  "odb-files",
+ "odb-tigris",
  "portable-pty",
  "pulldown-cmark",
  "refstore-files",
+ "refstore-postgres",
  "rstest",
  "tempfile",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "git-hydrate"
+version = "0.0.0"
+dependencies = [
+ "backend-conformance",
+ "git-backend",
+ "git-ents-core",
+ "git-member",
+ "git-protocol",
+ "git-reachability",
+ "gix-hash",
+ "gix-object",
+ "odb-files",
+ "odb-tigris",
+ "refstore-files",
+ "refstore-postgres",
+ "tempfile",
  "uuid",
 ]
 

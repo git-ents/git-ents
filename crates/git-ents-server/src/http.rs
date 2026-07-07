@@ -136,6 +136,23 @@ async fn backend(
         return response;
     }
 
+    // WS0 hydration (`docs/scale-out.adoc`): before handing this request to
+    // `git http-backend`, top up the ephemeral local repo from the durable
+    // stores and, for anything answering a ref advertisement, regenerate
+    // `packed-refs` from Postgres — bounding advertisement staleness to
+    // this one request. A no-op (and `state.hydrate` is `None`) for a
+    // local-only deployment.
+    if let Some(hydrate) = &state.hydrate
+        && is_service_request(path_info, query_string)
+        && let Some(relative) = repo_path(path_info)
+    {
+        let repo_path = state.data_dir.join(&relative);
+        let repo_id = repo_id_string(&relative);
+        if let Err(response) = hydrate_repo(hydrate, &repo_path, &repo_id).await {
+            return response;
+        }
+    }
+
     let content_type = header_value(headers, "Content-Type");
     let content_length = header_value(headers, "Content-Length");
     // `Content-Type`/`Content-Length` are CGI-special-cased env vars with no
@@ -171,6 +188,38 @@ async fn backend(
     }
     if let Some(value) = &content_encoding {
         cmd.env("HTTP_CONTENT_ENCODING", value);
+    }
+    // Hand the hydration-mode `pre-receive` (`git_hydrate::pre_receive`) the
+    // durable-store config it needs: these env vars propagate through
+    // `http-backend` -> `receive-pack` -> the hook exactly as
+    // `git_effect::engine::QUEUE_ENV` above already does, and
+    // `git_hydrate::HydrateConfig::from_env` reads them back.
+    if let Some(hydrate) = &state.hydrate {
+        // The op record's signer: `git_hydrate::pre_receive` needs the same
+        // key `AppState::web_signing_key` already holds in this process,
+        // but the hook is a separate process with no access to it.
+        if let Some(key) = &state.web_signing_key {
+            cmd.env("GIT_ENTS_WEB_SIGNING_KEY", key);
+        }
+        cmd.env("GIT_ENTS_HYDRATE_POSTGRES_URL", &hydrate.postgres_conninfo);
+        match &hydrate.blob {
+            git_hydrate::config::BlobStore::Fs(root) => {
+                cmd.env("GIT_ENTS_HYDRATE_BLOB_ROOT", root);
+            }
+            git_hydrate::config::BlobStore::S3(s3) => {
+                cmd.env("GIT_ENTS_HYDRATE_S3_BUCKET", &s3.bucket)
+                    .env("GIT_ENTS_HYDRATE_S3_REGION", &s3.region)
+                    .env("GIT_ENTS_HYDRATE_S3_ENDPOINT", &s3.endpoint)
+                    .env("GIT_ENTS_HYDRATE_S3_ACCESS_KEY_ID", &s3.access_key_id)
+                    .env(
+                        "GIT_ENTS_HYDRATE_S3_SECRET_ACCESS_KEY",
+                        &s3.secret_access_key,
+                    );
+                if s3.allow_http {
+                    cmd.env("GIT_ENTS_HYDRATE_S3_ALLOW_HTTP", "1");
+                }
+            }
+        }
     }
 
     // Push these through `GIT_CONFIG_*` rather than `git -c` so they reach the
@@ -405,18 +454,21 @@ pub(crate) fn is_bare_repo(path: &Path) -> bool {
 }
 
 // @relation(namespace.path)
-/// The target repository of a push, as a validated path relative to the data
-/// directory, or `None` if the request does not name an acceptable repository.
+/// The target repository of a smart-HTTP service request (push or fetch),
+/// as a validated path relative to the data directory, or `None` if the
+/// request does not name an acceptable repository.
 ///
-/// The repository is everything before git's service suffix (`/info/refs` or
-/// `/git-receive-pack`), limited to [`MAX_REPO_DEPTH`] segments each drawn from
-/// a conservative character set. Validating the segments here is what keeps a
-/// push from escaping the data directory or fabricating arbitrary paths on
-/// disk: every returned component is a plain, dot-free, separator-free name, so
-/// the join below can only ever descend into `data_dir`.
+/// The repository is everything before git's service suffix (`/info/refs`,
+/// `/git-receive-pack`, or `/git-upload-pack`), limited to
+/// [`MAX_REPO_DEPTH`] segments each drawn from a conservative character
+/// set. Validating the segments here is what keeps a request from escaping
+/// the data directory or fabricating arbitrary paths on disk: every
+/// returned component is a plain, dot-free, separator-free name, so the
+/// join below can only ever descend into `data_dir`.
 fn repo_path(path_info: &str) -> Option<PathBuf> {
     let repo = path_info
         .strip_suffix("/git-receive-pack")
+        .or_else(|| path_info.strip_suffix("/git-upload-pack"))
         .or_else(|| path_info.strip_suffix("/info/refs"))?;
     let segments: Vec<&str> = repo.split('/').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() || segments.len() > MAX_REPO_DEPTH {
@@ -524,6 +576,69 @@ async fn reconcile_head(repo: &Path) {
         .await;
 }
 
+/// `relative`'s repository id, the way every hydration-mode component
+/// (this module, `git_hydrate::pre_receive`, `native_git`'s own resolver)
+/// names one: its data-dir-relative path with forward slashes, regardless
+/// of host path-separator conventions.
+fn repo_id_string(relative: &Path) -> String {
+    relative.to_string_lossy().replace('\\', "/")
+}
+
+// @relation(protocol.git, storage.bare)
+/// WS0's read-path hydration step for one request: top up `repo_path`'s
+/// local packs from `hydrate`'s durable stores (idempotent — a no-op past
+/// the first pack a given ephemeral instance has already fetched) and
+/// regenerate its `packed-refs` from Postgres, bounding advertisement
+/// staleness to this one request (`docs/scale-out.adoc`, "WS0").
+///
+/// Runs on a blocking task: [`refstore_postgres::PostgresRefStore`] and
+/// [`odb_tigris::OdbTigris`] are synchronous (each owns its own dedicated
+/// runtime for the async clients underneath), so driving them straight from
+/// this async handler would block the executor thread they're called from.
+async fn hydrate_repo(
+    hydrate: &git_hydrate::HydrateConfig,
+    repo_path: &Path,
+    repo_id: &str,
+) -> Result<(), Response> {
+    let hydrate = hydrate.clone();
+    let repo_path = repo_path.to_path_buf();
+    let repo_id = repo_id.to_owned();
+    let result = tokio::task::spawn_blocking(move || -> git_backend::Result<()> {
+        let registry = refstore_postgres::PostgresRefStore::connect(
+            &hydrate.postgres_conninfo,
+            repo_id.clone(),
+        )?;
+        match &hydrate.blob {
+            git_hydrate::config::BlobStore::Fs(root) => {
+                let transport = odb_tigris::transport::fs::FsTransport::open(root)?;
+                git_hydrate::hydrate::ensure_hydrated(&repo_path, &repo_id, &transport, &registry)?;
+            }
+            git_hydrate::config::BlobStore::S3(s3) => {
+                let transport = odb_tigris::transport::s3::S3Transport::connect(s3)?;
+                git_hydrate::hydrate::ensure_hydrated(&repo_path, &repo_id, &transport, &registry)?;
+            }
+        }
+        let refs =
+            refstore_postgres::PostgresRefStore::connect(&hydrate.postgres_conninfo, repo_id)?;
+        git_hydrate::packed_refs::regenerate(&repo_path, &refs)?;
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("hydration failed: {error}"),
+        )
+            .into_response()),
+        Err(join_error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("hydration task panicked: {join_error}"),
+        )
+            .into_response()),
+    }
+}
+
 fn header_value(headers: &HeaderMap, field: &str) -> Option<String> {
     headers
         .get(field)
@@ -602,6 +717,7 @@ mod tests {
             challenges: crate::web::new_challenges(),
             web_signing_key: None,
             live_runs: git_effect::engine::new_live_registry(),
+            hydrate: None,
         }
     }
 

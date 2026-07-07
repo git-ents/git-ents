@@ -105,6 +105,13 @@ pub(crate) struct AppState {
     /// Live output for checks the worker currently has running, polled by the
     /// Checks tab's live view.
     pub(crate) live_runs: git_effect::engine::LiveRegistry,
+    /// WS0 hydration config (`docs/scale-out.adoc`, "WS0 — Interim
+    /// hydration backend"), read once at startup from the environment
+    /// (see [`git_hydrate::HydrateConfig::from_env`]). `None` keeps this
+    /// deployment on the current direct-disk behavior; `Some` hydrates
+    /// every served repo from Postgres/blob-store durable state on every
+    /// request, per `crate::http`'s wiring.
+    pub(crate) hydrate: Option<git_hydrate::HydrateConfig>,
 }
 
 /// The non-empty value of the environment variable `key`, or `None`.
@@ -118,6 +125,23 @@ fn env_var(key: &str) -> Option<String> {
 /// wins over the hardcoded default.
 pub fn run(args: Args) -> ExitCode {
     if let Some(Command::PreReceive) = args.command {
+        // Hydration mode (`docs/scale-out.adoc`, WS0): `crate::http`'s
+        // backend invocation injects `GIT_ENTS_HYDRATE_*` env vars onto
+        // every `git http-backend` it spawns whenever `AppState::hydrate`
+        // is configured, and they propagate down to this hook exactly as
+        // `GIT_ENTS_HOOKS_DIR`/`GIT_ENTS_CHECKS_QUEUE` already do. Their
+        // presence here is this (separate) hook process's only way to
+        // learn hydration is on; there is no shared `AppState` to consult.
+        if let Some(hydrate) = git_hydrate::HydrateConfig::from_env() {
+            let signing_key = env_var("GIT_ENTS_WEB_SIGNING_KEY").map(PathBuf::from);
+            return match git_hydrate::pre_receive::run(&hydrate, signing_key.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(reason) => {
+                    eprintln!("error: {reason}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         return match git_signed_push::pre_receive() {
             Ok(()) => ExitCode::SUCCESS,
             Err(reason) => {
@@ -167,6 +191,12 @@ async fn serve(args: Args) -> ExitCode {
     let web_signing_key = args
         .web_signing_key
         .or_else(|| env_var("GIT_ENTS_WEB_SIGNING_KEY").map(PathBuf::from));
+    // @relation(protocol.routing)
+    // Read once at startup, exactly as `git_hydrate::pre_receive`'s hook
+    // process reads it again for itself (see `Command::PreReceive` above)
+    // — the one config both this process and every hook subprocess it
+    // spawns must agree on.
+    let hydrate = git_hydrate::HydrateConfig::from_env();
 
     let state = AppState {
         data_dir,
@@ -178,6 +208,7 @@ async fn serve(args: Args) -> ExitCode {
         challenges: web::new_challenges(),
         web_signing_key,
         live_runs: git_effect::engine::new_live_registry(),
+        hydrate,
     };
 
     // Drain queued pushes and run their effects for the life of the server:

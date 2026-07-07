@@ -22,6 +22,7 @@ git-anchor = { workspace = true }
 git-backend = { workspace = true }
 git-comment = { workspace = true }
 git-effect = { workspace = true }
+git-hydrate = { workspace = true }
 git-member = { workspace = true }
 git-protocol = { workspace = true }
 git-reachability = { workspace = true }
@@ -34,14 +35,17 @@ gix-hash = { workspace = true }
 gix-object = { workspace = true }
 maud = { workspace = true }
 odb-files = { workspace = true }
+odb-tigris = { workspace = true }
 pulldown-cmark = { workspace = true }
 refstore-files = { workspace = true }
+refstore-postgres = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 portable-pty = "0.9.0"
 
 [dev-dependencies]
+backend-conformance = { workspace = true }
 rstest = { workspace = true }
 
 [lints]
