@@ -6,6 +6,7 @@ members = [
     "crates/exec-sprites",
     "crates/git-anchor",
     "crates/git-backend",
+    "crates/git-cache-proxy",
     "crates/git-comment",
     "crates/git-effect",
     "crates/git-ents",
@@ -72,6 +73,7 @@ effect-dispatcher = { path = "crates/effect-dispatcher" }
 exec-sprites = { path = "crates/exec-sprites" }
 git-anchor = { path = "crates/git-anchor" }
 git-backend = { path = "crates/git-backend" }
+git-cache-proxy = { path = "crates/git-cache-proxy" }
 git-comment = { path = "crates/git-comment" }
 git-effect = { path = "crates/git-effect" }
 git-ents-core = { path = "crates/git-ents-core" }

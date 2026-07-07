@@ -1620,6 +1620,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-cache-proxy"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "git-backend",
+ "git-ents-core",
+ "git-member",
+ "git-protocol",
+ "git-reachability",
+ "git-store",
+ "gix-hash",
+ "gix-object",
+ "odb-files",
+ "refstore-files",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "git-comment"
 version = "0.0.0"
 dependencies = [
