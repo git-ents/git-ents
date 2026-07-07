@@ -451,7 +451,6 @@ fn run_all(
                 let key: LiveKey = (repo.to_path_buf(), new, effect.name.clone());
                 let buffer = live_start(live, key.clone());
                 let result = backend.run_one(&effect.name, &command, &buffer);
-                live_finish(live, &key);
                 if let Some(name) = &effect.cache
                     && let Err(e) = backend.snapshot_cache(repo, name)
                 {
@@ -463,6 +462,9 @@ fn run_all(
                     outcome.recording = Some(result.recording);
                     outcome.exit_code = result.exit_code;
                 }
+                advance(repo, new, &outcomes);
+                live_finish(live, &key);
+                continue;
             }
             Some(_) => {
                 eprintln!("effects: SKIP {} (a dependency did not pass)", effect.name);
