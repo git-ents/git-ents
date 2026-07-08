@@ -44,10 +44,16 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use git_backend::{Expected, ObjectStore as _, PackStream, RefEdit, RefName, RefStore as _};
+use git_backend::{Expected, ObjectStore as _, PackStream, RefEdit, RefName};
 use git_protocol::attestation::{OpSigner, SshOpSigner};
 use git_protocol::native::{BackendResolver, NativeBackend, RepoBackends};
 use git_protocol::{IngestPack as _, PushCertificate, PushOutcome, PushRequest, RepoId};
+
+/// The cache namespace sccache entries live in (see
+/// [`git_backend::cache_ns`]): per-key refs under
+/// `refs/cache/sccache/<key>`, consolidated reads under
+/// `refs/cache/consolidated/sccache` once WS9's compaction has run.
+pub const CACHE_NAMESPACE: &str = "sccache";
 
 /// The ref namespace sccache entries land under: one ref per key,
 /// `refs/cache/sccache/<key>`.
@@ -147,11 +153,11 @@ async fn get_object(
     if !authorized(&state.config, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let Some(refname) = cache_ref(&key) else {
+    if cache_ref(&key).is_none() {
         return StatusCode::BAD_REQUEST.into_response();
-    };
+    }
     let repo = state.config.repo.clone();
-    let outcome = tokio::task::spawn_blocking(move || read_entry(&repo, &refname)).await;
+    let outcome = tokio::task::spawn_blocking(move || read_entry(&repo, &key)).await;
     match outcome {
         Ok(Ok(Some(bytes))) => {
             state.counters.hits.fetch_add(1, Ordering::Relaxed);
@@ -165,18 +171,21 @@ async fn get_object(
     }
 }
 
-/// Resolve `refname` via [`refstore_files::FilesRefStore`] then read its
-/// object via [`odb_files::OdbFiles`] — the plain `RefStore`/`ObjectStore`
-/// read path the module doc calls out, no attested-push machinery
-/// involved (unlike [`write_entry`]: a read needs no attestation, only
+/// Resolve `key` through [`git_backend::cache_ns::resolve`] — the per-key
+/// ref first (one lookup, the common case for entries written since the
+/// last consolidation), then the consolidated tree WS9's compaction
+/// effect maintains (`docs/scale-out.adoc`, rule 4) — then read the blob
+/// via [`odb_files::OdbFiles`]. The plain `RefStore`/`ObjectStore` read
+/// path the module doc calls out, no attested-push machinery involved
+/// (unlike [`write_entry`]: a read needs no attestation, only
 /// verification, and content-addressed lookup by object id already is
 /// that).
-fn read_entry(repo: &Path, refname: &str) -> Result<Option<Vec<u8>>, git_backend::Error> {
+fn read_entry(repo: &Path, key: &str) -> Result<Option<Vec<u8>>, git_backend::Error> {
     let refs = refstore_files::FilesRefStore::open(repo)?;
-    let Some(oid) = refs.get(&RefName::new(refname))? else {
+    let odb = odb_files::OdbFiles::open(repo)?;
+    let Some(oid) = git_backend::cache_ns::resolve(&refs, &odb, CACHE_NAMESPACE, key)? else {
         return Ok(None);
     };
-    let odb = odb_files::OdbFiles::open(repo)?;
     let object = odb.read(oid)?;
     Ok(Some(object.data))
 }

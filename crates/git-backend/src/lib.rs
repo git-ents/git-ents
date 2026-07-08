@@ -24,6 +24,7 @@
 //! See `docs/scale-out.adoc` for the full rationale, the correctness rules
 //! that bind every backend, and the workstream this crate implements (WS1).
 
+pub mod cache_ns;
 mod effect;
 mod object_store;
 mod ref_store;
