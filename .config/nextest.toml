@@ -1,0 +1,19 @@
+# Nextest configuration.
+#
+# Docker-gated tests (each starts its own throwaway container — Postgres
+# for the storage/queue suites, the sandbox image for git-effect's Docker
+# backend) race and flake when several test binaries hit the Docker daemon
+# at once at default parallelism. Serialize exactly those tests through
+# one test group; everything else keeps full parallelism.
+
+[test-groups]
+docker = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '''
+package(refstore-postgres)
+| package(effect-dispatcher)
+| (package(git-ents-server) & binary(hydrate))
+| (package(git-effect) & test(docker_backend_runs_a_trivial_effect))
+'''
+test-group = "docker"
