@@ -244,6 +244,55 @@ impl PostgresRefStore {
             .map(|_rows_affected| ())
     }
 
+    /// Try to take this repository's maintenance advisory lock
+    /// (`docs/scale-out.adoc`, WS9: "Per-repo background effects
+    /// serialized by advisory lock"): a Postgres *session* advisory lock
+    /// keyed by `hashtextextended(repo_id)`, held by this store's
+    /// connection until [`Self::unlock_maintenance`] or the session ends —
+    /// so a crashed maintenance run releases it automatically. Returns
+    /// whether the lock was acquired; `false` means another session (a
+    /// concurrent dispatcher's run) holds it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RefStore`] if the query fails.
+    pub fn try_maintenance_lock(&self) -> Result<bool> {
+        self.runtime
+            .block_on(async {
+                let client = self.client.lock().await;
+                client
+                    .query_one(
+                        "SELECT pg_try_advisory_lock(hashtextextended($1, 0))",
+                        &[&self.repo_id],
+                    )
+                    .await
+            })
+            .map_err(pg_err)
+            .and_then(|row| row.try_get::<_, bool>(0).map_err(pg_err))
+    }
+
+    /// Release the maintenance advisory lock this store's session holds
+    /// (see [`Self::try_maintenance_lock`]). Returns whether a lock was
+    /// actually released — `false` means this session did not hold it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RefStore`] if the query fails.
+    pub fn unlock_maintenance(&self) -> Result<bool> {
+        self.runtime
+            .block_on(async {
+                let client = self.client.lock().await;
+                client
+                    .query_one(
+                        "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                        &[&self.repo_id],
+                    )
+                    .await
+            })
+            .map_err(pg_err)
+            .and_then(|row| row.try_get::<_, bool>(0).map_err(pg_err))
+    }
+
     /// Record one accepted push's op record OID (`docs/scale-out.adoc`,
     /// "Attested push": "Push ID = op record OID, uniformly").
     ///

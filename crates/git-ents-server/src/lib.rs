@@ -112,6 +112,15 @@ pub(crate) struct AppState {
     /// every served repo from Postgres/blob-store durable state on every
     /// request, per `crate::http`'s wiring.
     pub(crate) hydrate: Option<git_hydrate::HydrateConfig>,
+    /// WS9 maintenance scheduler (`docs/scale-out.adoc`, "WS9 — GC,
+    /// compaction, maintenance"): accumulates per-repo ref-update volume
+    /// from accepted pushes (see `native_git::receive_pack`, the wired
+    /// call site) and enqueues the maintenance effects once a repo
+    /// crosses the threshold. Present only when hydration (and so the
+    /// Postgres effect queue the effects are enqueued into) is
+    /// configured; a direct-disk deployment has no queue to schedule
+    /// into yet.
+    pub(crate) maintenance: Option<Arc<git_maintenance::schedule::Scheduler>>,
 }
 
 /// The non-empty value of the environment variable `key`, or `None`.
@@ -198,6 +207,18 @@ async fn serve(args: Args) -> ExitCode {
     // spawns must agree on.
     let hydrate = git_hydrate::HydrateConfig::from_env();
 
+    // WS9: schedule maintenance on ref-update volume (`docs/scale-out.adoc`,
+    // "Reachability": "triggered by ref-update volume thresholds"), into
+    // the same Postgres effect queue the WS7 dispatcher drains.
+    let maintenance = hydrate.as_ref().map(|config| {
+        Arc::new(git_maintenance::schedule::Scheduler::new(
+            git_maintenance::schedule::Thresholds::default(),
+            Arc::new(git_maintenance::schedule::PostgresQueueSink::new(
+                config.postgres_conninfo.clone(),
+            )),
+        ))
+    });
+
     let state = AppState {
         data_dir,
         init_lock: Arc::new(Mutex::new(())),
@@ -209,6 +230,7 @@ async fn serve(args: Args) -> ExitCode {
         web_signing_key,
         live_runs: git_effect::engine::new_live_registry(),
         hydrate,
+        maintenance,
     };
 
     // Drain queued pushes and run their effects for the life of the server:

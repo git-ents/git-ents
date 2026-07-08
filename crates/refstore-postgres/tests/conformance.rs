@@ -200,3 +200,35 @@ fn queue_table_survives_a_dropped_connection() {
     assert_eq!(claimed_one.payload, "payload-a");
     store.complete_effect(id).expect("complete");
 }
+
+#[test]
+fn maintenance_advisory_lock_serializes_per_repo_across_sessions() {
+    let pg = require_postgres!("maintenance_advisory_lock_serializes_per_repo_across_sessions");
+    let repo_id = format!("maintenance-{}", uuid::Uuid::new_v4());
+
+    // Two sessions (two connections) contending for one repo's
+    // maintenance lock (`docs/scale-out.adoc`, WS9: "Per-repo background
+    // effects serialized by advisory lock"): the second skips while the
+    // first holds it.
+    let holder = PostgresRefStore::connect(pg.url(), repo_id.clone()).expect("connect holder");
+    let contender =
+        PostgresRefStore::connect(pg.url(), repo_id.clone()).expect("connect contender");
+    assert!(holder.try_maintenance_lock().expect("holder acquires"));
+    assert!(
+        !contender.try_maintenance_lock().expect("contender tries"),
+        "a concurrent run must skip while the repo's lock is held"
+    );
+
+    // The lock is keyed by repo: a different repository is unaffected.
+    let other_repo = format!("maintenance-{}", uuid::Uuid::new_v4());
+    let other = PostgresRefStore::connect(pg.url(), other_repo).expect("connect other repo");
+    assert!(other.try_maintenance_lock().expect("other repo acquires"));
+
+    // Release: the contender proceeds.
+    assert!(holder.unlock_maintenance().expect("holder releases"));
+    assert!(
+        contender
+            .try_maintenance_lock()
+            .expect("contender acquires after release")
+    );
+}

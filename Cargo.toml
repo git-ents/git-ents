@@ -13,6 +13,7 @@ members = [
     "crates/git-ents-core",
     "crates/git-ents-server",
     "crates/git-hydrate",
+    "crates/git-maintenance",
     "crates/git-member",
     "crates/git-protocol",
     "crates/git-reachability",
@@ -79,6 +80,7 @@ git-effect = { path = "crates/git-effect" }
 git-ents-core = { path = "crates/git-ents-core" }
 git-ents-server = { path = "crates/git-ents-server" }
 git-hydrate = { path = "crates/git-hydrate" }
+git-maintenance = { path = "crates/git-maintenance" }
 git-member = { path = "crates/git-member" }
 git-protocol = { path = "crates/git-protocol" }
 git-reachability = { path = "crates/git-reachability" }

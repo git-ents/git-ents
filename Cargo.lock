@@ -1722,6 +1722,7 @@ dependencies = [
  "git-effect",
  "git-ents-core",
  "git-hydrate",
+ "git-maintenance",
  "git-member",
  "git-protocol",
  "git-reachability",
@@ -1762,6 +1763,29 @@ dependencies = [
  "refstore-files",
  "refstore-postgres",
  "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "git-maintenance"
+version = "0.0.0"
+dependencies = [
+ "backend-conformance",
+ "effect-dispatcher",
+ "git-backend",
+ "git-protocol",
+ "git-reachability",
+ "git-store",
+ "gix-hash",
+ "gix-object",
+ "gix-pack",
+ "odb-files",
+ "odb-tigris",
+ "refstore-files",
+ "refstore-postgres",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
  "uuid",
 ]
 

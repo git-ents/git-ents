@@ -23,6 +23,7 @@ git-backend = { workspace = true }
 git-comment = { workspace = true }
 git-effect = { workspace = true }
 git-hydrate = { workspace = true }
+git-maintenance = { workspace = true }
 git-member = { workspace = true }
 git-protocol = { workspace = true }
 git-reachability = { workspace = true }

@@ -232,6 +232,26 @@ async fn receive_pack(state: &AppState, repo_rel: &str, body: &[u8]) -> Response
         push_cert: parsed.cert.map(PushCertificate::new),
     };
     let outcome = backend(state).receive(push);
+
+    // WS9's wired call site: an accepted push reports its ref-update
+    // volume to the maintenance scheduler, which enqueues the maintenance
+    // effects once the repo crosses its threshold (`docs/scale-out.adoc`,
+    // "Reachability" / WS9). Off the request path (`spawn_blocking` — the
+    // sink opens a Postgres connection when the threshold trips) and
+    // never able to fail the push: scheduling errors are logged, the next
+    // accepted push re-triggers.
+    if matches!(outcome, Ok(git_protocol::PushOutcome::Accepted { .. }))
+        && let Some(scheduler) = state.maintenance.clone()
+    {
+        let repo_id = repo_rel.to_owned();
+        let updates = names.len() as u64;
+        drop(tokio::task::spawn_blocking(move || {
+            if let Err(error) = scheduler.note_ref_updates(&repo_id, updates) {
+                eprintln!("maintenance: could not schedule for {repo_id}: {error}");
+            }
+        }));
+    }
+
     report_status(&names, &outcome)
 }
 

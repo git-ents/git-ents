@@ -1,11 +1,12 @@
 //! [`Collector`]: the seam [`crate::causal_collection_safety`] tests
-//! against. Local file backends (`refstore-files`, `odb-files`) have no GC
-//! wired up yet (`docs/scale-out.adoc`, WS1), so [`NoopCollector`] lets
-//! today's suite exercise what a collection pass must never do — touch a
-//! staged/quarantined object — without asserting behavior no collector
-//! implements yet. A backend with real GC plugs its own `Collector`
-//! (reporting a real [`Collector::staging_grace`] window, if it has one)
-//! into the same property function instead.
+//! against. [`NoopCollector`] lets a backend with no GC wired up exercise
+//! what a collection pass must never do — touch a staged/quarantined
+//! object — without asserting behavior no collector implements. A backend
+//! with real GC plugs its own `Collector` (reporting a real
+//! [`Collector::staging_grace`] window, if it has one) into the same
+//! property function instead — `git-maintenance` (WS9) does exactly that
+//! for the files and Tigris backends, including the staging-timeout
+//! boundary (`crates/git-maintenance/tests/conformance.rs`).
 
 use std::time::Duration;
 

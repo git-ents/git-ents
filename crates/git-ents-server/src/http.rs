@@ -718,6 +718,7 @@ mod tests {
             web_signing_key: None,
             live_runs: git_effect::engine::new_live_registry(),
             hydrate: None,
+            maintenance: None,
         }
     }
 
