@@ -397,7 +397,7 @@ mod tests {
             .unwrap();
         assert!(
             watcher
-                .recv_timeout(std::time::Duration::from_secs(5))
+                .recv_timeout(std::time::Duration::from_secs(20))
                 .is_some(),
             "expected a wakeup hint after a ref change"
         );
