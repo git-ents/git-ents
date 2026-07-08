@@ -11,9 +11,8 @@
 //! persistent filesystem, which the toolchain extraction cache leans on
 //! instead.
 
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use gix_hash::ObjectId;
 
@@ -69,43 +68,22 @@ pub fn restore(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
         return Ok(());
     };
 
-    let archive = Command::new("git")
+    let mut archive = Command::new("git");
+    archive
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", &tree.to_string()])
-        .output()
-        .map_err(|e| format!("could not run git archive: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("git archive failed for cache {name}"));
-    }
-
-    let mut child = Command::new("sprite")
-        .args([
-            "exec",
-            "-s",
-            sprite,
-            "--",
-            "sh",
-            "-c",
-            &format!("tar -x -C {dir}"),
-        ])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("sprite exec did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not stream the cache into the sprite: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("sprite exec did not complete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("could not restore cache {name} in the sprite"))
-    }
+        .args(["archive", "--format=tar", &tree.to_string()]);
+    let mut unpack = Command::new("sprite");
+    unpack.args([
+        "exec",
+        "-s",
+        sprite,
+        "--",
+        "sh",
+        "-c",
+        &format!("tar -x -C {dir}"),
+    ]);
+    crate::stream::pipe(archive, unpack, &format!("restoring cache {name}"))
 }
 
 /// Snapshot the sandbox's [`cache_dir`] for `name` back to [`cache_ref`],
@@ -119,43 +97,22 @@ pub fn restore(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
 /// @relation(checks.cache)
 pub fn snapshot(repo: &Path, sprite: &str, name: &str) -> Result<(), String> {
     let dir = cache_dir(name);
-    let archive = Command::new("sprite")
-        .args([
-            "exec",
-            "-s",
-            sprite,
-            "--",
-            "sh",
-            "-c",
-            &format!("tar -C {dir} -cf - ."),
-        ])
-        .output()
-        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("could not archive cache {name} from the sprite"));
-    }
-
     let scratch = tempfile::tempdir().map_err(|e| format!("could not create temp dir: {e}"))?;
     let extracted = scratch.path().join("tree");
     std::fs::create_dir(&extracted).map_err(|e| format!("could not create extraction dir: {e}"))?;
-    let mut child = Command::new("tar")
-        .args(["-x", "-C"])
-        .arg(&extracted)
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run tar: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("tar did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not extract the cache archive: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("tar did not complete: {e}"))?;
-    if !status.success() {
-        return Err(format!("could not extract cache {name}'s archive"));
-    }
+    let mut archive = Command::new("sprite");
+    archive.args([
+        "exec",
+        "-s",
+        sprite,
+        "--",
+        "sh",
+        "-c",
+        &format!("tar -C {dir} -cf - ."),
+    ]);
+    let mut extract = Command::new("tar");
+    extract.args(["-x", "-C"]).arg(&extracted);
+    crate::stream::pipe(archive, extract, &format!("snapshotting cache {name}"))?;
 
     // A scratch index and an explicit work tree, so this builds a tree from
     // the extracted directory without disturbing the repository's own
@@ -214,36 +171,14 @@ pub fn restore_local(repo: &Path, dest: &Path, name: &str) -> Result<(), String>
         return Ok(());
     };
 
-    let archive = Command::new("git")
+    let mut archive = Command::new("git");
+    archive
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", &tree.to_string()])
-        .output()
-        .map_err(|e| format!("could not run git archive: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("git archive failed for cache {name}"));
-    }
-
-    let mut child = Command::new("tar")
-        .args(["-x", "-C"])
-        .arg(dest)
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run tar: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("tar did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not extract cache {name}: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("tar did not complete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("could not restore cache {name}"))
-    }
+        .args(["archive", "--format=tar", &tree.to_string()]);
+    let mut extract = Command::new("tar");
+    extract.args(["-x", "-C"]).arg(dest);
+    crate::stream::pipe(archive, extract, &format!("restoring cache {name}"))
 }
 
 /// [`snapshot`]'s local-backend equivalent: `src` is already a host

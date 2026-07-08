@@ -14,9 +14,7 @@
 //! materialized bytes are identical no matter which backend runs it.
 
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use gix_hash::ObjectId;
 use std::process::Command;
@@ -69,36 +67,14 @@ impl Sandbox {
 /// `git archive | tar -x` straight onto the host filesystem — no sandbox CLI
 /// involved, unlike the Sprite path's streamed unpack.
 pub fn sync_tree(repo: &Path, sandbox: &Sandbox, new: ObjectId) -> Result<(), String> {
-    let archive = Command::new("git")
+    let mut archive = Command::new("git");
+    archive
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", &new.to_string()])
-        .output()
-        .map_err(|e| format!("could not run git archive: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("git archive failed for {new}"));
-    }
-    let work = sandbox.work_dir();
-    let mut child = Command::new("tar")
-        .args(["-x", "-C"])
-        .arg(&work)
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run tar: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("tar did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not extract the tree: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("tar did not complete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("could not unpack the tree at {new}"))
-    }
+        .args(["archive", "--format=tar", &new.to_string()]);
+    let mut extract = Command::new("tar");
+    extract.args(["-x", "-C"]).arg(sandbox.work_dir());
+    crate::stream::pipe(archive, extract, &format!("syncing the tree at {new}"))
 }
 
 /// Resolve and extract every distinct toolchain named across `runnable` into

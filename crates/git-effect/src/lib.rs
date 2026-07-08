@@ -23,6 +23,7 @@ pub mod engine;
 pub mod executor;
 pub mod local;
 pub mod results;
+mod stream;
 #[cfg(test)]
 mod testutil;
 

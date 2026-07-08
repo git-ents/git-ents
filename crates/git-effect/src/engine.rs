@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::RecvTimeoutError;
@@ -817,36 +817,15 @@ pub fn ensure_sprite(sprite: &str) -> Result<(), String> {
 ///
 /// @relation(checks.sandbox, compat.sprite, compat.git)
 fn sync_tree(repo: &Path, sprite: &str, new: ObjectId) -> Result<(), String> {
-    let archive = Command::new("git")
+    let mut archive = Command::new("git");
+    archive
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", &new.to_string()])
-        .output()
-        .map_err(|e| format!("could not run git archive: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("git archive failed for {new}"));
-    }
-
+        .args(["archive", "--format=tar", &new.to_string()]);
     let script = unpack_script();
-    let mut child = Command::new("sprite")
-        .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("sprite exec did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not stream the tree into the sprite: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("sprite exec did not complete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("could not unpack the tree in the sprite".to_owned())
-    }
+    let mut unpack = Command::new("sprite");
+    unpack.args(["exec", "-s", sprite, "--", "sh", "-c", &script]);
+    crate::stream::pipe(archive, unpack, &format!("syncing the tree at {new}"))
 }
 
 /// The in-sprite script that replaces [`WORKDIR`]'s contents with the tar
@@ -1012,39 +991,18 @@ fn sync_toolchain(repo: &Path, sprite: &str, tree: ObjectId) -> Result<(), Strin
         return Ok(());
     }
 
-    let archive = Command::new("git")
+    let mut archive = Command::new("git");
+    archive
         .arg("-C")
         .arg(repo)
-        .args(["archive", "--format=tar", &tree.to_string()])
-        .output()
-        .map_err(|e| format!("could not run git archive: {e}"))?;
-    if !archive.status.success() {
-        return Err(format!("git archive failed for toolchain {tree}"));
-    }
-
+        .args(["archive", "--format=tar", &tree.to_string()]);
     let tmp = format!("{dir}.tmp");
     let script = format!(
         "rm -rf {tmp} && mkdir -p {tmp} && tar -x -C {tmp} && rm -rf {dir} && mv {tmp} {dir}"
     );
-    let mut child = Command::new("sprite")
-        .args(["exec", "-s", sprite, "--", "sh", "-c", &script])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run the sprite CLI: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("sprite exec did not accept stdin")?
-        .write_all(&archive.stdout)
-        .map_err(|e| format!("could not stream the toolchain into the sprite: {e}"))?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("sprite exec did not complete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("could not extract toolchain {tree} in the sprite"))
-    }
+    let mut unpack = Command::new("sprite");
+    unpack.args(["exec", "-s", sprite, "--", "sh", "-c", &script]);
+    crate::stream::pipe(archive, unpack, &format!("syncing toolchain {tree}"))
 }
 
 /// Fetch, sha256-verify, and extract a [`git_toolchain::Bin::Downloaded`]
