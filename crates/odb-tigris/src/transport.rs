@@ -58,6 +58,35 @@ pub trait BlobTransport: Send + Sync {
     fn copy(&self, from: &str, to: &str) -> Result<()>;
 }
 
+// Every method takes `&self`, so a shared reference is itself a transport —
+// lets one transport back both an `OdbTigris` and a maintenance pass
+// (WS9's GC sweeps the same bucket the store reads).
+impl<T: BlobTransport + ?Sized> BlobTransport for &T {
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<()> {
+        (**self).put(key, bytes)
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>> {
+        (**self).get(key)
+    }
+
+    fn get_range(&self, key: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        (**self).get_range(key, range)
+    }
+
+    fn exists(&self, key: &str) -> Result<bool> {
+        (**self).exists(key)
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        (**self).delete(key)
+    }
+
+    fn copy(&self, from: &str, to: &str) -> Result<()> {
+        (**self).copy(from, to)
+    }
+}
+
 /// Map any transport-level failure into [`git_backend::Error::ObjectStore`],
 /// prefixed with `context` so failures are traceable to the operation that
 /// caused them.

@@ -126,6 +126,44 @@ pub fn partition_and_pack(objects: Vec<ClassifiedObject>) -> Result<PartitionedP
     })
 }
 
+/// Re-index freshly encoded, self-contained pack bytes (as produced by
+/// [`pack_whole_objects`]/[`partition_and_pack`]) into `(pack_bytes,
+/// idx_bytes)` — the shape a [`crate::registry::PackRegistry`] record
+/// needs. Reuses gitoxide's own indexer
+/// (`gix_pack::Bundle::write_to_directory`, the same call
+/// [`crate::OdbTigris::stage_pack`] makes) rather than hand-rolling a
+/// second `.idx` writer; `crate::NoThinBaseLookup` is safe to reuse here
+/// for the same reason it is safe in `stage_pack`: every pack this module
+/// writes is self-contained (whole objects only, no thin-pack bases).
+///
+/// # Errors
+///
+/// Returns an error if indexing fails or the resulting files cannot be
+/// read back.
+pub fn index_pack(pack_bytes: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>)> {
+    let scratch = tempfile::tempdir()?;
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(pack_bytes));
+    let outcome = gix_pack::Bundle::write_to_directory(
+        &mut reader,
+        Some(scratch.path()),
+        &mut gix_features::progress::Discard,
+        &std::sync::atomic::AtomicBool::new(false),
+        None::<crate::NoThinBaseLookup>,
+        gix_pack::bundle::write::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::Error::ObjectStore(error.to_string()))?;
+    let data_path = outcome
+        .data_path
+        .ok_or_else(|| crate::Error::ObjectStore("pack write produced no data file".to_owned()))?;
+    let index_path = outcome
+        .index_path
+        .ok_or_else(|| crate::Error::ObjectStore("pack write produced no index file".to_owned()))?;
+    Ok((std::fs::read(data_path)?, std::fs::read(index_path)?))
+}
+
 /// Encode `objects` as a version-2 pack, every entry a full base object
 /// (mirrors `git-protocol::pack::build_pack`, this crate's precedent for
 /// "gix-pack's writer only does whole objects" — see this module's doc

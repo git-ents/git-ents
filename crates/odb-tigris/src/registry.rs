@@ -172,3 +172,32 @@ pub trait PackRegistry: Send + Sync {
     /// Returns an error if the registry cannot be written.
     fn delete_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<()>;
 }
+
+// Every method takes `&self`, so a shared reference is itself a registry —
+// lets one registry back both an `OdbTigris` and a maintenance pass (WS9's
+// GC sweeps the same registry the store reads).
+impl<R: PackRegistry + ?Sized> PackRegistry for &R {
+    fn record(&self, record: PackRecord) -> Result<()> {
+        (**self).record(record)
+    }
+
+    fn list(&self, repo_id: &str) -> Result<Vec<PackRecord>> {
+        (**self).list(repo_id)
+    }
+
+    fn delete(&self, repo_id: &str, id: &PackId) -> Result<()> {
+        (**self).delete(repo_id, id)
+    }
+
+    fn record_artifact(&self, record: ArtifactRecord) -> Result<()> {
+        (**self).record_artifact(record)
+    }
+
+    fn get_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<Option<ArtifactRecord>> {
+        (**self).get_artifact(repo_id, kind)
+    }
+
+    fn delete_artifact(&self, repo_id: &str, kind: ArtifactKind) -> Result<()> {
+        (**self).delete_artifact(repo_id, kind)
+    }
+}

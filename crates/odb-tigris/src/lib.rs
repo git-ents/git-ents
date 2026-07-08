@@ -63,6 +63,12 @@ struct Quarantine {
     pack_key: String,
     idx_key: String,
     object_count: u64,
+    /// When this quarantine was staged — the clock [`OdbTigris::promote`]
+    /// and [`OdbTigris::expire_stale_quarantines`] check against
+    /// `staging_grace` (`docs/scale-out.adoc`, correctness rule 1: "a
+    /// staging session that cannot complete within the grace window aborts
+    /// rather than becoming collectible mid-flight").
+    staged_at: std::time::Instant,
 }
 
 /// [`ObjectStore`] over an S3-compatible bucket, generic over its blob
@@ -77,6 +83,13 @@ pub struct OdbTigris<T, R> {
     hash_kind: gix_hash::Kind,
     index_cache: IndexCache,
     quarantines: Mutex<HashMap<QuarantineId, Quarantine>>,
+    /// A grace-based backend's staging-session deadline (`docs/
+    /// scale-out.adoc`, correctness rule 1). `None` (the default from
+    /// [`Self::new`]) means staging is unbounded, matching every existing
+    /// caller/test's assumption; only [`Self::with_staging_grace`] opts a
+    /// store into the bounded-staging behavior a cruft-based collector
+    /// needs (see `git-maintenance`, WS9).
+    staging_grace: Option<std::time::Duration>,
 }
 
 impl<T, R> OdbTigris<T, R>
@@ -95,7 +108,28 @@ where
             hash_kind: gix_hash::Kind::Sha1,
             index_cache: IndexCache::new(),
             quarantines: Mutex::new(HashMap::new()),
+            staging_grace: None,
         }
+    }
+
+    /// Opt this store into grace-based staging (`docs/scale-out.adoc`,
+    /// correctness rule 1): a staging session older than `grace` aborts on
+    /// [`Self::promote`] rather than promoting, and becomes eligible for
+    /// [`Self::expire_stale_quarantines`] to reap — the bounded-staging
+    /// half of causal collection safety a time-based cruft collector needs
+    /// (`crate` has no cruft collector of its own; this is the hook one
+    /// plugs into).
+    #[must_use]
+    pub fn with_staging_grace(mut self, grace: std::time::Duration) -> Self {
+        self.staging_grace = Some(grace);
+        self
+    }
+
+    /// This store's staging grace window, if any (`docs/scale-out.adoc`,
+    /// correctness rule 1) — `None` for unbounded staging, the default.
+    #[must_use]
+    pub fn staging_grace(&self) -> Option<std::time::Duration> {
+        self.staging_grace
     }
 
     fn quarantine_pack_key(&self, id: &str) -> String {
@@ -112,6 +146,42 @@ where
 
     fn live_idx_key(&self, id: &str) -> String {
         format!("{}/live/{id}.idx", self.repo_id)
+    }
+
+    /// Best-effort delete of one quarantine's staged bytes, dropping it
+    /// from the in-process map regardless of whether the transport delete
+    /// succeeds — mirrors [`Self::promote`]'s own best-effort cleanup.
+    fn expire_quarantine(&self, q: &QuarantineId) -> Result<()> {
+        if let Some(quarantine) = lock(&self.quarantines).remove(q) {
+            let _ignored = self.transport.delete(&quarantine.pack_key);
+            let _ignored = self.transport.delete(&quarantine.idx_key);
+        }
+        Ok(())
+    }
+
+    /// Reap every quarantine older than [`Self::staging_grace`], if this
+    /// store has one — the actual collection pass a grace-based cruft
+    /// collector runs (`docs/scale-out.adoc`, correctness rule 1). A no-op
+    /// returning `0` when `staging_grace` is `None`. Returns how many
+    /// quarantines were expired.
+    ///
+    /// # Errors
+    ///
+    /// Never fails today (deletes are best-effort); returns `Result` for
+    /// forward compatibility with a transport that can.
+    pub fn expire_stale_quarantines(&self) -> Result<usize> {
+        let Some(grace) = self.staging_grace else {
+            return Ok(0);
+        };
+        let stale: Vec<QuarantineId> = lock(&self.quarantines)
+            .iter()
+            .filter(|(_id, quarantine)| quarantine.staged_at.elapsed() > grace)
+            .map(|(id, _quarantine)| id.clone())
+            .collect();
+        for id in &stale {
+            self.expire_quarantine(id)?;
+        }
+        Ok(stale.len())
     }
 
     /// Every registered pack's parsed index, fetched (and cached) on
@@ -205,12 +275,32 @@ where
                 pack_key: self.quarantine_pack_key(&id),
                 idx_key: self.quarantine_idx_key(&id),
                 object_count: u64::from(outcome.index.num_objects),
+                staged_at: std::time::Instant::now(),
             },
         );
         Ok(QuarantineId::new(id))
     }
 
     fn promote(&self, q: QuarantineId) -> Result<()> {
+        // A staging session that outlived its grace window aborts rather
+        // than promotes (`docs/scale-out.adoc`, correctness rule 1): by the
+        // time a grace-based collector's deadline has passed, this session
+        // must behave as if it had already been reaped, never as a promote
+        // racing a collection pass. Peek-then-remove (rather than removing
+        // unconditionally) so an *unexpired* quarantine is unaffected by
+        // this check.
+        if let Some(grace) = self.staging_grace {
+            let expired = lock(&self.quarantines)
+                .get(&q)
+                .is_some_and(|quarantine| quarantine.staged_at.elapsed() > grace);
+            if expired {
+                let _ignored = self.expire_quarantine(&q);
+                return Err(Error::ObjectStore(format!(
+                    "quarantine {q} exceeded its staging grace window and was aborted"
+                )));
+            }
+        }
+
         let quarantine = lock(&self.quarantines)
             .remove(&q)
             .ok_or_else(|| Error::ObjectStore(format!("unknown quarantine {q}")))?;
