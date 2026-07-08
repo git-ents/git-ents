@@ -133,7 +133,7 @@ CREATE INDEX IF NOT EXISTS git_ents_corpus_log_repo_idx
 
 -- Reachability artifacts (WS6, `docs/scale-out.adoc`'s "Reachability"
 -- section): the commit-graph and reachable-set accelerators
--- `git-reachability`'s maintenance effect generates, tracked here rather
+-- `gix-reachability`'s maintenance effect generates, tracked here rather
 -- than by bucket listing, same as packs above. One row per `(repo_id,
 -- kind)` — regenerating overwrites the existing row instead of
 -- accumulating snapshots, so `kind` alone (not a generated id) is enough to

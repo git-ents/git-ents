@@ -572,10 +572,10 @@ version = "0.0.0"
 dependencies = [
  "git-backend",
  "git-protocol",
- "git-reachability",
  "git-store",
  "gix-hash",
  "gix-object",
+ "gix-reachability",
  "odb-files",
  "refstore-files",
  "tempfile",
@@ -1628,10 +1628,10 @@ dependencies = [
  "git-ents-core",
  "git-member",
  "git-protocol",
- "git-reachability",
  "git-store",
  "gix-hash",
  "gix-object",
+ "gix-reachability",
  "odb-files",
  "refstore-files",
  "tempfile",
@@ -1725,7 +1725,6 @@ dependencies = [
  "git-maintenance",
  "git-member",
  "git-protocol",
- "git-reachability",
  "git-signed-push",
  "git-store",
  "git-toolchain",
@@ -1733,6 +1732,7 @@ dependencies = [
  "gix-date",
  "gix-hash",
  "gix-object",
+ "gix-reachability",
  "maud",
  "odb-files",
  "odb-tigris",
@@ -1755,9 +1755,9 @@ dependencies = [
  "git-ents-core",
  "git-member",
  "git-protocol",
- "git-reachability",
  "gix-hash",
  "gix-object",
+ "gix-reachability",
  "odb-files",
  "odb-tigris",
  "refstore-files",
@@ -1774,11 +1774,11 @@ dependencies = [
  "effect-dispatcher",
  "git-backend",
  "git-protocol",
- "git-reachability",
  "git-store",
  "gix-hash",
  "gix-object",
  "gix-pack",
+ "gix-reachability",
  "odb-files",
  "odb-tigris",
  "refstore-files",
@@ -1808,7 +1808,6 @@ dependencies = [
  "git-backend",
  "git-ents-core",
  "git-member",
- "git-reachability",
  "git-signed-push",
  "gix",
  "gix-actor",
@@ -1817,25 +1816,10 @@ dependencies = [
  "gix-hash",
  "gix-object",
  "gix-pack",
+ "gix-reachability",
  "odb-files",
  "refstore-files",
  "rstest",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "git-reachability"
-version = "0.0.0"
-dependencies = [
- "git-backend",
- "gix-actor",
- "gix-date",
- "gix-hash",
- "gix-object",
- "odb-files",
- "odb-tigris",
- "refstore-files",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -2504,6 +2488,22 @@ dependencies = [
  "bstr",
  "gix-error",
  "gix-utils",
+]
+
+[[package]]
+name = "gix-reachability"
+version = "0.0.0"
+dependencies = [
+ "git-backend",
+ "gix-actor",
+ "gix-date",
+ "gix-hash",
+ "gix-object",
+ "odb-files",
+ "odb-tigris",
+ "refstore-files",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

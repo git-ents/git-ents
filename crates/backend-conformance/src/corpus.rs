@@ -62,7 +62,7 @@ pub fn replay_corpus(
 }
 
 /// The set of every object reachable from `refs`' current tips over
-/// `objects` — a thin wrapper over [`git_reachability::gc_mark`] (no
+/// `objects` — a thin wrapper over [`gix_reachability::gc_mark`] (no
 /// reachability artifacts, so a plain walk) for a replay test to compare
 /// between the original backend and the one it replayed a corpus into.
 ///
@@ -73,8 +73,8 @@ pub fn replay_corpus(
 pub fn reachable_object_set(
     refs: &dyn RefStore,
     objects: &dyn ObjectStore,
-) -> git_reachability::Result<BTreeSet<ObjectId>> {
-    git_reachability::gc_mark(refs, objects, &git_reachability::ArtifactBundle::empty())
+) -> gix_reachability::Result<BTreeSet<ObjectId>> {
+    gix_reachability::gc_mark(refs, objects, &gix_reachability::ArtifactBundle::empty())
 }
 
 #[cfg(test)]

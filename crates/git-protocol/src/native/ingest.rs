@@ -26,7 +26,7 @@ use git_backend::{Expected, PackStream, RefEdit, RefName, TxOutcome};
 use gix_hash::ObjectId;
 use gix_object::Kind;
 
-use git_reachability::engine::accelerated_reachable;
+use gix_reachability::engine::accelerated_reachable;
 
 use super::{BackendResolver, NativeBackend};
 use crate::attestation::{self, OP_LOG_REF};
@@ -46,14 +46,14 @@ struct IncomingPackSource<'a> {
 }
 
 impl ObjectSource for IncomingPackSource<'_> {
-    fn find(&self, id: &ObjectId) -> git_reachability::Result<Option<(Kind, Vec<u8>)>> {
+    fn find(&self, id: &ObjectId) -> gix_reachability::Result<Option<(Kind, Vec<u8>)>> {
         if let Some(bundle) = self.bundle {
             let mut buf = Vec::new();
             let mut inflate = gix_features::zlib::Inflate::default();
             let mut cache = gix_pack::cache::Never;
             if let Some((data, _location)) = bundle
                 .find(id, &mut buf, &mut inflate, &mut cache)
-                .map_err(|error| git_reachability::Error::Decode(error.to_string()))?
+                .map_err(|error| gix_reachability::Error::Decode(error.to_string()))?
             {
                 return Ok(Some((data.kind, data.data.to_vec())));
             }
@@ -137,7 +137,7 @@ impl<R: BackendResolver> IngestPack for NativeBackend<R> {
         );
         match connectivity {
             Ok(_reachable) => {}
-            Err(git_reachability::Error::MissingObject(id)) => {
+            Err(gix_reachability::Error::MissingObject(id)) => {
                 return Ok(PushOutcome::Rejected {
                     reason: format!("connectivity check failed: missing object {id}"),
                 });

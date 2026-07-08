@@ -16,10 +16,10 @@ members = [
     "crates/git-maintenance",
     "crates/git-member",
     "crates/git-protocol",
-    "crates/git-reachability",
     "crates/git-signed-push",
     "crates/git-store",
     "crates/git-toolchain",
+    "crates/gix-reachability",
     "crates/odb-baked",
     "crates/odb-files",
     "crates/odb-tiered",
@@ -83,10 +83,10 @@ git-hydrate = { path = "crates/git-hydrate" }
 git-maintenance = { path = "crates/git-maintenance" }
 git-member = { path = "crates/git-member" }
 git-protocol = { path = "crates/git-protocol" }
-git-reachability = { path = "crates/git-reachability" }
 git-signed-push = { path = "crates/git-signed-push" }
 git-store = { path = "crates/git-store" }
 git-toolchain = { path = "crates/git-toolchain" }
+gix-reachability = { path = "crates/gix-reachability" }
 odb-baked = { path = "crates/odb-baked" }
 odb-files = { path = "crates/odb-files" }
 odb-tiered = { path = "crates/odb-tiered" }

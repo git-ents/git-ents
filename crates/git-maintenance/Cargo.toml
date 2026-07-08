@@ -10,7 +10,7 @@ backend-conformance = { workspace = true }
 effect-dispatcher = { workspace = true }
 git-backend = { workspace = true }
 git-protocol = { workspace = true }
-git-reachability = { workspace = true }
+gix-reachability = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 gix-pack = { workspace = true }

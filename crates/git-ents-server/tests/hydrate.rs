@@ -281,8 +281,8 @@ fn reachable_from_heads(
         .unwrap()
         .map(|entry| entry.unwrap().1)
         .collect();
-    let source = git_reachability::walk::StoreSource::new(objects);
-    git_reachability::walk::reachable(roots, &source, |_id| false, false).unwrap()
+    let source = gix_reachability::walk::StoreSource::new(objects);
+    gix_reachability::walk::reachable(roots, &source, |_id| false, false).unwrap()
 }
 
 fn keygen(base: &Path, name: &str) -> PathBuf {

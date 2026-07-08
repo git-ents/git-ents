@@ -3,7 +3,7 @@
 //! ref-update volume thresholds").
 //!
 //! The maintenance effects — GC, cache TTL, consolidation, and
-//! reachability regeneration ([`git_reachability::maintenance`], whose
+//! reachability regeneration ([`gix_reachability::maintenance`], whose
 //! scheduling WS6 explicitly deferred here) — are defined as
 //! [`EffectDef`]s and enqueued by [`schedule_maintenance`] whenever a
 //! repo's accumulated ref-update volume crosses its threshold. The
@@ -17,7 +17,7 @@
 //! rows are the schedule, and the runner executes the bodies
 //! ([`crate::gc::collect`], [`crate::cache::evict_expired`],
 //! [`crate::cache::consolidate`],
-//! [`git_reachability::maintenance::regenerate`]) under the per-repo
+//! [`gix_reachability::maintenance::regenerate`]) under the per-repo
 //! advisory lock ([`crate::lock`]).
 
 use std::collections::{BTreeMap, HashMap};
@@ -38,7 +38,7 @@ pub const CONSOLIDATION_EFFECT: &str = "maintenance-cache-consolidation";
 
 /// The static [`EffectDef`] for one in-process maintenance effect —
 /// `command`/`image` `None`, mirroring
-/// [`git_reachability::maintenance::definition`].
+/// [`gix_reachability::maintenance::definition`].
 fn definition(name: &str) -> EffectDef {
     EffectDef {
         name: name.to_owned(),
@@ -49,7 +49,7 @@ fn definition(name: &str) -> EffectDef {
 
 /// The ref-update volume thresholds that trigger maintenance. Two knobs
 /// because reachability regeneration has its own trigger predicate
-/// ([`git_reachability::maintenance::should_regenerate`]) and may
+/// ([`gix_reachability::maintenance::should_regenerate`]) and may
 /// reasonably fire less often than repack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Thresholds {
@@ -57,7 +57,7 @@ pub struct Thresholds {
     /// enqueued.
     pub maintenance: u64,
     /// Ref updates before reachability regeneration rides along
-    /// ([`git_reachability::maintenance::should_regenerate`]).
+    /// ([`gix_reachability::maintenance::should_regenerate`]).
     pub reachability: u64,
 }
 
@@ -92,7 +92,7 @@ pub trait MaintenanceSink: Send + Sync {
 /// Enqueue `repo_id`'s maintenance effects into `sink` if `stats` crosses
 /// `thresholds.maintenance` — GC, cache TTL, consolidation, plus
 /// reachability regeneration when
-/// [`git_reachability::maintenance::should_regenerate`] says the volume
+/// [`gix_reachability::maintenance::should_regenerate`] says the volume
 /// also warrants that. Returns what was enqueued (empty below threshold).
 ///
 /// # Errors
@@ -114,11 +114,11 @@ pub fn schedule_maintenance(
         definition(CACHE_TTL_EFFECT),
         definition(CONSOLIDATION_EFFECT),
     ];
-    if git_reachability::maintenance::should_regenerate(
+    if gix_reachability::maintenance::should_regenerate(
         stats.ref_updates_since_last,
         thresholds.reachability,
     ) {
-        effects.push(git_reachability::maintenance::definition());
+        effects.push(gix_reachability::maintenance::definition());
     }
     sink.enqueue(repo_id, &effects)?;
     Ok(effects)

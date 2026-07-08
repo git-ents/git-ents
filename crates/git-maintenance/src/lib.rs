@@ -9,7 +9,7 @@
 //!
 //! The pieces, one module each:
 //!
-//! - [`gc`] — mark ([`git_reachability::gc_mark`], artifacts as
+//! - [`gc`] — mark ([`gix_reachability::gc_mark`], artifacts as
 //!   accelerator) and sweep (over the pack registry, never a bucket
 //!   listing and *structurally* never quarantine — see the module doc).
 //! - [`cache`] — TTL eviction of cache refs and the consolidation effect,
@@ -21,7 +21,7 @@
 //! - [`schedule`] — the maintenance [`git_backend::EffectDef`]s and the
 //!   [`schedule::Scheduler`] a server calls post-ingest to enqueue them on
 //!   ref-update volume thresholds (including reachability regeneration via
-//!   [`git_reachability::maintenance::should_regenerate`], the trigger WS6
+//!   [`gix_reachability::maintenance::should_regenerate`], the trigger WS6
 //!   left for this crate to schedule).
 //! - [`collector`] — real [`backend_conformance::Collector`]s over the
 //!   files and Tigris backends, closing the seam WS2 left open: the

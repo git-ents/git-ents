@@ -251,7 +251,7 @@ impl BackendResolver for DiskResolver {
             // reachability artifacts is future work, same caveat
             // `DiskResolver` in `git-ents-server` carries (absence
             // degrades speed, never answers).
-            reachability: git_reachability::ArtifactBundle::empty(),
+            reachability: gix_reachability::ArtifactBundle::empty(),
         })
     }
 }

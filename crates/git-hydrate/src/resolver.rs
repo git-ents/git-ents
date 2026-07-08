@@ -83,7 +83,7 @@ impl BackendResolver for PostgresResolver {
             // No reachability artifacts wired for this resolver yet (same
             // gap `DiskResolver` documents): negotiation/ingest degrade to
             // the plain walk, never a wrong answer.
-            reachability: git_reachability::ArtifactBundle::empty(),
+            reachability: gix_reachability::ArtifactBundle::empty(),
         })
     }
 }

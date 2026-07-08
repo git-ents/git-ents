@@ -2,7 +2,7 @@
 //! (`docs/scale-out.adoc`, "Reachability": "absence or staleness degrades
 //! speed, never answers"): over several generated DAG shapes, the
 //! commit-graph-accelerated walk must return exactly the same reachable set
-//! as the plain one, and a stale cached [`git_reachability::reachable_set::
+//! as the plain one, and a stale cached [`gix_reachability::reachable_set::
 //! ReachableSetArtifact`] must still yield a correct answer once new commits
 //! have landed past the frontier it was built from.
 //!
@@ -16,11 +16,11 @@
 use std::path::Path;
 use std::process::Command;
 
-use git_reachability::commitgraph::CommitGraph;
-use git_reachability::engine::{self, ArtifactBundle};
-use git_reachability::reachable_set::ReachableSetArtifact;
-use git_reachability::walk::{self, StoreSource};
 use gix_hash::ObjectId;
+use gix_reachability::commitgraph::CommitGraph;
+use gix_reachability::engine::{self, ArtifactBundle};
+use gix_reachability::reachable_set::ReachableSetArtifact;
+use gix_reachability::walk::{self, StoreSource};
 
 fn bare_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();

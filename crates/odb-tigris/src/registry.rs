@@ -62,8 +62,8 @@ pub struct PackRecord {
 }
 
 /// Which reachability accelerator an [`ArtifactRecord`] holds — see
-/// `git-reachability` (`docs/scale-out.adoc`, "Reachability" / WS6) for the
-/// binary formats themselves. Named here, rather than in `git-reachability`,
+/// `gix-reachability` (`docs/scale-out.adoc`, "Reachability" / WS6) for the
+/// binary formats themselves. Named here, rather than in `gix-reachability`,
 /// because the registry (this trait) is the thing both that crate and its
 /// Postgres implementation (`refstore-postgres`) need to agree on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +99,7 @@ impl ArtifactKind {
 
 /// One reachability artifact registered for a repo: enough to fetch its
 /// bytes from the bucket. A repo has at most one live artifact per
-/// [`ArtifactKind`] — regenerating (`git-reachability`'s maintenance effect)
+/// [`ArtifactKind`] — regenerating (`gix-reachability`'s maintenance effect)
 /// overwrites it, rather than accumulating snapshots, so lookup is by
 /// `(repo_id, kind)` alone.
 #[derive(Debug, Clone, PartialEq, Eq)]

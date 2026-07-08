@@ -3,7 +3,7 @@
 //!
 //! # Mark
 //!
-//! [`collect`] marks with [`git_reachability::gc_mark`] — every object
+//! [`collect`] marks with [`gix_reachability::gc_mark`] — every object
 //! reachable from every current ref tip, accelerated by whatever
 //! reachability artifacts the repo has (absence degrades speed, never
 //! answers). A second, durable-tips-only walk splits the marked set into
@@ -48,8 +48,8 @@ use std::collections::BTreeSet;
 
 use git_backend::cache_ns;
 use git_backend::{ObjectStore, RefName, RefStore};
-use git_reachability::walk::StoreSource;
 use gix_hash::ObjectId;
+use gix_reachability::walk::StoreSource;
 use odb_tigris::pack_writer::{ClassifiedObject, LifetimeClass, index_pack, partition_and_pack};
 use odb_tigris::registry::{PackId, PackRecord, PackRegistry};
 use odb_tigris::transport::BlobTransport;
@@ -82,9 +82,9 @@ pub fn collect(
     transport: &dyn BlobTransport,
     registry: &dyn PackRegistry,
 ) -> Result<GcOutcome> {
-    let artifacts = git_reachability::store::load_bundle(transport, registry, repo_id)
+    let artifacts = gix_reachability::store::load_bundle(transport, registry, repo_id)
         .map_err(|error| Error::ObjectStore(error.to_string()))?;
-    let marked = git_reachability::gc_mark(refs, objects, &artifacts)
+    let marked = gix_reachability::gc_mark(refs, objects, &artifacts)
         .map_err(|error| Error::ObjectStore(error.to_string()))?;
     let durable = durable_reachable(refs, objects, &artifacts)?;
 
@@ -137,7 +137,7 @@ pub fn collect(
 fn durable_reachable(
     refs: &dyn RefStore,
     objects: &dyn ObjectStore,
-    artifacts: &git_reachability::ArtifactBundle,
+    artifacts: &gix_reachability::ArtifactBundle,
 ) -> Result<BTreeSet<ObjectId>> {
     let tips = refs
         .iter_prefix(&RefName::new("refs/"))?
@@ -148,7 +148,7 @@ fn durable_reachable(
         .map(|entry| entry.map(|(_name, oid)| oid))
         .collect::<git_backend::Result<Vec<ObjectId>>>()?;
     let source = StoreSource::new(objects);
-    git_reachability::accelerated_reachable(tips, &source, |_id| false, false, artifacts)
+    gix_reachability::accelerated_reachable(tips, &source, |_id| false, false, artifacts)
         .map_err(|error| Error::ObjectStore(error.to_string()))
 }
 
@@ -273,7 +273,7 @@ pub fn collect_files(repo: &std::path::Path) -> Result<FilesGcOutcome> {
         let refs = refstore_files::FilesRefStore::open(repo)?;
         let objects = odb_files::OdbFiles::open(repo)?;
         let marked =
-            git_reachability::gc_mark(&refs, &objects, &git_reachability::ArtifactBundle::empty())
+            gix_reachability::gc_mark(&refs, &objects, &gix_reachability::ArtifactBundle::empty())
                 .map_err(|error| Error::ObjectStore(error.to_string()))?;
 
         let pack_dir = repo.join("objects").join("pack");

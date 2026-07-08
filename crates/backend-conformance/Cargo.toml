@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 git-backend = { workspace = true }
 git-protocol = { workspace = true }
-git-reachability = { workspace = true }
+gix-reachability = { workspace = true }
 git-store = { workspace = true, features = ["test-support"] }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }

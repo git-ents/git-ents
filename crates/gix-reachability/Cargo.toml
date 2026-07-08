@@ -1,5 +1,5 @@
 [package]
-name = "git-reachability"
+name = "gix-reachability"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true

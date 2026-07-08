@@ -2,13 +2,13 @@
 //! same reachability walk ([`crate::walk`]) negotiation, push connectivity
 //! checking, and GC mark all share (`docs/scale-out.adoc`, "Reachability").
 //!
-//! Routed through [`git_reachability::engine::accelerated_reachable`]
+//! Routed through [`gix_reachability::engine::accelerated_reachable`]
 //! (WS6): a commit-graph and, whenever a client's `haves` happen to equal a
 //! server-known tip-frontier, a cached reachable-set snapshot both
 //! accelerate this — absent either artifact, it is exactly the
 //! correctness-first, one-object-at-a-time walk it always was.
 
-use git_reachability::engine::accelerated_reachable;
+use gix_reachability::engine::accelerated_reachable;
 
 use super::{BackendResolver, NativeBackend};
 use crate::types::{NegotiationState, PackPlan};

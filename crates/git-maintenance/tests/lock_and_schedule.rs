@@ -116,7 +116,7 @@ fn schedule_maintenance_enqueues_all_four_effects_at_threshold() {
             git_maintenance::schedule::GC_EFFECT,
             git_maintenance::schedule::CACHE_TTL_EFFECT,
             git_maintenance::schedule::CONSOLIDATION_EFFECT,
-            git_reachability::maintenance::EFFECT_NAME,
+            gix_reachability::maintenance::EFFECT_NAME,
         ]
     );
     let enqueued = sink.enqueued.lock().unwrap();

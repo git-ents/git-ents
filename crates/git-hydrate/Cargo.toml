@@ -10,7 +10,7 @@ git-backend = { workspace = true }
 git-ents-core = { workspace = true }
 git-member = { workspace = true }
 git-protocol = { workspace = true }
-git-reachability = { workspace = true }
+gix-reachability = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 odb-tigris = { workspace = true }
