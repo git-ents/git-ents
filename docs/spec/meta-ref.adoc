@@ -1,291 +1,97 @@
 == The Meta-Ref
 
-One entity per ref under `refs/meta/*`.
-The meta-ref is simultaneously the unit of storage, sync, authorization, and
-history; the typed tree (a `Facet` struct mapped to a git tree) is what lives
-behind it.
-The entities below are all instances of this one abstraction.
+A ref under `refs/meta/*` is simultaneously the unit of storage,
+synchronization, authorization, and history for one piece of forge state.
+The typed tree — a `#[derive(Facet)]` struct mapped directly onto a git
+tree by `facet-git-tree` — is what lives behind it.
+The entities that live on meta-refs (members, comments, effects, results,
+toolchains, accounts) are specified in `model.adoc`; this file specifies
+the ref and the tree, not what they hold.
 
-[role="requirement", id="storage.bare"]
-.Persistent Bare Repository
---
-Repository state MUST be persisted in a bare Git repository on durable
-storage, created automatically on the first push to any previously unused
-name and never deleted by the server.
---
+'''''
 
-[role="requirement", id="storage.meta-ref"]
-.Meta-Ref Documents
---
-All structured server-side state (members, configuration, checks, run
-results, issues, comments, account profiles) MUST be stored as typed
-documents on dedicated `refs/meta/*` refs, one ref per document or per
-entity, using the `facet-git-tree` serialization: each document becomes a git
-tree, wrapped in a commit parented on the ref's prior tip, so every write is
-a fast-forward and every ref's commit chain is the document's full history.
+=== Namespace and Granularity
 
-A document's `Facet` shape IS its on-disk format.
-An incompatible change (a renamed field, a changed field type) silently
-breaks reading data already on a ref.
-Each document type MUST carry a load test against a hand-built fixture in
-the exact on-disk layout.
+[role="requirement", id="meta-ref.namespace"]
+.The refs/meta/* Namespace
+--
+All forge state MUST live under `refs/meta/*`.
+A meta-ref MUST point at a commit whose tree is the entity itself, so the
+ref is simultaneously the unit of storage (the commit's tree),
+synchronization (fetching or pushing the ref moves exactly that entity),
+authorization (refname-keyed rules gate who may advance it), and history
+(its commit chain is the audit trail).
 --
 
-[role="requirement", id="storage.concurrency"]
-.Concurrent Writes
+[role="requirement", id="meta-ref.granularity"]
+.Granularity Rule
 --
-Concurrent writes to the same `refs/meta/*` ref MUST use compare-and-swap.
-When a write finds the ref has moved since it was read, the writer MUST
-attempt a structural three-way merge of the document (base / ours / theirs):
-non-overlapping changes — different fields, or different entries of a
-collection — MUST merge cleanly.
-A genuine conflict (the same scalar changed two different ways) MUST fail
-cleanly so the caller can reload and reapply.
-Data MUST NEVER be silently overwritten and a real conflict MUST NEVER be
-silently resolved by picking a winner.
-An in-place state advance (a run's progression) is a deliberate replace and
-MUST fail cleanly on a race rather than merge.
+A meta-ref MUST hold exactly one independently-authored entity:
+`refs/meta/member/*`, `refs/meta/comments/*`, `refs/meta/effects/*`, and
+`refs/meta/results/*` each decompose one ref per entity.
+Repository-global state with a single writer-of-record MUST instead live
+on one fixed ref, such as `refs/meta/account` or `refs/meta/config`.
+Entities that different actors write concurrently MUST NOT share a ref.
+Writes to a meta-ref MUST stay conflict-free — no two concurrent writers
+ever race the same compare-and-swap — and reads aggregate multiple refs
+into a view rather than depending on a shared, contended one.
 --
 
-=== Invariants
-
-How `git-store` (the crate implementing <<storage.meta-ref>> and
-<<storage.concurrency>>) makes the storage invariants explicit in code, so
-the next module reuses them instead of re-inventing them.
-Documented, not mandated.
-
-Key strategy::
-  Every document is one of three shapes.
-  A *singleton* lives on one fixed ref (`config`, `account`,
-  `revoked`, `issue-number`): `Store::load`/`store`.
-  A *named collection* is one-ref-per-item under a namespace prefix
-  (`member/<username>`, `toolchains/<name>`, `effects/<name>`,
-  `results/<effect>/<short-oid>`, `cache/<name>`) or a scalar-keyed map on a
-  single ref
-  (`revoked/<fingerprint>`): `Store::load_item`/`store_item`,
-  `load_map`/`store_map`.
-  A *content-addressed* collection is keyed by the hash of its own content
-  (`issues/<id>`, `comments/<id>`) via the shared `git_store::new_id`
-  (origin-or-content-hash), so filing an item never contends a counter and
-  the identity rule cannot drift between collections.
-
-Raw trees::
-  A field holding an arbitrary directory (a toolchain's `src`, or an
-  embedded `bin`) is a `facet_git_tree::RawTree` — a passthrough wrapping an
-  already-written tree's object id.
-  `Store::store_tree`/`ref_tree` write and read the document's root tree
-  directly, since such a subtree must exist in the object database before
-  the document referencing it can be assembled.
-
-Authored collections::
-  A collection whose documents treat the commit as the record
-  (`comments/<id>`) writes through `Store::store_item_authored`, stamping
-  the acting human on the ref's commit, and reads authorship back through
-  `Store::provenance`/`item_provenance`.
-  Neither an author nor a timestamp field is duplicated into the document
-  tree.
-
-Collection-key safety::
-  `git_store::ref_segment_ok` is the one place a collection key is checked
-  before it becomes a ref path segment or tree entry name: 1-64 ASCII
-  alphanumerics, `.`, `_`, `-`, or `:`, never starting with `.`, never
-  containing `/`.
-  `Store::store_item`, `store_keyed`, and `store_map` all enforce it,
-  failing with `Error::InvalidKey`.
-
-Domain validation::
-  A type carrying an invariant the type system cannot express (a validity
-  window must not be inverted) exposes its own `validate` and calls it from
-  its own `store`, returning `git_store::Error::Invalid` — for every caller,
-  not just the CLI command that builds the value today.
-
-Closed sets are enums::
-  A value the spec enumerates (`Issue.state`, a run's status) is a
-  facet-derived enum, not a `String`, so an invalid value cannot be
-  constructed.
-
-=== Members
-
-[role="requirement", id="members.ref"]
-.Member Refs
+[role="requirement", id="meta-ref.inbox"]
+.Inbox and Self-Run Namespaces
 --
-The push trust root MUST be the set of refs matching `refs/meta/member/*`;
-each ref `refs/meta/member/<username>` holds one `Member` document for the
-person named by the ref's last segment.
-The set is decomposed — one ref per person — so adding, refreshing, or
-revoking a member is an independent, separately-historied operation.
+`refs/meta/inbox/*` MUST hold entities authored by someone not authorized
+for the corresponding canonical ref, awaiting adoption.
+`refs/meta/results/~<member>/<effect>/<short-oid>` MUST hold results a
+member produced on their own executor rather than a designated worker,
+mirroring the canonical results pattern (<<effect.results-writeback>>)
+under the member's own namespace.
+Both namespaces MUST hold the same typed trees as their canonical
+counterparts (<<meta-ref.typed-tree>>); only the refname rule differs.
 --
 
-[role="requirement", id="members.trust"]
-.Member Trust Modes
+=== The Typed Tree
+
+[role="requirement", id="meta-ref.typed-tree"]
+.The Struct Is the Schema
 --
-A member's trust MUST rest on exactly one of three mutually exclusive bases:
-
-Keys::
-  A set of leaf signing keys, mapping each fingerprint to its OpenSSH public
-  key.
-  The solo and small-team default.
-
-Certificate Authority::
-  A pinned certificate authority's OpenSSH public key; any certificate the
-  CA issues for the member's principal, within the certificate's own
-  validity window, is trusted.
-  Rotation, expiry, and new devices require no edit to the member ref.
-
-WebAuthn::
-  A set of passkey credentials in CASE form, keyed by credential ID, each
-  with a human-readable label.
-  WebAuthn credentials authorize browser sign-in only and MUST NOT produce
-  `allowed_signers` lines or authorize git push.
+A Rust struct annotated `#[derive(Facet)]` MUST be the storage schema for
+its entity: `facet-git-tree` MUST map the struct directly onto a git
+tree, with no serialization format interposed that could version
+independently of the struct itself.
+A tree MUST stay a pure representation of its struct; it MUST NOT carry
+a version-marker entry.
 --
 
-[role="requirement", id="members.provenance"]
-.Member Provenance
+[role="requirement", id="meta-ref.trailers"]
+.Reserved Commit Trailers
 --
-Every member MUST carry a `provenance` recording whether they were
-admin-registered or self-attested via web onboarding; a member ref written
-before this field existed MUST load as admin-registered.
-A self-attested member MUST be granted limited trust: the web service MUST
-refuse their writes outside issues and comments (<<web.comments>>), and they
-MUST NOT be trusted for signed git push, until an admin promotes them.
---
-
-[role="requirement", id="members.account"]
-.Account Link
---
-A member MAY carry an optional `account` field `@`-mentioning their account
-repository by its genesis identity (<<account.genesis>>), so the link
-survives the account repository moving or being renamed.
-An absent field means no account is linked.
+Ref-level metadata that is not entity content MUST live in the mutation
+commit's trailers, never inside the tree (<<meta-ref.typed-tree>>).
+Two trailers are reserved: `Schema-Version:`, for explicit encoding
+detection if it is ever needed, and `Ents-Ref:`, for binding the commit
+to the refname it was authored for.
 --
 
-[role="requirement", id="members.window"]
-.Trust Window
+=== Tip Invariant and Migration
+
+[role="requirement", id="meta-ref.tip-invariant"]
+.Tip Invariant
 --
-A member MAY carry an optional `valid-after` / `valid-before` window,
-expressed as OpenSSH timestamps (`YYYYMMDD[Z]` or `YYYYMMDDHHMM[SS][Z]`).
-An un-refreshed member whose window has lapsed MUST stop authorizing new
-pushes — stale trust fails closed.
-A previously-valid push MUST remain verifiable forever by pinning the
-verification time to the push date via `ssh-keygen -Y verify -Overify-time`.
+The tip of a meta-ref MUST always be readable by the current binary;
+only history is archival.
+A reader that encounters a withheld (redacted) object while reading a
+meta-ref's tip MUST surface a redaction marker, never an error
+(<<receive.redaction-ingest>>) — the sole qualification to this
+invariant.
 --
 
-[role="requirement", id="members.allowed-signers"]
-.Allowed Signers Rendering
+[role="requirement", id="meta-ref.migration"]
+.Migration as Commit
 --
-The server MUST render the live member set as an OpenSSH `allowed_signers`
-file for `ssh-keygen -Y verify`: the principal column a wildcard (`*`), each
-member's validity window as comma-joined options (`valid-after`,
-`valid-before`), each leaf key on its own line, a pinned CA as a
-`cert-authority` line, and every line carrying `namespaces="git"`.
---
-
-=== Revocations
-
-[role="requirement", id="revocations.ref"]
-.Revocation List
---
-A single ref, `refs/meta/revoked`, MUST hold the revocation list: a map from
-fingerprint to a free-text reason.
-This is the "faster than expiry" override: the server MUST subtract every
-revoked fingerprint from the trust set before verifying a push.
---
-
-[role="requirement", id="revocations.ca"]
-.CA Revocation
---
-Revoking a certificate authority MUST be done by removing the CA member's
-ref.
-A CA is named by its ref, not a fingerprint, so the revocation list operates
-only on leaf-key fingerprints.
---
-
-=== Account
-
-[role="requirement", id="account.ref"]
-.Account Profile
---
-A repository becomes an account repository by carrying a `refs/meta/account`
-ref.
-The `Account` document at that ref MUST hold: `username`, `display_name`,
-`bio`, and `created_at` (seconds since the Unix epoch).
-The username is authoritative in the document; the repository path is
-convention, not trust.
---
-
-[role="requirement", id="account.genesis"]
-.Account Identity
---
-An account's stable, path-independent identity MUST be the content hash of
-the first `Account` document ever recorded on its ref — fixed at creation,
-so later profile edits never change it and a reference to the account
-(<<members.account>>) survives the account repository moving.
-The identity MUST be derived from the ref's history, never stored as a
-field.
---
-
-=== Config
-
-[role="requirement", id="config.ref"]
-.Configuration Ref
---
-A repository's loose metadata MUST be stored at `refs/meta/config` as a
-`Config` document with fields: `description`, `homepage`, and `topics`.
-An absent ref MUST yield the default (all empty).
-Metadata on a meta ref means a content push cannot rewrite it, and it
-carries its own independent history.
---
-
-=== Issues
-
-[role="requirement", id="issues.ref"]
-.Issue Documents
---
-Each issue MUST be stored at `refs/meta/issues/<id>` as an `Issue` document
-with fields: `title`, `body`, `state` (`open` or `closed`), `labels` (plain
-strings, no separate registry), `author`, and `id` (the friendly number
-below).
-One ref per issue keeps issues independently loadable and separately
-historied; the ref's commit chain is the issue's edit history.
---
-
-[role="requirement", id="issues.id"]
-.Issue Identity
---
-An issue's stable identifier MUST be a content hash — the object id of the
-originating object, or of the issue's own initial content when it has none
-upstream — and MUST be the issue ref's last path segment, never renamed.
-An issue MAY additionally carry a friendly sequential number, assigned only
-when a maintainer promotes it; only promotion advances the number counter,
-so filing an issue never contends it.
-Any cross-referencing feature MUST key off the stable content-hash
-identifier, not the friendly number.
---
-
-=== Comments
-
-[role="requirement", id="comments.ref"]
-.Comment Documents
---
-Each code comment MUST be stored at `refs/meta/comments/<id>` as a `Comment`
-document with fields: `body`, `anchor` (<<comments.anchor>>), and an
-optional `issue` cross-referencing an issue by its genesis id
-(<<issues.id>>); an absent `issue` means a free-standing comment.
-The identifier MUST follow the same genesis-key rule as an issue and is
-never renamed.
-One ref per comment keeps comments independently loadable and separately
-historied; the ref's commit chain is the comment's edit history.
-The document's stored tree additionally carries the retained blob and
-surrounding-lines window described in <<anchor.reachability>>; this is
-storage plumbing, not a `Comment` field, and is invisible to any reader of
-the document's public shape.
---
-
-[role="requirement", id="comments.authorship"]
-.Authorship From the Commit Chain
---
-A comment's author and timestamps MUST NOT be stored in the document tree.
-The creator is the author of the ref's first commit and the last editor is
-the author of its tip commit; both MUST be recovered from the commit chain
-at read time.
+Changing an entity's struct MUST be performed as a storage migration:
+rewrite the tree under the new struct and commit it on top of the ref's
+old tip, signed like any other mutation.
+History MUST keep the old encoding as archive; a struct change MUST NOT
+rewrite or delete a prior commit on the ref.
 --

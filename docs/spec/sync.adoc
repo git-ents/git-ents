@@ -1,0 +1,61 @@
+== Sync
+
+`git ents` adds exactly one capability over the local primitives: remote
+synchronization, which fetches the relevant `refs/meta/*` before acting.
+Sync moves the forge itself, not merely code, and it is the frontend that
+turns the gate's verdict (<<gate.call-sites>>) into a decision the user acts
+on before pushing.
+
+[role="requirement", id="sync.forge-transfer"]
+.Clone Moves the Whole Forge
+--
+Fetching or pushing meta-refs MUST move the entire forge, not a subset of
+convenience: a clone plus `refs/meta/*` MUST carry the complete audit
+history and the signatures needed to verify it, with no server-side data
+left behind.
+--
+
+[role="requirement", id="sync.pre-flight"]
+.Pre-Flight Uses the Same Gate
+--
+Push pre-flight MUST evaluate the identical gate function
+(<<gate.tip-signed>> through <<gate.atomic-cas>>) that the hosted store
+runs at CAS time (<<gate.mandatory-hosted>>).
+A pre-flight verdict MUST be reported as a prediction that can only be
+stale, never as one that can be wrong about the rules
+(<<gate.call-sites>>).
+--
+
+[role="requirement", id="sync.inbox-routing"]
+.Rejection Routes to the Inbox
+--
+When pre-flight predicts, or the canonical store actually returns, a
+rejection of a push to a canonical meta-ref, sync MUST offer to route the
+same commit to the author's `refs/meta/inbox/*` ref instead of discarding
+it.
+--
+
+[role="requirement", id="sync.divergence-merge"]
+.Schema-Aware Divergence Merge
+--
+Sync MUST resolve same-actor divergence (<<gate.same-actor-divergence>>) by
+a schema-aware three-way merge over the typed tree, never a textual merge.
+The resulting merge tip MUST satisfy the tip invariant.
+--
+
+[role="requirement", id="sync.adoption-machinery"]
+.Adoption Rides the Same Merge Machinery
+--
+A maintainer merging an inbox entity onto its canonical ref, and a
+maintainer adopting a contributor's self-run results, MUST both go through
+the same merge machinery as <<sync.divergence-merge>> and
+<<gate.adoption-merge>>, not a separate adoption code path.
+--
+
+[role="requirement", id="sync.local-advisory"]
+.Local Store Accepts Regardless of Verdict
+--
+The local store MUST accept a write regardless of the gate's verdict; the
+gate's advisory role (<<gate.advisory-local>>) governs annotation only, and
+sync MUST NOT use a failing local verdict to block a local write.
+--

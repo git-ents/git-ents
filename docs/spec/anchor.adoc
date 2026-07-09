@@ -1,63 +1,74 @@
 == The Anchor
 
-A durable pointer into content: a blob (and optionally a line range) at a
-commit.
-Anchors resolve and project independently of comments, so other tools
-(reviews, TODO trackers, blame overlays) can reuse them.
+A durable pointer into source: a blob, an optional line range, and a
+specific commit.
+Anchors resolve and project independently of any consumer — comments are
+merely the first client; reviews, TODO trackers, and blame overlays can
+reuse the same mechanism.
 
-[role="requirement", id="comments.anchor"]
-.Anchors
+[role="requirement", id="anchor.definition"]
+.Anchor Identity
 --
-A comment MUST be anchored to the exact content it was written against: the
-commit, the repository-relative file path, the file's blob object id, and an
-optional 1-based inclusive line range (absent for a whole-file comment).
-An anchor is authoritative at creation and MUST NEVER be mutated afterwards.
-Creating an anchor MUST validate the path and line range against the
+An anchor MUST identify the exact content it was captured against: the
+commit, the repository-relative file path, the file's blob object id, and
+an optional 1-based inclusive line range, absent for a whole-file anchor.
+Creating an anchor MUST validate the path and the line range against the
 revision's actual content.
-The anchored text is fully derivable from the blob and the line range and
-MUST be derived at read time, never stored redundantly.
-The anchored commit is recorded on a best-effort basis only (see
-<<anchor.reachability>>): nothing keeps it from being garbage collected, and
-an anchor MUST remain valid — its exact text still derivable, its position
-still projectable via a fallback — after it is gone.
 --
 
-[role="requirement", id="comments.projection"]
+[role="requirement", id="anchor.immutable"]
+.Anchors Are Never Mutated
+--
+An anchor is authoritative at creation and MUST NEVER be mutated afterward.
+Its anchored text MUST be fully derivable from the blob and the line range
+and MUST be derived at read time, never stored redundantly.
+The anchored commit's id MUST be recorded only as a plain data field
+(<<anchor.retention>>); nothing in the anchor mechanism itself pins it, so
+it MAY be garbage collected once nothing else keeps it reachable.
+--
+
+[role="requirement", id="anchor.retention"]
+.Embedded Retention
+--
+The document storing an anchor MUST embed the anchored blob, referenced by
+the existing blob's own object id rather than copied, and a context blob of
+the surrounding source lines, written fresh, as ordinary tree entries in
+the document's own stored tree.
+This embedding MUST keep the anchored content reachable from
+`refs/meta/*` — surviving force-push, branch deletion, and gc — for as
+long as the document's ref exists, with no gc special-casing and no
+pinned ancestry; content addressing makes the embed free.
+This MUST NOT use a gitlink (mode `160000`): a gitlink names a commit in
+another repository and is not itself a reachability edge, so it would keep
+nothing reachable.
+Redaction (<<receive.redaction-ingest>>) is the sole deliberate exception to
+this retention.
+--
+
+[role="requirement", id="anchor.projection"]
 .Anchor Projection
 --
-Displaying a comment against any revision other than its own MUST be a
-read-time projection of its anchor, reporting one of four outcomes:
-*current* (the exact blob still sits at the anchored path), *relocated* (the
-file moved and/or the range shifted past edits outside it, reported with the
-new path and range), *outdated* (an edit touched the anchored region, or the
-entry is no longer a regular file), or *deleted* (the file is gone).
+Displaying an anchor against any revision other than its own MUST be a
+read-time projection reporting one of four outcomes: *current* (the exact
+blob still sits at the anchored path), *relocated* (the file moved and/or
+the range shifted past edits outside it, reported with the new path and
+range), *outdated* (an edit touched the anchored region, or the entry is no
+longer a regular file), or *deleted* (the file is gone).
 Projection MUST follow renames and MUST work between any two commits —
-forwards, backwards, or across unrelated history, as long as the anchor's own
-commit still exists.
-Once the anchor commit has been garbage collected, projection MUST fall back
-to fuzzy-matching a small retained window of surrounding source lines against
-the target commit's version of the same path, reporting *relocated* (with the
-matched line range) on a good match, *outdated* on a poor one, and *deleted*
-when the path itself is gone — the same four outcomes, recovered
-approximately rather than exactly.
-An outdated or deleted projection MUST NOT lose the comment: the original
-anchor remains displayable.
-Projection is read-only and MUST NEVER mutate the stored anchor, in either
-the exact or the fallback path.
+forwards, backwards, or across unrelated history — as long as the anchor's
+own commit still exists.
+Projection MUST NEVER mutate the stored anchor.
 --
 
-[role="requirement", id="anchor.reachability"]
-.Anchor Reachability
+[role="requirement", id="anchor.fuzzy-fallback"]
+.Fallback When the Anchored Commit Is Gone
 --
-The content an anchor names — the anchored blob and a small window of
-surrounding source lines — MUST be embedded as ordinary tree entries in the
-consuming document's own stored tree (a reference to the existing blob's
-object id, not a copy; the surrounding-lines window written fresh), so both
-stay reachable from `refs/meta/*`, and so survive force-push, branch
-deletion, and gc, for as long as the consuming document's ref exists. This
-MUST NOT use a gitlink (mode `160000`): a gitlink names a commit in another
-repository and is not itself a reachability edge, so it would not keep
-anything reachable. The anchored commit's id is retained only as a plain data
-field (see <<comments.anchor>>) and is NOT pinned by this mechanism; it MAY
-be garbage collected once nothing else keeps it reachable.
+Once the anchored commit has been garbage collected, projection MUST
+degrade to fuzzy-matching the retained context blob (<<anchor.retention>>)
+against the target commit's version of the same path, reporting
+*relocated* (with the matched line range) on a good match, *outdated* on a
+poor one, and *deleted* when the path itself is gone — the same four
+outcomes, recovered approximately rather than exactly.
+An outdated or deleted projection MUST NOT lose the anchor: the original
+anchor remains displayable.
 --

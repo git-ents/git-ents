@@ -1,0 +1,124 @@
+== The Entities
+
+The typed trees `meta-ref.adoc` describes are not empty shapes; each one
+carries specific forge semantics.
+This file specifies that semantics — what each entity must mean, not its
+field-by-field Rust representation.
+
+'''''
+
+=== Member
+
+A member is a public key enrolled into the forge's trust set; every
+signed commit's authority ultimately traces back to a member entity.
+
+[role="requirement", id="model.member-identity"]
+.Member Identity and Enrollment
+--
+A Member entity MUST carry the member's public key.
+Enrollment MUST occur as a signed commit written to the member's ref: the
+member becomes forge state the moment that commit lands, with no user
+database separate from the repository.
+--
+
+[role="requirement", id="model.member-revocation"]
+.Revocation Is a State, Not a Deletion
+--
+Revoking a member MUST record a revoked state on the member entity and
+MUST NOT delete the entity.
+A revoked key MUST be explicitly rejected for verifying any signature
+made after revocation, while a signature the key made before revocation
+MUST remain verifiable — deleting the entity instead would make old
+signatures unverifiable, the opposite of what an audit needs.
+Unrevoking a member MUST be supported, returning the key to authorizing
+new signatures without altering the record of the period it was revoked.
+--
+
+[role="requirement", id="model.member-provenance"]
+.Member Provenance and Trust Tier
+--
+A Member entity MUST record how it was enrolled: admin-registered, or
+self-attested through a frontend that lets a key enroll itself.
+A self-attested member MUST NOT be authorized for canonical refs — its
+writes are limited to its own inbox and self-run namespaces
+(<<meta-ref.inbox>>) — until an admin-registered member promotes it, as
+an ordinary signed mutation of the member's ref.
+A rule that says "admin-registered" (<<effect.admin-only>>) refers to
+this provenance.
+--
+
+[role="requirement", id="model.member-worker"]
+.Machine Actors Are Members
+--
+A machine actor (a CI worker or other automated signer) MUST be
+represented as an ordinary Member entity: an enrolled key, authorized
+only for the refnames its role needs (such as its own results
+namespace), and revocable exactly like a human member's key.
+A privileged write path for a machine actor MUST NOT exist outside this
+model.
+--
+
+=== Comment
+
+[role="requirement", id="model.comment"]
+.Comment Carries an Anchor
+--
+A Comment entity MUST carry a body and an anchor identifying the exact
+content it was written against (<<anchor.definition>>).
+A comment's identity MUST be derived from a hash of its genesis content
+and MUST NEVER change afterward — edits advance the ref, they do not
+rename it.
+Author and timestamp MUST come from the mutation commit chain, never from
+fields stored in the tree (<<meta-ref.trailers>>).
+Anchor resolution, projection onto other revisions, and reachability are
+specified in `anchor.adoc` and apply to a Comment's anchor unchanged.
+--
+
+=== Effect
+
+[role="requirement", id="model.effect-definition"]
+.Effect Definition
+--
+An Effect entity MUST carry: a trigger, a `CommitQuery` denoting the set
+of commits the effect fires for; the toolchains its run requires; and a
+run command.
+Its results refname is derived from the effect's own name
+(<<effect.results-writeback>>), never stored as a field.
+It MUST NOT carry executor, sandbox, or retry fields; how an effect runs
+is a deployment property (<<effect.deployment-property>>).
+--
+
+=== Result
+
+[role="requirement", id="model.result-taxonomy"]
+.Result Status Taxonomy
+--
+A Result's status MUST be one of `pass`, `fail`, or `error`.
+When each status is written — and when nothing is written at all — is
+run semantics, specified in <<effect.result-taxonomy>>.
+--
+
+=== Toolchain
+
+[role="requirement", id="model.toolchain"]
+.Toolchain Manifest
+--
+A Toolchain entity MUST be a hash-pinned manifest of roughly 1KB stored
+under `refs/meta/toolchains/<name>`, carrying the provenance needed to
+reproduce the execution environment it names.
+Who may touch the bytes it references is run semantics, specified in
+<<effect.toolchains>>.
+A toolchain is a resource an effect declares as a dependency
+(<<model.effect-definition>>), never a trigger condition in its own
+right.
+--
+
+=== Account
+
+[role="requirement", id="model.account"]
+.Account Links Key to Login
+--
+An Account entity MUST link a member's key to a login identity.
+Authentication state MUST live in the repository as ordinary forge
+state; a session database or token table MUST NOT back it.
+--

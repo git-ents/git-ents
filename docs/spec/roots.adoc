@@ -1,0 +1,129 @@
+== Composition Roots
+
+No code inside the library knows where it is running; the core is handed
+trait objects and never asks.
+Deployment exists only in composition roots: each wires the four seams —
+`RefStore`, an object store via gitoxide traits, `EventSink`, and
+`Executor` — in roughly fifty lines of trait construction.
+An `if hosted` branch inside the library is the design failing.
+
+[role="requirement", id="roots.composition"]
+.Deployment Lives Only at the Root
+--
+The four seams (`RefStore`, the object store via `gix_object::Find` /
+`Exists` / `Write`, `EventSink`, `Executor`) MUST be wired together only in
+a composition root.
+Library code outside a root MUST NOT select among implementations of
+these seams.
+--
+
+[role="requirement", id="roots.local"]
+.git-ents Local Root
+--
+The `git-ents` CLI's composition root MUST wire: a loose-ref `RefStore`,
+the local odb as object store, a Docker `Executor`, a null `EventSink`, and
+the advisory gate (<<gate.advisory-local>>).
+`git ents serve` MUST reuse this same wiring, adding only the smart-HTTP
+frontend on loopback.
+Local effect execution MUST be pull, via `git effect run`, never a daemon
+watching refs; the queue is the only component this root skips
+(<<effect.local-run>>).
+--
+
+[role="requirement", id="roots.hosted"]
+.git-ents-server Hosted Root
+--
+The `git-ents-server` composition root MUST wire: a Postgres `RefStore`,
+Tigris as object store, a durable queue as `EventSink`, a Fly.io Sprite
+`Executor`, and the mandatory gate (<<gate.mandatory-hosted>>).
+The worker (queue consumer, executor, push-back client) MUST stay a mode
+inside the `git-ents-server` binary until scale forces a split, and MUST
+NOT share in-process state with `receive` (<<receive.unit>>).
+--
+
+[role="requirement", id="roots.honesty-test"]
+.Single-Node Honesty-Test Root (Deferred)
+--
+A third composition root — SQLite, local filesystem, and Docker — MUST be
+constructible without modifying library code, as the project's honesty
+test for the seam design.
+--
+
+[role="requirement", id="roots.config-isolation"]
+.Config Selects, Never Leaks
+--
+Configuration MUST select trait implementations only at the composition
+root and MUST NOT leak past it; core code reading configuration directly
+is a missing trait, not a shortcut to take.
+--
+
+[role="requirement", id="roots.web-signing"]
+.Web Edit Signing Indirection
+--
+A hosted web edit MUST be signed by the server's own member key, and that
+key MUST itself be an enrolled member.
+The local web UI MUST sign edits with the user's own member key instead;
+the server-key indirection used hosted MUST NOT be imported into the local
+root.
+--
+
+[role="requirement", id="roots.worktree-update"]
+.Local Serve and the Working Tree
+--
+The `git-ents` local root MUST set `receive.denyCurrentBranch=updateInstead`
+so an accepted branch push also updates the working tree.
+Worktree update MUST happen only after `receive` accepts the push, as
+frontend business; core code MUST NOT touch a worktree.
+A dirty worktree is a known edge where `updateInstead` fails, so
+branch-push behavior differs from hosted while metadata behavior, which
+never touches a worktree, stays identical.
+--
+
+[role="requirement", id="roots.web-session"]
+.Hosted Web Sessions
+--
+A hosted web session MUST be held only in server memory, consistent with
+<<model.account>>'s ban on a session database.
+Every state-changing web request MUST carry a per-session CSRF token the
+server verifies before acting; a web edit MUST be signed
+(<<roots.web-signing>>) only on behalf of an authenticated session.
+--
+
+[role="requirement", id="roots.path-validation"]
+.Repository Path Validation
+--
+The hosted root MUST validate every repository-path segment before any
+filesystem or subprocess use, rejecting a path that would escape the
+data directory, nest inside an existing repository, or collide with a
+non-repository namespace directory.
+--
+
+[role="requirement", id="roots.fetch-auth"]
+.Fetch Authorization
+--
+Fetch authorization MUST be refname-keyed, using the same authorization
+model as write authorization.
+Private-repository access beyond refname-keyed fetch authorization is out
+of scope for v1.
+--
+
+[role="requirement", id="roots.bootstrap"]
+.Repository Creation on First Push (Deferred)
+--
+A hosted repository is created on its first `info/refs` request, before
+any signed push exists, which leaves "first push owns the repo" open per
+repository (<<gate.bootstrap>>).
+Closing it MUST require a server-level key-to-account registry gating
+repository creation; this direction is chosen but not yet enforced.
+--
+
+[role="requirement", id="roots.embeddable"]
+.Embeddable Server
+--
+`git-ents-server` MUST be a library first: the `serve` command, the
+standalone binary, and the git hooks MUST be thin wrappers over that
+library, not independent implementations.
+This MUST keep authorization (<<gate.tip-signed>>) and effect-matching
+(<<receive.event-sink>>) logic inside the library, never smeared across a
+subprocess boundary.
+--

@@ -13,16 +13,217 @@ The spec is organized around the load-bearing abstractions (rationale in
 `docs/abstractions.adoc`), each a parent section with its dependent entities
 as children:
 
-* `meta-ref.adoc` — the meta-ref and the typed tree; the entities stored on
-  them (members, revocations, account, config, issues, comments).
+* `meta-ref.adoc` — the meta-ref and the typed tree.
+* `model.adoc` — the entities stored on meta-refs: members, comments,
+  effects, results, toolchains, and accounts.
 * `anchor.adoc` — durable pointers into content, and their projection.
-* `signed-push.adoc` — the only write path, for git and browser alike.
-* `checks.adoc` — checks and the toolchains that feed them.
-* `server.adoc` — the embeddable server: protocol, namespace, compatibility,
-  deployment, nonfunctional bounds.
-* `web.adoc` — the web UI and the rendering registry.
-* `cli.adoc` — the porcelain.
-* `conformance.adoc` — requirement → implementation → test map.
+* `gate.adoc` — the pure verify function and its three call sites.
+* `query.adoc` — the `CommitQuery` algebra that triggers effects.
+* `receive.adoc` — the one write path every frontend shares.
+* `effect.adoc` — effect execution, results, and toolchains at run time.
+* `sync.adoc` — meta-ref fetch/push, pre-flight, and divergence merge.
+* `roots.adoc` — the composition roots, the only place deployment exists.
 
 [CAUTION]
 This specification is not yet stable and will grow as the project develops.
+
+'''''
+
+== The Six Abstractions
+
+Everything else in this specification is an instance or a consequence of
+six load-bearing abstractions.
+This section orients; the normative requirements for each abstraction live
+in the file named alongside it, where one exists yet.
+
+=== 1. Meta-Ref
+
+A ref under `refs/meta/*` is simultaneously the unit of storage (the ref
+points at a commit whose tree is the entity), synchronization (fetch or
+push only the entities a client cares about), authorization (refname-keyed
+rules gate who may advance the ref), and history (its commit chain is the
+audit trail).
+One ref holds exactly one independently-authored entity, or one piece of
+repository-global state; see `meta-ref.adoc`.
+
+=== 2. Typed Tree
+
+A Rust struct annotated `#[derive(Facet)]` is the storage schema: no
+serialization format sits between the struct and the git tree
+`facet-git-tree` maps it to, and changing the struct is a storage
+migration — a signed commit, not a silent break; see `meta-ref.adoc`.
+
+=== 3. Anchor
+
+A durable pointer into source — a blob, an optional line range, and the
+commit it was taken against — embedded in the anchoring document's own
+tree so it survives force-push, branch deletion, and gc, and projected
+onto newer commits at read time by blame plus fuzzy matching, never
+mutated; see `anchor.adoc`.
+
+=== 4. Signed Commit
+
+Every meta-ref mutation is an author-signed commit whose signature
+replicates with the repository and verifies offline in any clone.
+A signature proves authorship, not placement, so an `Ents-Ref:` trailer
+binds the commit to the ref it was authored for, and adopting someone
+else's commit onto a canonical ref is always a merge, never a
+cherry-pick, so the author's signature survives intact in ancestry.
+
+=== 5. Gate
+
+Verification is a pure function over ref-store reads — is the new tip
+signed by a member authorized for this refname, does its `Ents-Ref:`
+trailer match, does it descend from the old tip, does the update commit
+via atomic CAS — evaluated identically at three call sites: hosted CAS
+(mandatory, failure aborts the write), local UI verdict (advisory), and
+push pre-flight (advisory).
+
+=== 6. Effect
+
+A declarative, content-addressed subscription to a commit-set query,
+whose execution is sandboxed and whose output re-enters the repository
+only as signed commits on a results ref.
+The trigger fires once per commit entering the query's set, work is
+monotone and entry-only, and the runner is a member, not an ambient
+authority, so an official result is a refname rule on canonical results
+refs rather than a runtime property of a blessed machine.
+
+'''''
+
+== Architecture
+
+The abstractions above compose into a crate graph with a small number of
+hard boundaries.
+Violating one of them is the design failing, not a detail; this section
+states them as requirements.
+
+=== Crate Graph
+
+NOTE: Crate names below are working names, not commitments.
+A `gix-*` crate extends gitoxide and imports nothing from the forge; it
+can ship as a real crate only by upstreaming into gitoxide, or by picking
+a different, unclaimed name.
+
+[cols="2,4,3", options="header"]
+|===
+| Crate | Responsibility | Depends on
+
+| `facet-git-tree`
+| Typed tree: struct ↔ git tree mapping, domain-blind.
+|
+
+| `gix-ref-store`
+| `RefStore` trait — reads plus atomic multi-ref CAS — and a loose-ref
+implementation.
+|
+
+| `gix-receive`
+| Smart-HTTP wire framing and pack ingestion, zero forge policy.
+|
+
+| `ents-model`
+| Entity structs, refname namespaces, trailers, status taxonomy.
+| `facet-git-tree`
+
+| `ents-query`
+| `CommitQuery` algebra.
+| `ents-model`, `gix-ref-store`
+
+| `ents-gate`
+| The pure verify function.
+| `ents-model`, `gix-ref-store`
+
+| `ents-receive`
+| `receive()`.
+| `ents-gate`, `ents-query`, `gix-ref-store`
+
+| `ents-anchor`
+| Anchor storage and projection.
+| `ents-model`
+
+| `ents-effect`
+| `Executor` trait, Docker and Sprite backends, the run loop.
+| `ents-model`, `ents-query`, `ents-receive`
+
+| `ents-sync`
+| Meta-ref fetch/push and own-heads merge.
+| `ents-gate`, `ents-model`, `facet-git-tree`
+
+| `ents-web`
+| The local and hosted web UI.
+| `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`
+
+| `git-ents` (bin)
+| Local composition root.
+|
+
+| `git-ents-server` (bin)
+| Hosted composition root.
+|
+|===
+
+=== Boundary Rules
+
+[role="requirement", id="arch.no-object-store-trait"]
+.No Private Object-Store Trait
+--
+The library MUST NOT define its own `ObjectStore` trait.
+gitoxide's `gix_object::Find`, `Exists`, and `Write` traits ARE the
+object-store seam.
+A new trait MUST be introduced only where gitoxide is silent — the
+pluggable ref store, server-side receive framing, and reachability
+artifacts are the seams that qualify.
+--
+
+[role="requirement", id="arch.gate-receive-split"]
+.Gate and Receive Are Separate Crates
+--
+The gate's pure verify function MUST live in a crate separate from
+`receive`.
+The gate has three call sites — hosted CAS, local UI verdict, and push
+pre-flight — and the latter two MUST be answerable without linking
+`receive`'s effect-matching and enqueue logic.
+--
+
+[role="requirement", id="arch.query-effect-split"]
+.Query and Effect Are Separate Crates
+--
+The `CommitQuery` algebra MUST live in a crate separate from executor and
+run-loop code.
+`receive` depends on the query crate for footprint matching on every push
+and MUST NOT depend on the effect crate, so no push path links executor
+code.
+--
+
+[role="requirement", id="arch.store-composition-root"]
+.Store Implementations Live in Composition Roots
+--
+A concrete store implementation — Postgres, Tigris, SQLite, or any other
+backing store — MUST be wired only inside a composition root, never
+inside a library crate.
+It MUST NOT be promoted into a shared library crate until a second
+composition root consumes it.
+--
+
+[role="requirement", id="arch.no-hosted-branch"]
+.No Hosted Branch in Library Code
+--
+A library crate MUST NOT contain a branch on deployment mode — an
+`if hosted`-shaped check, or equivalent.
+Deployment MUST exist only in composition roots, which wire trait
+implementations together.
+--
+
+[role="requirement", id="arch.refstore-read-cas-split"]
+.RefStore Splits Reads From CAS
+--
+The `RefStore` trait MUST separate its read operations from its atomic
+multi-ref compare-and-swap operation.
+The gate MUST depend on only the read half, since verification never
+performs a write.
+--
+
+The honesty test for these boundaries — a third single-node composition
+root constructible from library crates alone — is a deployment
+requirement and lives in `roots.adoc` as <<roots.honesty-test>>.

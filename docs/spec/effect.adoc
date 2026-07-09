@@ -1,0 +1,183 @@
+== The Effect
+
+An effect is a declarative, content-addressed subscription to a
+`CommitQuery` (<<query.grammar>>), whose execution is sandboxed and whose
+output re-enters the repository as verified data.
+It closes the loop the gate and `receive` (<<gate.tip-signed>>,
+<<receive.unit>>) open: every side effect, human-triggered or
+machine-triggered, is admitted, dispatched, and recorded through the same
+signed-commit channel.
+
+=== Definition
+
+[role="requirement", id="effect.definition"]
+.Effect Documents
+--
+An effect MUST be stored as repository data at `refs/meta/effects/<name>`,
+one ref per effect; the entity's stored shape — trigger, toolchains, run
+command — is specified in <<model.effect-definition>>, and its results
+land at a refname derived from `<name>` (<<effect.results-writeback>>),
+never at a stored pattern.
+`<name>` MUST be a valid ref-path segment; it is also the `effect-name`
+terminal of the query grammar (<<query.grammar>>).
+Decomposing effects one ref per name means each effect is added or removed
+as its own independently-signed push, and the admin-only rule
+(<<effect.admin-only>>) can be stated as a single refname glob rather than
+gating one shared ref.
+--
+
+[role="requirement", id="effect.admin-only"]
+.Effect Definitions Are Admin-Only
+--
+A push to `refs/meta/effects/*` MUST be rejected unless the pushing member
+is admin-registered, regardless of any other role rule `refs/meta/config`
+may define.
+Authoring an effect schedules code execution on canonical infrastructure,
+which needs more trust than an ordinary branch push, so this rule MUST be
+enforced explicitly and MUST be statable as the single refname glob
+`refs/meta/effects/*`.
+--
+
+[role="requirement", id="effect.validation"]
+.Write-Time Validation
+--
+Writing an effect definition MUST be rejected before it is stored when any
+name in its `toolchains` list is not a valid ref-path segment, or when its
+`trigger` fails to parse against the `CommitQuery` grammar
+(<<query.grammar>>) — including a `rev(expr)` naming a `refs/meta/*`
+pattern (<<query.rev>>) or a `meta(glob)` naming an effect-written namespace
+(<<query.meta>>).
+--
+
+=== Execution
+
+[role="requirement", id="effect.execution"]
+.Sandboxed Execution
+--
+A worker MUST execute an effect by dequeuing a matched `(effect, oid)`
+pair, materializing each of the effect's declared toolchains from
+`refs/meta/toolchains/<name>` (<<effect.toolchains>>), and running the
+effect's command inside a sandbox.
+Sandboxed execution MUST sit behind one `Executor` trait with multiple
+backends, selected only at a composition root (<<roots.local>>,
+<<roots.hosted>>), so no execution logic is duplicated per backend.
+Host-direct execution, with no sandbox, MUST require an explicit
+`--unsandboxed` flag and MUST be available only locally, never on canonical
+hosted infrastructure.
+--
+
+[role="requirement", id="effect.deployment-property"]
+.What To Run Is Data, How To Run Is Not
+--
+An effect's stored data MUST NOT be able to select its own executor, demand
+`--unsandboxed` (<<effect.execution>>), or set its own retry bounds.
+Executor choice and retry bounds MUST be deployment configuration, selected
+only at a composition root (<<roots.composition>>), never a field an effect
+definition can carry.
+--
+
+[role="requirement", id="effect.local-run"]
+.Local Execution Is a Correctness Anchor
+--
+`git effect run` MUST materialize toolchains and execute in a sandbox via
+the identical code path a hosted worker uses (<<effect.execution>>); only
+the durable queue MUST be skipped, and the queue MUST carry no correctness
+content this identity depends on.
+A member who runs `git effect run` locally MUST see the same outcome a
+canonical worker would record for the same commit.
+--
+
+=== Results
+
+[role="requirement", id="effect.results-writeback"]
+.Results Return Only Through Receive
+--
+An effect's results MUST return to the repository only as signed commits
+pushed through the ordinary `receive` path (<<receive.unit>>,
+<<receive.shared-path>>) onto its `results` ref; write-back MUST be an
+ordinary receive client, never a privileged write outside the gate.
+Results MUST land one ref per tested commit,
+`refs/meta/results/<effect>/<short-oid>`, derived from the effect's own
+name, so concurrent results for different commits, or from different
+runners, never contend the same ref.
+Bounding this namespace's growth — archival or rollup of old results — is
+deferred.
+--
+
+[role="requirement", id="effect.result-taxonomy"]
+.Result Taxonomy
+--
+A run's outcome MUST be recorded as exactly one of `pass`, `fail`, or
+`error`.
+A completed command's exit status MUST always be recorded as a result:
+`pass` or `fail` both mean the effect ran to completion.
+An infrastructure failure — the sandbox never started, the worker crashed —
+MUST NOT itself be recorded as a result; it MUST be treated as a queue
+concern retried within a bounded limit (<<effect.deployment-property>>),
+and a terminal `error` result — signed by the worker's own member key
+like any other result — MUST be written only when that bound is
+exhausted.
+A transient outage therefore neither retries forever nor permanently
+discharges the commit's obligation (<<query.workset>>).
+--
+
+=== Identity and Trust
+
+[role="requirement", id="effect.identity"]
+.The Runner Is a Member
+--
+A worker executing an effect MUST act as an ordinary member, never as an
+ambient authority: its result commit MUST be signed with its own member
+key.
+A result's signature proves only who pushed the result, not that the run it
+reports was faithfully executed.
+--
+
+[role="requirement", id="effect.official"]
+.Official Is a Refname Rule
+--
+A results ref MUST count as official only because the canonical
+`refs/meta/results/<effect>/*` namespace is writable solely by designated
+worker keys (<<gate.tip-signed>>) — a refname authorization rule, never a
+runtime property of the machine that produced the result.
+--
+
+[role="requirement", id="effect.self-run"]
+.Any Member May Self-Run
+--
+Any member MAY run any effect on their own executor and account.
+Such a member's results MUST land under the self-run namespace
+`refs/meta/results/~<member>/<effect>/<short-oid>` (<<meta-ref.inbox>>),
+never directly on the canonical results ref, and MUST be adoptable onto
+the canonical ref only through the same
+adoption merge as any other contribution (<<gate.adoption-merge>>,
+<<sync.adoption-machinery>>), with the trust decision explicit in that
+merge.
+--
+
+=== Toolchains
+
+[role="requirement", id="effect.toolchains"]
+.Hash-Pinned Toolchain Manifests
+--
+The stored shape of a toolchain — a hash-pinned manifest carrying its own
+provenance — is specified in <<model.toolchain>>; this requirement governs
+its bytes at run time.
+Only the sandbox (<<effect.execution>>) MAY touch a toolchain's extracted
+bytes; a manifest's declared components MUST be resolved during effect
+execution, never by any other code path.
+--
+
+=== Fanout Indexes
+
+[role="requirement", id="effect.fanout-index"]
+.Index Rebuild Is Itself an Effect
+--
+A fanout index at `refs/meta/index/*`, mapping object oids to the entities
+anchored to them, MUST be rebuilt only by an effect and written back only
+as a signed commit by the worker that ran it (<<effect.identity>>), never
+by any privileged out-of-band writer.
+A reader finding the index stale or absent MUST degrade to scanning ref
+tips directly and MUST NEVER derive a wrong answer from a stale or missing
+index — staleness MUST cost only performance, never correctness.
+--

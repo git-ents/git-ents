@@ -1,0 +1,166 @@
+== The Gate
+
+Verification is a pure function over ref-store reads: it MUST depend only on
+the read half of the ref store, never on write access or on any state
+outside `refs/meta/*`.
+The gate is the one admission judgment in the design; every mutation, human
+or machine, is admitted or refused by this same function (see
+<<receive.unit>>).
+
+=== Verification
+
+[role="requirement", id="gate.tip-signed"]
+.Tip Signature
+--
+The new tip of a meta-ref MUST be signed by a member authorized for that
+refname.
+This is checkable after the fact by anyone with a clone, not only by
+whoever ran the server.
+--
+
+[role="requirement", id="gate.refname-binding"]
+.Refname Binding
+--
+The commit's `Ents-Ref:` trailer MUST match the refname being updated.
+Without this check a signed commit could be replayed as the tip of a
+different meta-ref than the one its author signed for.
+--
+
+[role="requirement", id="gate.fast-forward"]
+.Fast-Forward Freshness
+--
+The new tip MUST descend from the old tip in the DAG sense: meta-refs
+advance fast-forward-only.
+The parent hash IS the anti-replay freshness binding; no nonce is needed.
+--
+
+[role="requirement", id="gate.atomic-cas"]
+.Atomic Update
+--
+The ref update MUST commit via atomic compare-and-swap against the old tip
+read in <<gate.fast-forward>>.
+--
+
+[role="requirement", id="gate.signature-artifact"]
+.Signature as Repository Data
+--
+A commit signature MUST be treated as a data artifact, not a transport
+artifact: it replicates with the repository and MUST verify offline in
+every clone, so verification evidence is itself repository state.
+A push certificate carries no meta-ref semantics; it MUST NOT be consulted
+by the gate.
+--
+
+[role="requirement", id="gate.policy-as-state"]
+.Policy Is Repository State
+--
+The member set and refname rules the gate consults MUST themselves live
+under `refs/meta/*`.
+Any frontend MUST therefore be able to evaluate the actual policy offline,
+with staleness bounded only by the age of its last fetch.
+--
+
+=== Verification Epoch
+
+[role="requirement", id="gate.epoch"]
+.Verification Epoch
+--
+The gate MUST apply the tip invariant (<<gate.tip-signed>> through
+<<gate.atomic-cas>>) only from an epoch recorded in `refs/meta/config`
+forward; history before the epoch is archival.
+The epoch-setting commit MUST be the first gated tip of the config ref
+itself, resolving the circularity of reading the epoch from the very ref
+the gate verifies.
+--
+
+=== Mandatory and Advisory Enforcement
+
+[role="requirement", id="gate.mandatory-hosted"]
+.Mandatory Enforcement, Hosted
+--
+The hosted store MUST run the gate at CAS time; a failing verdict MUST
+abort the transaction before any ref is updated.
+--
+
+[role="requirement", id="gate.advisory-local"]
+.Advisory Enforcement, Local
+--
+The local store MUST accept any write and run the gate only as a verdict
+annotating the result; a failing verdict MUST NOT block the write.
+Enforcing the gate locally would destroy offline-first: a user could not
+author while unenrolled, or work against an unfetched member list.
+--
+
+[role="requirement", id="gate.call-sites"]
+.One Function, Three Call Sites
+--
+The gate MUST be the same function at every call site: hosted CAS
+(<<gate.mandatory-hosted>>), the local UI verdict (<<gate.advisory-local>>),
+and push pre-flight (<<sync.pre-flight>>).
+A pre-flight verdict is a prediction that can only go stale; it MUST NOT
+diverge from the rules the hosted store will actually apply.
+--
+
+=== Adoption
+
+[role="requirement", id="gate.adoption-merge"]
+.Adoption Is a Merge
+--
+When the author of a commit and the member authorized to place it on the
+canonical ref differ, adoption MUST proceed by the authorized member
+merging the contributor's signed commit onto the canonical ref, even when
+the merge is trivial.
+The merge commit satisfies the tip invariant; the contributor's signed
+commit remains in ancestry with attribution intact.
+--
+
+[role="requirement", id="gate.adoption-no-cherry-pick"]
+.Cherry-Pick Forbidden as Adoption
+--
+Cherry-picking a contributor's commit MUST NOT be used as an adoption
+mechanism: it creates a new commit object and destroys the original
+author's signature.
+--
+
+[role="requirement", id="gate.adoption-no-fast-forward"]
+.Direct Fast-Forward Forbidden
+--
+Fast-forwarding a canonical ref directly to a contributor's commit MUST NOT
+be treated as adoption: it would place an unauthorized signature at the
+tip, since the contributor is not authorized for that refname.
+--
+
+[role="requirement", id="gate.same-actor-divergence"]
+.Same-Actor Divergence
+--
+Two of a member's own machines racing that member's single-writer ref MUST
+be resolved by merging the member's own divergent heads, not by erroring.
+Author and placer are both the same member, so the tip invariant holds as
+written once the merge tip descends from the old tip.
+--
+
+=== The Principled Split
+
+[role="requirement", id="gate.principled-split"]
+.Signatures Authorize Only Single-Writer Appends
+--
+A content signature MUST be treated as carrying write authorization only
+where mutations are author-signed single-writer appends, which the
+meta-ref granularity rule guarantees.
+On `refs/heads/*`, pushing commits the pusher did not author is legitimate,
+so branch refs MUST keep transport-level authorization instead of the tip
+invariant.
+--
+
+=== Bootstrap
+
+[role="requirement", id="gate.bootstrap"]
+.Empty Member List Bootstrap (Deferred)
+--
+When no `refs/meta/member/*` ref exists, the gate MUST treat the first
+enrollment as self-admitting so the first member can be pushed in.
+A member set that exists but whose keys are all revoked MUST fail
+closed: revoking every key MUST NOT reopen this self-admitting window.
+Closing "first push owns the repo" beyond this bootstrap admission is a
+hosted-deployment concern, deferred to <<roots.bootstrap>>.
+--

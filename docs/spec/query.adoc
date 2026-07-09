@@ -1,0 +1,189 @@
+== The Commit Query
+
+A `CommitQuery` denotes a set of commits as a pure function of current ref
+state; every effect's `trigger` (<<effect.definition>>) is one.
+The algebra is deliberately tiny: three atoms — `rev()`, `results()`,
+`meta()` — closed under union, intersection, and difference.
+Composition happens by writing the query itself, never by a workflow
+language or a runtime scheduler.
+
+=== Grammar
+
+[role="requirement", id="query.grammar"]
+.Query Grammar
+--
+A `CommitQuery` MUST parse according to the following ASCII grammar:
+
+[source]
+----
+query   ::= term (("|" | "&" | "-") term)*
+term    ::= "(" query ")"
+          | "rev" "(" rev-expr ")"
+          | "results" "(" effect-name "," status ")"
+          | "meta" "(" ref-glob ")"
+status  ::= "pass" | "fail" | "error" | "any"
+----
+
+`|` MUST denote union, `&` MUST denote intersection, and `-` MUST denote
+difference (<<query.set-ops>>).
+The binary operators MUST be left-associative and MUST share a single
+precedence level; parentheses are the only way to override left-to-right
+evaluation order.
+`rev-expr`, `effect-name`, and `ref-glob` are opaque terminal strings whose
+own syntax is defined by <<query.rev>>, <<effect.definition>>, and
+<<query.meta>> respectively, not by this grammar.
+--
+
+=== Semantics
+
+[role="requirement", id="query.rev"]
+.rev() Over Code Refs
+--
+`rev(expr)` MUST denote the commit set produced by evaluating `expr` as an
+ordinary Git revspec or ref glob against refs outside `refs/meta/*` —
+`refs/heads/*`, `refs/tags/*`, a range such as `main ^release`, an ancestry
+expression, or a merge-base expression.
+`refs/meta/*` MUST be outside `rev()`'s domain by definition: an `expr`
+naming a `refs/meta/*` pattern MUST be rejected as a malformed query
+(<<effect.validation>>), never silently evaluated to the empty set.
+--
+
+[role="requirement", id="query.results"]
+.results() Over Recorded Outcomes
+--
+`results(effect, status)` MUST denote the set of commits carrying a recorded
+result of `status` for the named `effect`, where `status` is `pass`, `fail`,
+`error`, or `any` (any recorded status).
+Resolving `results(effect, status)` MUST be cheap: because the results
+refname encodes the tested commit's oid (<<effect.results-writeback>>),
+resolution MUST be a scan of refname patterns under the effect's results
+namespace, never a walk of commit history.
+--
+
+[role="requirement", id="query.meta"]
+.meta() Over Author-Written Meta-Refs
+--
+`meta(glob)` MUST denote the set of tip commits of every author-written
+`refs/meta/*` ref whose name matches `glob`.
+`glob` MUST NOT be able to match an effect-written namespace —
+`refs/meta/results/*` or `refs/meta/index/*`.
+Recorded results are reachable only through `results(...)`
+(<<query.results>>); the fanout index (<<effect.fanout-index>>) MUST NOT
+be addressable by any query atom at all.
+--
+
+[role="requirement", id="query.set-ops"]
+.Union, Intersection, Difference
+--
+For any two sub-queries `L` and `R`, `L | R` MUST denote their union, `L &
+R` MUST denote their intersection, and `L - R` MUST denote the commits in
+`L` that are not in `R`.
+Parenthesizing a sub-expression MUST make it a single term for the purposes
+of <<query.grammar>>'s left-to-right evaluation.
+--
+
+=== Boundaries
+
+[role="requirement", id="query.no-extensions"]
+.No Content, Time, or External-Event Atoms
+--
+The grammar in <<query.grammar>> MUST NOT gain a content predicate — a term
+that inspects file or commit content beyond set membership and recorded
+result status; content awareness belongs inside an effect's `run` command,
+not its trigger.
+It MUST NOT gain a time atom — a term that inspects wall-clock time or a
+schedule.
+It MUST NOT gain an external-event atom — a term that inspects state
+outside the repository, such as a webhook payload.
+Both time and external events belong to whatever writes the ref a query
+then observes, never to the query language itself.
+--
+
+=== Evaluation
+
+[role="requirement", id="query.footprint"]
+.Static Ref-Footprint Extraction
+--
+The set of refname patterns a `CommitQuery` depends on MUST be extractable
+by static analysis of its syntax tree alone, without evaluating it against
+any ref state.
+A `rev(expr)` term MUST contribute `expr`'s own ref patterns; a
+`results(effect, status)` term MUST contribute the named effect's results
+refname pattern; a `meta(glob)` term MUST contribute `glob` itself.
+This is what lets a single ref transition be mapped to the set of affected
+queries (<<receive.event-sink>>) without re-scanning every effect on every
+push.
+--
+
+[role="requirement", id="query.incremental"]
+.Incremental Set Entry
+--
+A query's entry set for a ref transition `old..new` MUST be computed
+incrementally from that frontier, bounded by commit-graph generation
+numbers, and MUST NOT require re-evaluating the query against the full ref
+state.
+--
+
+[role="requirement", id="query.monotone"]
+.Monotone, Entry-Only Semantics
+--
+An effect MUST fire once per commit that enters its trigger's set.
+A ref update, including a force-push, MAY shrink the set a query denotes,
+but a commit leaving the set MUST NOT retract anything: results already
+written for that commit remain immutable history, and the commit MUST
+simply stop being treated as an outstanding obligation.
+This monotone, entry-only semantics MUST be what makes distributed
+evaluation safe with no coordination beyond the ref store's own
+compare-and-swap.
+--
+
+[role="requirement", id="query.workset"]
+.The Work Set Has No Pipeline State
+--
+The set of commits an effect still owes a result for MUST be computed as
+`trigger - results(self, any)`, where `self` is notation for the
+enclosing effect's own name, substituted at evaluation time — not a
+keyword an author may write in a trigger (<<query.grammar>>).
+The effect's own results ref MUST be the sole materialization marker for
+this computation; pipeline state MUST NOT exist anywhere outside the
+repository.
+Work-set evaluation MUST inherit the incremental bounds of
+<<query.incremental>> on its trigger side and the refname-scan resolution
+of <<query.results>> on its subtraction side, never a walk of full
+history.
+--
+
+[role="requirement", id="query.recursion"]
+.Recursion Is Structure, Not a Runtime Rule
+--
+An effect's trigger MAY name `results(...)` to react to another effect's
+results; whether a query is downstream of an effect MUST be determined by
+inspecting whether `results(...)` appears in its text, never by runtime
+behavior.
+Because `rev()` and `meta()` (<<query.rev>>, <<query.meta>>) MUST NOT be
+able to name an effect-written ref, a trigger cycle that an author did not
+write MUST be unreachable by construction, not merely discouraged.
+--
+
+=== Compatibility
+
+[role="requirement", id="query.rev-pattern-compat"]
+.Bare Glob Is the Degenerate rev() Query
+--
+A bare ref glob (for example `refs/heads/*`) MUST be accepted wherever a
+`CommitQuery` is expected, meaning exactly `rev(<glob>)`, so a `RefPattern`
+predating `CommitQuery` continues to denote the same commit set.
+--
+
+=== Composition idioms (non-normative)
+
+These are consequences of the grammar and semantics above, not additional
+rules:
+
+* Staged pipeline — integration tests only after unit tests pass:
+  `rev(refs/heads/main) & results(unit, pass)`.
+* Fan-in — an effect that requires several prerequisites: intersect their
+  `results(...)` queries; the effect fires when the last one lands,
+  regardless of the order the underlying refs moved.
+* Exclusion — CI that skips work-in-progress branches:
+  `rev(refs/heads/*) - rev(refs/heads/wip/*)`.
