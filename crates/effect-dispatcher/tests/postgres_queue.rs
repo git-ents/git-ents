@@ -18,7 +18,6 @@
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
     reason = "test harness and assertions, not application code"
 )]
 
@@ -127,31 +126,29 @@ fn start_docker_postgres() -> Option<TestPostgres> {
         .trim()
         .to_owned();
 
+    // `pg_isready` above checks the container's internal socket, which can
+    // report ready slightly before the published TCP port is actually
+    // reachable from the host. Confirm a real connection before handing the
+    // URL to callers.
+    if !wait_for_tcp(&format!("127.0.0.1:{port}")) {
+        eprintln!("effect-dispatcher postgres_queue: postgres port never became reachable");
+        return None;
+    }
+
     Some(TestPostgres::Docker {
         url: format!("host=127.0.0.1 port={port} user=postgres password=postgres dbname=postgres"),
         container_id,
     })
 }
 
-/// `pg_isready` (used by [`start_docker_postgres`]) checks the container's
-/// internal socket, which can report ready slightly before the published
-/// TCP port is actually reachable. Retry the first real connection instead
-/// of failing on that race.
-fn connect_with_retry(url: &str, repo: String) -> PostgresRefStore {
-    let mut last_err = None;
-    for _ in 0..20 {
-        match PostgresRefStore::connect(url, repo.clone()) {
-            Ok(store) => return store,
-            Err(err) => {
-                last_err = Some(err);
-                std::thread::sleep(Duration::from_millis(250));
-            }
+fn wait_for_tcp(addr: &str) -> bool {
+    for _ in 0..40 {
+        if std::net::TcpStream::connect(addr).is_ok() {
+            return true;
         }
+        std::thread::sleep(Duration::from_millis(250));
     }
-    panic!(
-        "connect: {:?}",
-        last_err.expect("at least one connection attempt")
-    )
+    false
 }
 
 #[test]
@@ -165,8 +162,8 @@ fn dispatcher_sql_claims_across_repos_requeues_stale_and_completes() {
     };
     let repo_a = format!("dispatch-a-{}", uuid::Uuid::new_v4());
     let repo_b = format!("dispatch-b-{}", uuid::Uuid::new_v4());
-    let store_a = connect_with_retry(pg.url(), repo_a.clone());
-    let store_b = connect_with_retry(pg.url(), repo_b.clone());
+    let store_a = PostgresRefStore::connect(pg.url(), repo_a.clone()).expect("connect a");
+    let store_b = PostgresRefStore::connect(pg.url(), repo_b.clone()).expect("connect b");
     let a_id: i64 = store_a
         .enqueue_effect("payload-a")
         .expect("enqueue a")
