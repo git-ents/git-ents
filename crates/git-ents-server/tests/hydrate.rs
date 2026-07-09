@@ -134,24 +134,24 @@ fn start_docker_postgres() -> Option<TestPostgres> {
         .trim()
         .to_owned();
 
+    let url = format!("host=127.0.0.1 port={port} user=postgres password=postgres dbname=postgres");
+
     // `pg_isready` above checks the container's internal socket, which can
-    // report ready slightly before the published TCP port is actually
-    // reachable from the host. Confirm a real connection before handing the
-    // URL to callers.
-    if !wait_for_tcp(&format!("127.0.0.1:{port}")) {
-        eprintln!("git-ents-server hydrate test: postgres port never became reachable");
+    // report ready before the postgres entrypoint's post-initdb restart
+    // finishes — a raw TCP connect can succeed against that transient
+    // listener too. Only a real protocol-level connection confirms the
+    // final server is actually up.
+    if !wait_for_postgres_ready(&url) {
+        eprintln!("git-ents-server hydrate test: postgres never became reachable");
         return None;
     }
 
-    Some(TestPostgres::Docker {
-        url: format!("host=127.0.0.1 port={port} user=postgres password=postgres dbname=postgres"),
-        container_id,
-    })
+    Some(TestPostgres::Docker { url, container_id })
 }
 
-fn wait_for_tcp(addr: &str) -> bool {
+fn wait_for_postgres_ready(url: &str) -> bool {
     for _ in 0..40 {
-        if std::net::TcpStream::connect(addr).is_ok() {
+        if PostgresRefStore::connect(url, "readiness-probe").is_ok() {
             return true;
         }
         std::thread::sleep(Duration::from_millis(250));
