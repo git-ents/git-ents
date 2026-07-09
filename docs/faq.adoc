@@ -90,6 +90,7 @@ Set difference: `rev(refs/heads/*) - rev(refs/heads/wip/*)`.
 *I want an effect that reacts to another effect's results.*
 Name `results(...)` in your query.
 Downstream-of-effects is syntactically visible, so effect recursion is always opted into and never reached by accident.
+`rev()` ranges over code refs only, and `meta()` can never match effect-written namespaces, so the accidental path does not exist.
 
 *I want to see what CI said about a commit.*
 `git effect show ci <commit>` reads the results ref for that commit; `git effect log ci` shows results history.
@@ -102,6 +103,11 @@ Storage and execution are orthogonal; everything a run needs is repo data, so an
 *I want to know why my effect ran twice.*
 The queue is at-least-once; the dedup key `(effect, oid)` plus content addressing makes reruns produce identical, idempotent outcomes.
 The work set is `trigger − results(self, any)`, so a commit with a result is no longer an obligation.
+
+*I want to know what happens when a run crashes.*
+Exit status is always a result: `pass` or `fail` means the effect ran.
+Infrastructure failure is not a result — the queue retries with a bound, and only exhaustion writes a terminal `error` result, signed by the worker like any other.
+A transient outage can neither retry forever nor permanently discharge the obligation.
 
 *I want an effect triggered by file contents, on a timer, or by an external webhook.*
 Deliberately unsupported in the trigger language.
@@ -143,6 +149,10 @@ Each ref's commit history is the audit trail; each commit is signed by its actor
 *I want machine actors (CI workers) in the same trust model as people.*
 Workers are members: enrolled keys, scoped by refname rules to their results refs, revocable as state.
 No privileged write path exists for machines.
+
+*I want to work from two machines and let my own refs diverge.*
+Merge your own heads — sync does this for you, schema-aware over the typed tree.
+Author and placer are both you, and the merge tip descends from the old tip, so the tip invariant is satisfied as written.
 
 '''''
 
@@ -191,6 +201,10 @@ A single-node root — SQLite, local filesystem, Docker — is the project's own
 *I want to log into a hosted forge.*
 `git ents login` links your key to an account; auth state is repository state, so there is no session database or token table.
 
+*I want to control who can read my hosted repository.*
+Fetch authorization is refname-keyed, like write authorization.
+Private repositories beyond that are out of scope for v1.
+
 *I want to create a repository on a hosted server.*
 Today, first push creates it — which means "first push owns the repo" is open per repository.
 Closing it requires a server-level key→account registry, because bare repos are created before any signed push exists.
@@ -210,6 +224,16 @@ A stale or absent index degrades to scanning ref tips — never to wrong answers
 *I want to change an entity's schema.*
 Changing the struct is a storage migration: rewrite the tree under the new struct and commit on the old tip, itself a signed commit.
 History keeps the old encoding as archive; the tip of a meta-ref is always readable by the current binary.
+
+*I pushed a secret into a comment. How do I get it out?*
+`git ents redact` yanks the object: the bytes are withheld from the store and from every future pack, the oid stays in history as evidence, and readers see a redaction marker instead of an error.
+The yank is itself a signed entity under `refs/meta/redactions/*`, checked at ingest so the hole cannot be silently refilled — content addressing would otherwise make un-redaction one push away.
+It is best-effort by nature: no design can recall bytes from clones that already have them.
+Secrets in code history remain git's ordinary rewrite-and-force-push problem, deliberately out of scope.
+
+*I have a repository from before verification existed; will the gate reject it?*
+No — the verification epoch is an entry in `refs/meta/config`, and the gate applies the tip invariant from the epoch forward.
+History before the epoch is archival, the same stance the typed tree takes toward old encodings.
 
 *I want to know what happens when someone force-pushes a branch my effect watches.*
 Trigger sets are monotone and entry-only: a commit leaving the set retracts nothing, because results are immutable history — it simply stops being an obligation.
@@ -239,3 +263,6 @@ Because pipelines are set algebra over commits and results, and composition happ
 
 *Why does deleting the server lose nothing but custody?*
 Because every clone contains the forge; the server was only ever the place where the gate's verdict had teeth.
+
+*Why can an immutable design support redaction?*
+Because withholding bytes is not rewriting history — the oid remains as evidence, and verification never needed the bytes.

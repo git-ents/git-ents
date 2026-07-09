@@ -43,6 +43,7 @@ Two trailers are reserved: `Schema-Version:` for explicit encoding detection if 
 Versioning or binding in the tree would pollute both the schema and the merge path.
 
 *Tip invariant:* the tip of a meta-ref is always readable by the current binary; history is archival.
+(Redacted entries are the one qualification: readers surface a withheld object as a redaction marker, never an error — see Derived.)
 
 === 3. Anchor
 
@@ -51,6 +52,7 @@ A durable pointer into source: blob, optional line range, specific commit.
 * *Retention invariant:* the tree storing an anchor embeds the anchored blob, plus a context blob of the surrounding lines, as ordinary entries — content addressing makes this free.
 The anchored content is reachable from `refs/meta/*` and survives force-push, branch deletion, and gc — no gc special-casing, and no pinned ancestry: the anchored commit's oid is recorded as data only.
 (Gitlinks are not reachability edges and retain nothing; embedding is the only mechanism that works.)
+Redaction (see Derived) is the sole deliberate exception to retention.
 * *Projection:* anchors project onto newer commits at read time — blame plus fuzzy matching against the context blob; anchor data is never mutated.
 When the anchored commit has been gc'd, projection degrades to context matching instead of breaking.
 
@@ -76,6 +78,9 @@ The merge commit satisfies the tip invariant; the contributor's signed commit si
 Cherry-picking creates a new commit object and destroys the author's signature; it is forbidden as an adoption mechanism.
 Fast-forwarding directly to a contributor's commit would put an unauthorized signature at the tip; adoption is always a merge, even a trivial one.
 
+The same merge covers a member's own divergence: two of your machines can race your single-writer ref, and sync resolves it by merging your own heads rather than erroring.
+Author and placer are both you, the merge tip descends from the old tip, and the tip invariant holds as written; typed trees merge schema-aware, not textually.
+
 *The principled split:* content signatures carry authorization only where mutations are author-signed single-writer appends — which the granularity rule guarantees for meta-refs.
 On `refs/heads/*`, pushing commits you did not author is legitimate, so branch refs keep transport-level auth.
 "Signed push is the only write path" is therefore retired; the invariant is the tip invariant above, which is strictly stronger where it applies.
@@ -91,6 +96,9 @@ Verification is a pure function over ref-store reads:
 . The update commits via atomic CAS.
 
 Because members and refname rules live under `refs/meta/*`, the policy is repository state: any frontend evaluates the *actual* policy, offline, staleness bounded by last fetch.
+
+*Verification epoch:* the gate applies the tip invariant from an epoch recorded in `refs/meta/config`; history before the epoch is archival — the typed-tree stance, applied to verification.
+The epoch-setting commit is the first gated tip of the config ref, which resolves the bootstrap circularity of reading the epoch from the very ref the gate verifies.
 
 *The gate is a property of the store, not of writing:*
 
@@ -125,8 +133,11 @@ struct Effect {
 *Trigger semantics:* the trigger denotes a set of commits; the effect fires once per commit that *enters* the set.
 The query algebra is deliberately tiny:
 
-* `rev(expr)` — any revspec or ref glob: `refs/heads/*`, `main ^release`, ancestry, merge-base.
+* `rev(expr)` — any revspec or ref glob over code refs: `refs/heads/*`, `refs/tags/*`, `main ^release`, ancestry, merge-base.
+Meta-refs are outside `rev()`'s domain by definition.
 * `results(effect, status)` — commits having a result of that status; cheap to resolve because the results refname encodes the tested oid.
+* `meta(glob)` — author-written meta-refs, for consumers like the fanout-index rebuild.
+It can never match effect-written namespaces (`refs/meta/results/*`, `refs/meta/index/*`); those are reachable only through `results(…)`.
 * Set operations — union, intersection, difference.
 
 `RefPattern` survives as the degenerate query `rev(<glob>)`; nothing shipped changes meaning.
@@ -138,8 +149,14 @@ Monotone semantics is what makes distributed evaluation safe with no coordinatio
 *No pipeline state:* the work set is `trigger − results(self, any)` — the results ref is the materialization marker.
 The dedup key `(effect, oid)` over an at-least-once queue yields exactly-once outcomes with zero state outside the repository.
 
+*Result taxonomy:* a result is `pass`, `fail`, or `error`.
+Command exit status is always a result — `pass` or `fail` means the effect ran.
+Infrastructure failure is not a result: it is a queue concern with bounded retry, and only retry exhaustion writes a terminal `error` result, signed by the worker's member key like any other.
+Retry bounds are deployment configuration, like executor choice — never effect data.
+This keeps the work set correct in both directions: a transient outage can neither retry forever nor permanently discharge an obligation.
+
 *Recursion is structure, not a rule:* downstream-of-effects is syntactically visible — a query names `results(...)` or it does not.
-Closure is opted into by writing the query you mean; the accidental fork bomb is unreachable.
+Closure is opted into by writing the query you mean; because `rev()` and `meta()` cannot name an effect-written ref, the accidental fork bomb is unreachable by construction.
 
 Pipeline invariants:
 
@@ -188,6 +205,9 @@ Hosted: Postgres rows.
 Local: null; hosted: a durable queue.
 * `Executor` — Docker, Sprite, or unsandboxed, chosen by whoever built it.
 
+The vocabulary defers to gitoxide wherever gitoxide has one — object access is `gix_object::Find`/`Exists`/`Write`, not a private trait — and new seams exist only where upstream is silent: the pluggable ref store, server-side receive, reachability artifacts.
+Crates that extend git rather than the forge carry the `gix-` prefix, import nothing from the forge, and stay upstream-shaped by construction.
+
 "Push" conflates object transfer with a verified ref transaction; locally, transfer is vacuous.
 The unit the library exposes is `receive(refs, objects, events, proposal)`: gate evaluation, effect matching, and enqueue live inside it, above the traits.
 Frontends construct a `Proposal` and call it — the CLI and local UI in-process against the odb, smart-HTTP by unpacking the wire pack into the `ObjectStore` first.
@@ -227,6 +247,12 @@ They keep a subcommand only because import/activation logic is nontrivial; if th
 * *Members, accounts, comments* — typed trees behind meta-refs (1+2), written as signed commits (4), admitted by the gate (5).
 * *Fanout indexes* — discovery without ref enumeration: `refs/meta/index/*` maps object oids to the entities anchored to them, rebuilt by an effect (6) and written via the worker's signed commit (4).
 Clients read the index; a stale or absent index degrades to scanning ref tips, never to wrong answers.
+* *Redaction* — the deliberate exception to retention: an object-level yank, scoped to content reachable only from `refs/meta/*`.
+The bytes are withheld from the store and from generated packs; the oid stays in history as evidence; signatures and the tip invariant are untouched, because verification never reads the withheld bytes.
+A yank is recorded as a signed entity under `refs/meta/redactions/*` and enforced at ingest, because content addressing would otherwise let anyone holding the bytes refill the hole exactly.
+Readers surface a redaction marker, never an error.
+Best-effort by nature: nothing recalls bytes from clones that already hold them.
+Code-history redaction remains git's ordinary rewrite-and-force-push problem, deliberately out of scope.
 * *Rendering registry* — documents render by MIME type through one lookup table (HTML web, plain-text CLI; unknown types pass through).
 Implementation choice.
 * *Embeddable server* — `git-ents-server` is a library first; the serve command, standalone binary, and hooks-as-subcommands are thin wrappers.
@@ -276,6 +302,7 @@ git ents effect ...
 git ents toolchain ...
 git ents comment ...
 git ents inbox list|adopt
+git ents redact <oid>
 git ents login
 git ents serve | server
 ....
