@@ -1,0 +1,163 @@
+= Development Plan
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[abstract]
+Build order, complexity, and agent assignment for the thirteen crates in
+`docs/spec/overview.adoc`.
+Phases follow the dependency graph; crates within a phase have no edges
+between them and build in parallel.
+The `pre-redo` tag is the salvage path throughout: correctness that was
+hard-won once (CAS discipline, anchor projection, docker readiness,
+sprite quirks, backend conformance, Postgres/Tigris store code) is ported
+and re-verified, not rediscovered.
+
+== Agent scheme
+
+* *sonnet* — bulk and medium-complexity implementation, ports from
+  `pre-redo`, template/CLI surface breadth.
+* *opus* — high-complexity subsystems: wire protocols, merge algorithms,
+  store backends with subtle atomicity.
+* *fable* — the two crates where a quiet bug is a security hole or a
+  wrong design (`ents-gate`, `ents-query` core semantics), public-API
+  review of every crate at its phase boundary, and integration.
+* *haiku* — trivial glue (the honesty-test root).
+
+Every crate lands with Tracey annotations mapping its spec rules
+(`.config/tracey/config.styx` already covers `docs/spec/`), tests run
+via `cargo nextest run`, and a fable review of the public API before
+anything in the next phase depends on it.
+
+== Crate schedule
+
+[cols="2,1,1,1,4", options="header"]
+|===
+| Crate | Phase | Complexity | Agent | Notes
+
+| `facet-git-tree`
+| 0
+| Low
+| sonnet
+| Exists (external repo). Stays domain-blind. Land the
+  `#[facet(transparent)]` fix upstream and drop the local `[patch]`.
+
+| `gix-ref-store`
+| 0
+| Medium
+| sonnet
+| Read/CAS trait split per `arch.refstore-read-cas-split`; loose-ref impl
+  ports the CAS discipline from `pre-redo` (`receive.loose-cas-discipline`:
+  no shelling to `git update-ref`). Fable reviews the trait before
+  phase 2 consumes it.
+
+| `gix-receive`
+| 0
+| High
+| opus
+| Smart-HTTP wire framing + pack ingestion, zero policy. Protocol-v2 and
+  sideband subtleties; conformance-test against real `git` clients.
+  Quarantine semantics per `receive.object-access`.
+
+| `ents-model`
+| 1
+| Low
+| sonnet
+| Entity structs, namespaces, trailers, taxonomy — declarative, but it is
+  the vocabulary every crate imports, so spec fidelity and the public API
+  review matter more than the code. Absorbs git-metadata's trailer work.
+
+| `ents-gate`
+| 2
+| Medium
+| fable
+| Small in lines, security-critical in every line: tip signature,
+  refname binding, DAG-FF, epoch, bootstrap fail-closed. Pure over the
+  read half of `RefStore`. Exit test: identical verdicts at all three
+  call sites.
+
+| `ents-query`
+| 2
+| High
+| fable
+| The critical path: grammar/parser (easy), static footprint extraction,
+  incremental set-entry via generation numbers, work set
+  `trigger − results(self, any)` (hard). Property-test monotone entry-only
+  semantics against synthetic ref histories.
+
+| `ents-anchor`
+| 2
+| Medium
+| sonnet
+| Mostly a port: projection (blame + fuzzy context match) survives at
+  `pre-redo`; re-home it on `ents-model` and the new retention rule
+  (embed blob + context, no gitlinks).
+
+| `ents-receive`
+| 3
+| Medium
+| sonnet
+| Orchestration above traits that already exist by now: gate
+  policy (mandatory/advisory), footprint matching, enqueue, `(effect,
+  oid)` dedup, redaction at ingest. Defines `EventSink`. Fable reviews the
+  `receive()` signature — every frontend is downstream of it.
+
+| `ents-sync`
+| 3
+| High
+| opus
+| Fetch/push plumbing is routine; the schema-aware three-way merge over
+  typed trees (divergence + adoption on one machinery) is the hard part.
+  Absorbs git-store's merge.
+
+| `ents-effect`
+| 4
+| Medium
+| sonnet
+| `Executor` trait + Docker/Sprite backends (feature-gated), toolchain
+  materialization, run loop, write-back as a receive client. Ports docker
+  readiness probes and sprite quirks from `pre-redo`; the design is
+  settled, the environment is the risk.
+
+| `ents-web`
+| 4
+| Medium
+| sonnet
+| Broad surface, low algorithmic depth. Signing identity injected by the
+  root. Accepts the honest `ents-receive` dependency (no write facade).
+
+| `git-ents` (bin)
+| 5
+| Medium
+| sonnet
+| Local root wiring (~50 lines) plus the real cost: subcommand surface,
+  `serve` = `ents-web` + `gix-receive` on loopback,
+  `denyCurrentBranch=updateInstead` worktree edge.
+
+| `git-ents-server` (bin)
+| 5
+| High
+| opus
+| Postgres `RefStore` (multi-ref CAS in a transaction), Tigris object
+  store behind gitoxide traits, durable-queue `EventSink`, Sprite
+  executor, path validation, sessions/CSRF. Salvage from the scale-out
+  work at `pre-redo`; worker stays a mode until scale splits it.
+|===
+
+== Phase gates
+
+* *Phase 0 → 1*: `gix-ref-store` passes a CAS conformance suite
+  (concurrent writers, crash injection); `gix-receive` round-trips a push
+  from stock git.
+* *Phase 2 → 3*: gate verdicts proven identical across call sites;
+  query evaluator handles the staged-pipeline and fan-in idioms
+  incrementally on a synthetic repo.
+* *Phase 3 → 4*: end-to-end local write path (`receive` in-process,
+  advisory gate, null `EventSink`) green; sync merge fuzz-tested against
+  divergent typed trees.
+* *Phase 5 exit*: the honesty test — a third single-node root (SQLite,
+  local fs, Docker; `roots.honesty-test`) built by *haiku* from library
+  crates alone, no library modification. If haiku can't write it in ~50
+  lines, the seams failed, not haiku.
+
+Backend conformance tests are shared suites written once against each
+trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
+the `pre-redo` backend-conformance pattern, resurrected.
