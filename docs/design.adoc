@@ -1,0 +1,99 @@
+= git-ents: The Shape of the System
+
+`abstractions.adoc` states the invariants; this document states what they add up to.
+It is the design as a whole — the thesis, the stories that follow from it, and what the end application is.
+
+'''''
+
+== Thesis
+
+A forge is a repository plus a store with an admission policy.
+Everything else a forge appears to be — identity, authorization, discussion, CI, audit — is repository state, and therefore portable, offline-verifiable, and owned by whoever holds a clone.
+
+The consequence stated bluntly: the hosted server is not the forge.
+It is custody of the canonical refs, a gate with teeth, and a queue.
+Delete it and every clone still contains the members, the policy, the discussion, the CI verdicts, and the cryptographic evidence that all of it is authentic.
+
+'''''
+
+== The write story
+
+"Push" conflates two things: object transfer and a verified ref transaction.
+Locally, transfer is vacuous — so the system's real write primitive is the transaction: `receive(refs, objects, events, proposal)`, a library function pure over storage traits.
+Every mutation frontend — CLI, local web UI, smart-HTTP — constructs a proposal and calls the same function.
+Local and hosted do not share a push path; they share `receive`.
+
+Mutations are author-signed commits, not push certificates.
+A push cert signs a transition and evaporates at the transport layer; a commit signature replicates with the repo and verifies in every clone, forever.
+Verification evidence is repository state, like everything else.
+Refname binding lives in an `Ents-Ref:` trailer; anti-replay is fast-forward-plus-CAS, with the parent hash as the freshness binding.
+
+Because writing and verifying are separated, local is genuinely offline-first: the local store accepts any write and the gate merely annotates.
+You can author while unenrolled, work against an unfetched member list, and accumulate meta-refs the canonical store would reject.
+The gate is the same pure function everywhere; only its consequence differs — advisory locally, mandatory at the hosted CAS.
+
+'''''
+
+== The trust story
+
+A commit signature proves authorship; refname rules prove placement; the two are deliberately distinct.
+In the normal case one person is both, and the tip invariant — every meta-ref tip is signed by a member authorized for that refname — is checkable after the fact by anyone with a clone.
+
+When author and placer differ, the mechanism is adoption: an authorized member merges the contributor's signed commit onto the canonical ref.
+The merge satisfies the tip invariant; the contributor's signature survives intact in ancestry.
+Cherry-pick is forbidden as an adoption verb because it destroys the signature it is supposed to honor.
+
+This resurrects the email-patch workflow on native primitives.
+The inbox ref is the mailing list; the adoption merge is the maintainer applying a signed patch; the trust decision is explicit, recorded, and attributed on both sides.
+A rejected canonical push degrades to an inbox offer, not an error.
+
+Workers are inside the same trust model.
+An effect runner is a member with a key, scoped by refname rules, revocable as repository state — never an ambient authority.
+"Official CI" is not a runtime property; it is a refname rule saying canonical results refs are writable only by designated worker keys.
+
+'''''
+
+== The execution story
+
+The repository is an event-sourced system: refs are the log, effects are the consumers, membership is the access control, and the queue is the only component outside the data model — pure plumbing with no correctness content.
+
+An effect subscribes to a commit-set query and fires once per commit entering the set.
+Pipelines are query composition, not orchestration: staged CI is an intersection with a results set, fan-in is intersection, conditional edges are difference.
+The pipeline's state is the results namespace; the work set is `trigger − results(self, any)`; exactly-once outcomes fall out of content addressing with zero state outside the repo.
+Semantics are monotone and entry-only, which is what makes distributed evaluation safe with nothing but the existing CAS.
+
+Execution is orthogonal to storage.
+What to run is repo data; how to run it is a deployment property chosen at a composition root — so "local store, cloud executor" is a quadrant that exists without being designed: `git effect run --executor sprite` on your own account.
+Results you run yourself land in your own namespace, cryptographically distinct from official verdicts, adoptable by merge when a maintainer decides to trust them.
+
+The economic consequence: hosted CI is not load-bearing.
+A contributor with no push access gets full CI on the real toolchains, self-funded and self-executed, with shareable, verifiable results.
+Anyone can run CI; nobody can impersonate the verdict.
+
+'''''
+
+== The deployment story
+
+No code knows where it is running.
+The core is handed four traits — `RefStore`, `ObjectStore`, `EventSink`, `Executor` — and deployment exists only in composition roots of roughly fifty lines.
+Local wires files, the odb, Docker, a null sink, and an advisory gate; hosted wires Postgres, Tigris, a durable queue, Sprites, and a mandatory gate.
+The honesty test is that a third root — single-node self-hosting, say — is constructible without touching the library.
+
+Policy travels with the repo, so the local UI does not approximate the remote's rules; it evaluates them, offline, staleness bounded by last fetch.
+The hosted server is not where policy lives — it is the one place where the verdict has teeth.
+
+'''''
+
+== What it is to use
+
+*A solo developer* has a complete forge on a laptop: comments anchored into source, effects run on demand in the same sandbox path production uses, a local web UI signing with their own key — no daemon, no account, no server.
+
+*A team* adds exactly one thing: a canonical store.
+Enrollment is a signed commit; revocation is a state change; the audit trail is ref history; nobody administers a session database because none exists.
+
+*An outside contributor* has almost everything a member has: they author signed entities locally, run the project's real CI on their own executor, and submit through the inbox — attribution guaranteed by their own signature, acceptance recorded in the maintainer's.
+
+*An auditor* needs only a clone: every policy decision, membership change, CI verdict, and adoption is a signed commit whose verification requires no server's cooperation.
+
+The design's central property, restated as experience: there is one channel.
+Human or machine, local or hosted, everything that changes state flows through the same verified, audited path — and that path lives in the repository you already have.

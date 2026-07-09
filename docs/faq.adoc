@@ -1,0 +1,241 @@
+= git-ents: FAQ and User Stories
+
+`abstractions.adoc` states the invariants and `design.adoc` states the shape; this document answers the questions a person actually has, organized as user stories.
+Every interaction the system supports should appear here; an interaction with no story is either derived from one that does, or a gap in this document.
+
+'''''
+
+== What is this?
+
+*What is git-ents?*
+A forge — issues, comments, code review, CI, membership — where every piece of forge state is a git object under `refs/meta/*` in the repository itself.
+There is no forge database; a clone of the repository is a clone of the forge.
+
+*How does it work, in one paragraph?*
+Entities (members, comments, effects, results) are Rust structs stored directly as git trees, one ref per independently-authored entity.
+Every mutation is a commit signed by its author; a pure verification function — the gate — checks that each meta-ref tip is signed by a member authorized for that refname.
+Side effects (CI and everything like it) are declarative subscriptions to commit sets, executed in sandboxes by workers who are themselves members, writing results back as signed commits.
+The hosted server is only a store that runs the gate with teeth; locally, the same gate advises instead of blocks.
+
+*What do I need to run it?*
+Locally: the `git-ents` binary and a repository.
+There is no daemon, no account, and no server in the local story.
+
+*Is the hosted server required for anything?*
+Only for a shared canonical store — a single place a team agrees is authoritative.
+Identity, policy, discussion, CI, and audit all work from any clone.
+
+'''''
+
+== Getting started (solo developer)
+
+*I want a forge for my personal project, with no server.*
+Run `git ents setup` in your repository.
+You now have comments, effects, toolchains, and a local web UI, all storing state under `refs/meta/*` in the repo you already have.
+
+*I want to enroll myself as a member.*
+`git ents members add` creates a member entity carrying your public key, written as a commit signed by that key.
+On an empty member list, the first enrollment is self-admitting by design — see the bootstrap question under Hosted.
+
+*I want to browse my forge in a browser.*
+`git ents serve` runs the web UI locally against your working repository.
+Edits made in the UI are signed with your own member key and are indistinguishable from CLI-authored commits.
+
+*I want all of this to survive cloning my repo to a new machine.*
+It does by construction: `git clone` plus fetching `refs/meta/*` moves the entire forge, including its audit history and the signatures needed to verify it.
+
+'''''
+
+== Comments and anchors
+
+*I want to leave a comment on specific lines of code.*
+`git comment add --file src/lib.rs --lines 40-52 -m "why saturating_add?"`.
+The comment is a typed tree on its own ref, anchored to the blob, line range, and commit you commented on.
+
+*I want my comment to still make sense after the code changes.*
+Anchors project onto newer commits at read time using blame plus fuzzy matching; the stored anchor is never mutated.
+
+*I want comments to survive force-pushes, branch deletion, and gc.*
+The anchor embeds the commented blob and its surrounding context as ordinary tree entries, reachable from `refs/meta/*`.
+Content addressing makes this free, and no gc special-casing is needed.
+
+*I want to see all comments on the current commit.*
+`git comment show` aggregates comment refs and projects their anchors onto your checkout.
+
+*I want to build something else on anchors — review threads, TODO overlays, blame annotations.*
+Anchors are consumer-independent; comments are merely their first client.
+
+'''''
+
+== Effects (CI and everything like it)
+
+*I want tests to run when branches move.*
+`git effect add ci --on 'refs/heads/*' --toolchain rust-1.88 -- cargo test`.
+The effect is repository data; on a hosted store, matching pushes enqueue runs.
+
+*I want to run CI locally before pushing, and trust that it matches production.*
+`git effect run ci` materializes the same toolchains and executes in the same sandbox path as the hosted worker; only the queue is skipped.
+This identity is a stated correctness anchor of the project, not a convenience.
+
+*I want a staged pipeline — integration tests only after unit tests pass.*
+Triggers are commit-set queries: `git effect add integ --on 'rev(refs/heads/main) & results(ci, pass)' ...`.
+The stage is a set intersection; there is no orchestrator and no pipeline database — the results namespace is the pipeline state.
+
+*I want fan-in: run when several conditions all hold.*
+Intersect the sets; the effect fires when the last prerequisite lands, regardless of the order refs moved.
+
+*I want to exclude WIP branches.*
+Set difference: `rev(refs/heads/*) - rev(refs/heads/wip/*)`.
+
+*I want an effect that reacts to another effect's results.*
+Name `results(...)` in your query.
+Downstream-of-effects is syntactically visible, so effect recursion is always opted into and never reached by accident.
+
+*I want to see what CI said about a commit.*
+`git effect show ci <commit>` reads the results ref for that commit; `git effect log ci` shows results history.
+Results are one ref per tested commit, so concurrent runs never conflict.
+
+*I want CI runs on my own cloud account, from my laptop.*
+`git effect run ci --executor sprite` with your own Fly token.
+Storage and execution are orthogonal; everything a run needs is repo data, so any store can pair with any executor.
+
+*I want to know why my effect ran twice.*
+The queue is at-least-once; the dedup key `(effect, oid)` plus content addressing makes reruns produce identical, idempotent outcomes.
+The work set is `trigger − results(self, any)`, so a commit with a result is no longer an obligation.
+
+*I want an effect triggered by file contents, on a timer, or by an external webhook.*
+Deliberately unsupported in the trigger language.
+Content awareness belongs inside the effect's command, and time or external events belong to whatever writes a ref; triggers stay DAG membership plus results membership.
+
+*I want to run an effect without a sandbox.*
+Only behind an explicit `--unsandboxed`, only locally, and an effect can never demand it as data.
+
+'''''
+
+== Toolchains
+
+*I want CI to use a pinned compiler, everywhere.*
+`git toolchain import rustup:1.88-aarch64-apple-darwin` stores a ~1KB hash-pinned manifest under `refs/meta/toolchains/*`.
+The repo carries its own execution environment with provenance; only the sandbox ever touches the bytes.
+
+*I want to inspect or audit a toolchain.*
+`git toolchain view rust-1.88` and `git toolchain log rust-1.88` — the manifest is a typed tree and its history is a ref like any other.
+
+'''''
+
+== Teams, membership, and trust
+
+*I want to add a teammate.*
+`git ents members add` — a signed commit by someone authorized for the member refs.
+Enrollment is repository state; there is no user database beside the repo.
+
+*I want to remove someone's access without breaking history.*
+`git ents members revoke` marks the member revoked; the key is explicitly rejected from then on.
+Revocation is a state, never a deletion — deleting the entity would merely make their old signatures unverifiable, which is the opposite of what an audit needs.
+
+*I want to verify that nobody tampered with forge state.*
+Every meta-ref tip must be signed by a member authorized for that refname, bound to the ref by an `Ents-Ref:` trailer, descending from the previous tip.
+`git ents members check` verifies this from any clone, with no server's cooperation.
+
+*I want to know who did what, and when.*
+Each ref's commit history is the audit trail; each commit is signed by its actor, human or worker.
+
+*I want machine actors (CI workers) in the same trust model as people.*
+Workers are members: enrolled keys, scoped by refname rules to their results refs, revocable as state.
+No privileged write path exists for machines.
+
+'''''
+
+== Contributing from outside
+
+*I want to comment on a project I can't push to.*
+Author the comment locally — the local store accepts any write.
+The gate tells you, offline, that the canonical store would reject it, and sync offers to push to your inbox ref instead.
+
+*I want a maintainer to accept my contribution with my name cryptographically on it.*
+The maintainer adopts by merging your signed commit onto the canonical ref.
+Their merge satisfies the tip invariant; your signature survives intact in ancestry.
+Cherry-pick is forbidden as an adoption verb because it would destroy the signature it is meant to honor.
+
+*I want to prove my patch passes CI, without any access.*
+Run the project's real effects on your own executor; results land in your namespace (`refs/meta/results/~you/*`), signed by you, shareable and verifiable.
+A maintainer can adopt them, with the trust decision explicit in the adoption merge.
+
+*I want to know why this feels like the old email-patch workflow.*
+Because it is that workflow rebuilt on native primitives: inbox ref as mailing list, adoption merge as the maintainer applying a signed patch, attribution guaranteed on both sides.
+
+'''''
+
+== Local vs hosted
+
+*I want to work fully offline.*
+Everything writes locally; the gate never blocks a local write.
+Policy is repository state, so the gate evaluates the actual canonical rules offline, staleness bounded by your last fetch.
+
+*I want to know before pushing whether my push will be accepted.*
+The push pre-flight runs the same gate function the hosted store runs at CAS time; it is a prediction that can only be stale, never wrong about the rules.
+
+*I want to understand what the hosted server actually is.*
+A store with a mandatory gate and a durable queue: custody of canonical refs, admission with teeth, and effect dispatch.
+Policy does not live there; it merely has consequences there.
+
+*I want web edits on the hosted UI attributed correctly.*
+Hosted web edits are commits signed by the server's key, which must itself be an enrolled member — a necessity because a browser cannot hold your signing key.
+Locally, the UI signs as you; the server-key indirection is never imported where it isn't forced.
+
+*I want to self-host on one node without Postgres or Tigris.*
+Deployment exists only in composition roots wiring four traits (`RefStore`, `ObjectStore`, `EventSink`, `Executor`).
+A single-node root — SQLite, local filesystem, Docker — is the project's own honesty test for its seams.
+*(Gap: this root does not exist yet.)*
+
+*I want to log into a hosted forge.*
+`git ents login` links your key to an account; auth state is repository state, so there is no session database or token table.
+
+*I want to create a repository on a hosted server.*
+Today, first push creates it — which means "first push owns the repo" is open per repository.
+Closing it requires a server-level key→account registry, because bare repos are created before any signed push exists.
+Known gap; direction chosen, not yet enforced.
+
+'''''
+
+== Power tools and edges
+
+*I want to inspect any entity, even one my binary doesn't know.*
+`git store show refs/meta/<anything>` pretty-prints any typed meta-ref — the generic escape hatch.
+
+*I want to find every comment on a given object without enumerating refs.*
+Fanout indexes under `refs/meta/index/*` map oids to the entities anchored to them, rebuilt by an effect.
+A stale or absent index degrades to scanning ref tips — never to wrong answers.
+
+*I want to change an entity's schema.*
+Changing the struct is a storage migration: rewrite the tree under the new struct and commit on the old tip, itself a signed commit.
+History keeps the old encoding as archive; the tip of a meta-ref is always readable by the current binary.
+
+*I want to know what happens when someone force-pushes a branch my effect watches.*
+Trigger sets are monotone and entry-only: a commit leaving the set retracts nothing, because results are immutable history — it simply stops being an obligation.
+
+*I want to push to a checked-out branch on my local server.*
+Local serving sets `receive.denyCurrentBranch=updateInstead`, so accepted pushes also update the working tree.
+Known edge: `updateInstead` fails on a dirty worktree, so branch pushes are not perfectly identical to hosted mode — metadata pushes are, because `refs/meta/*` never touches a worktree.
+
+*I want to script against the forge from my editor or CI.*
+`git-ents-server` is a library first; the serve command and binaries are thin wrappers, and the primitives (`git store`, `git anchor`, `git comment`, `git effect`, `git toolchain`) are plumbing over the same library.
+
+'''''
+
+== The one-sentence answers
+
+*Why refs for everything?*
+Because a ref is simultaneously the unit of storage, sync, authorization, and history — one abstraction doing four jobs.
+
+*Why signed commits instead of push certificates?*
+Because a commit signature replicates with the repo and verifies in every clone forever, while a push cert evaporates at the transport layer.
+
+*Why can anyone run CI but nobody fake it?*
+Because "official" is a refname rule on canonical results refs, not a runtime property of a blessed machine.
+
+*Why is there no workflow language?*
+Because pipelines are set algebra over commits and results, and composition happens in the repository, not in a trigger DSL — stated in the abstractions as a bet, deliberately.
+
+*Why does deleting the server lose nothing but custody?*
+Because every clone contains the forge; the server was only ever the place where the gate's verdict had teeth.

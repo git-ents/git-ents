@@ -1,14 +1,13 @@
 = git-ents Abstractions
 
-The load-bearing abstractions, stated as invariants; everything else in
-the project is an instance or a consequence.
+The load-bearing abstractions, stated as invariants; everything else in the project is an instance or a consequence.
 
-*Admission rule:* an abstraction appears here only if it already carries
-weight in multiple crates or commands. Nothing speculative.
+*Admission rule:* an abstraction appears here only if it already carries weight in multiple crates or commands, or closes a gap those abstractions exposed.
+Where this document runs ahead of shipped code, the gap is marked.
 
 '''''
 
-== The five abstractions
+== The six abstractions
 
 === 1. Meta-ref
 
@@ -16,167 +15,228 @@ A ref under `refs/meta/*` is simultaneously the unit of:
 
 * *Storage* — the ref points to a commit whose tree is the entity.
 * *Synchronization* — fetch or push only the entities you care about.
-* *Authorization* — pre-receive rules gate access by refname.
-* *History* — the ref’s commit history is the audit trail.
+* *Authorization* — refname-keyed rules gate who may advance the ref.
+* *History* — the ref's commit history is the audit trail.
 
-*Granularity rule:* one ref per independently-authored entity
-(`refs/meta/member/*`, `refs/meta/comments/*`, `refs/meta/effects/*`,
-`refs/meta/results/*`); one ref for repo-global state
-(`refs/meta/account`, `refs/meta/config`). Entities that different
-actors write concurrently must not share a ref. Writes stay
-conflict-free; reads aggregate refs into views.
+*Granularity rule:* one ref per independently-authored entity (`refs/meta/member/*`, `refs/meta/comments/*`, `refs/meta/effects/*`, `refs/meta/results/*`); one ref for repo-global state (`refs/meta/account`, `refs/meta/config`).
+Entities that different actors write concurrently must not share a ref.
+Writes stay conflict-free; reads aggregate refs into views.
+
+Two namespaces are consequences of the granularity rule plus the gate (5):
+
+* `refs/meta/inbox/*` — entities authored by someone not authorized for a canonical ref, awaiting adoption.
+* `refs/meta/results/~<member>/*` — results produced by a member's own executor rather than a designated worker.
+
+Both hold the same typed trees as their canonical counterparts; only the refname rule differs.
 
 === 2. Typed tree
 
 A Rust struct annotated `#[derive(Facet)]` *is* the storage schema.
-`facet-git-tree` maps struct ↔ Git tree directly; no serialization
-format exists to version.
+`facet-git-tree` maps struct ↔ Git tree directly; no serialization format exists to version.
 
-Changing a struct is a storage migration, not a refactor — and a
-migration is itself a signed push: rewrite the tree under the new
-struct, commit on the ref’s old tip. History keeps the old encoding as
-archive. Trees stay pure struct representations — no version marker
-entry. If explicit version detection is ever needed, it belongs in a
-`Schema-Version:` commit-message trailer: the commit is already the
-storage unit, so versioning the encoding there pollutes neither the
-tree nor the merge path.
+Changing a struct is a storage migration, not a refactor — and a migration is itself a signed commit: rewrite the tree under the new struct, commit on the ref's old tip.
+History keeps the old encoding as archive.
+Trees stay pure struct representations — no version marker entry.
 
-*Tip invariant:* the tip of a meta-ref is always readable by the
-current binary; history is archival.
+Ref-level metadata that is not entity content belongs in commit-message trailers, because the commit is already the storage unit.
+Two trailers are reserved: `Schema-Version:` for explicit encoding detection if it is ever needed, and `Ents-Ref:` for refname binding (see 4).
+Versioning or binding in the tree would pollute both the schema and the merge path.
+
+*Tip invariant:* the tip of a meta-ref is always readable by the current binary; history is archival.
 
 === 3. Anchor
 
-A durable pointer into source: blob, optional line range, specific
-commit.
+A durable pointer into source: blob, optional line range, specific commit.
 
-* *Retention invariant:* the tree storing an anchor embeds the anchored
-blob, plus a context blob of the surrounding lines, as ordinary entries
-— content addressing makes this free. The anchored content is reachable
-from `refs/meta/*` and survives force-push, branch deletion, and gc — no
-gc special-casing, and no pinned ancestry: the anchored commit’s oid is
-recorded as data only. (Gitlinks are not reachability edges and retain
-nothing; embedding is the only mechanism that works.)
-* *Projection:* anchors project onto newer commits at read time — blame
-plus fuzzy matching against the context blob; anchor data is never
-mutated. When the anchored commit has been gc’d, projection degrades to
-context matching instead of breaking.
+* *Retention invariant:* the tree storing an anchor embeds the anchored blob, plus a context blob of the surrounding lines, as ordinary entries — content addressing makes this free.
+The anchored content is reachable from `refs/meta/*` and survives force-push, branch deletion, and gc — no gc special-casing, and no pinned ancestry: the anchored commit's oid is recorded as data only.
+(Gitlinks are not reachability edges and retain nothing; embedding is the only mechanism that works.)
+* *Projection:* anchors project onto newer commits at read time — blame plus fuzzy matching against the context blob; anchor data is never mutated.
+When the anchored commit has been gc'd, projection degrades to context matching instead of breaking.
 
-Anchors are independent of any consumer; comments use them, but reviews,
-TODOs, and blame overlays can too.
+Anchors are independent of any consumer; comments use them, but reviews, TODOs, and blame overlays can too.
 
-=== 4. Signed push
+=== 4. Signed commit
 
-`git push` is the *only write path*. Every mutation, including metadata,
-is a signed push certificate verified by pre-receive against the member
-refs.
+Every meta-ref mutation is an author-signed commit.
+The signature is a data artifact, not a transport artifact: it replicates with the repo and verifies offline in every clone, so verification evidence is itself repository state.
+Push certificates are demoted to transport concerns; they carry no meta-ref semantics.
 
-* Web-UI edits become real pushes signed by the server’s key, which must
-itself appear in the member database.
-* Effect workers write results with their own member keys. *No
-privileged write path exists.*
-* Auth state is repository state: no session database, no token table.
-Revocation is a state on the member entity, not deletion — a revoked key
-must be explicitly rejected, whereas deletion would merely make old
-signatures unverifiable.
-* Authorization is refname-keyed pre-receive rules.
-`refs/meta/effects/*` is admin-writable only: authoring an effect
-schedules code execution, which requires more trust than pushing a
-branch. This rule must exist explicitly; it is not the default.
-* Bootstrap: an empty member list admits every push so the first member
-can enroll. Hosted, this leaves “first push owns the repo” open per
-repository; closing it — repository creation requires an existing
-account — needs a server-level key→account registry, because bare repos
-are created on the first `info/refs` request, before any push
-certificate exists. Known gap, direction chosen, not yet enforced.
+A commit signature proves authorship; it does not prove placement.
+The difference is recovered explicitly:
 
-=== 5. Effect
+* *Refname binding* — an `Ents-Ref:` trailer names the ref the commit was authored for, checked at verification; without it, a signed commit could be replayed as the tip of a different meta-ref.
+* *Anti-replay* — meta-refs advance fast-forward-only in the DAG sense (the new tip descends from the old), enforced by atomic CAS on the ref store; the parent hash is the freshness binding, so no nonce is needed.
 
-Push-triggered side effects are the *only side-effect path*. An effect
-is repository data under `refs/meta/effects/<name>`:
+*Tip invariant:* the tip of a meta-ref is signed by a member authorized for that refname.
+This is checkable after the fact by anyone with a clone, not only by whoever ran the server.
+
+*Adoption, never rewrite:* when author and placer differ — an inbox entity accepted by an admin, a user-run result accepted by a maintainer — the authorized member merges the contributor's commit onto the canonical ref.
+The merge commit satisfies the tip invariant; the contributor's signed commit sits in ancestry with attribution cryptographically intact.
+Cherry-picking creates a new commit object and destroys the author's signature; it is forbidden as an adoption mechanism.
+Fast-forwarding directly to a contributor's commit would put an unauthorized signature at the tip; adoption is always a merge, even a trivial one.
+
+*The principled split:* content signatures carry authorization only where mutations are author-signed single-writer appends — which the granularity rule guarantees for meta-refs.
+On `refs/heads/*`, pushing commits you did not author is legitimate, so branch refs keep transport-level auth.
+"Signed push is the only write path" is therefore retired; the invariant is the tip invariant above, which is strictly stronger where it applies.
+
+=== 5. Gate
+
+Verification is a pure function over ref-store reads:
+
+[arabic]
+. The new tip is signed by a member authorized for this refname.
+. The `Ents-Ref:` trailer matches the refname.
+. The new tip descends from the old tip.
+. The update commits via atomic CAS.
+
+Because members and refname rules live under `refs/meta/*`, the policy is repository state: any frontend evaluates the *actual* policy, offline, staleness bounded by last fetch.
+
+*The gate is a property of the store, not of writing:*
+
+* The hosted store runs the gate at CAS time; failure aborts the transaction (*mandatory*).
+* The local store accepts any write and runs the gate as a verdict; failure annotates (*advisory*).
+
+Enforcing the gate locally would destroy offline-first: you could not author while unenrolled or work against an unfetched member list.
+You can always write locally what hosted will never accept; the sync path's answer to a rejected canonical push is an offer to push to your inbox ref instead.
+
+Three call sites, one function: hosted CAS, local UI verdict, push pre-flight.
+The hosted server is not where policy lives; it is the one place where the verdict has teeth.
+
+The local web UI signs as the user, with the user's own member key, indistinguishable from CLI-authored commits.
+Server-key signing of UI edits is a hosted necessity only (a browser cannot hold the git signing key) and must not be imported locally, where it would be strictly worse provenance.
+
+=== 6. Effect
+
+An effect is a declarative, content-addressed subscription to a commit-set query, whose execution is sandboxed and whose output re-enters the repository as verified data.
+It is repository data under `refs/meta/effects/<name>`:
 
 [source,rust]
 ----
 #[derive(Facet)]
 struct Effect {
-    trigger: RefPattern,           // e.g. "refs/heads/*"
+    trigger: CommitQuery,          // a commit set as a function of ref state
     toolchains: Vec<ToolchainRef>, // e.g. ["rust-1.88"]
     run: Command,
     results: RefName,              // e.g. "refs/meta/results/<name>/*"
 }
 ----
 
+*Trigger semantics:* the trigger denotes a set of commits; the effect fires once per commit that *enters* the set.
+The query algebra is deliberately tiny:
+
+* `rev(expr)` — any revspec or ref glob: `refs/heads/*`, `main ^release`, ancestry, merge-base.
+* `results(effect, status)` — commits having a result of that status; cheap to resolve because the results refname encodes the tested oid.
+* Set operations — union, intersection, difference.
+
+`RefPattern` survives as the degenerate query `rev(<glob>)`; nothing shipped changes meaning.
+*(Gap: `CommitQuery` beyond the degenerate case is design, not code.)*
+
+*Monotone, entry-only:* a force-push can shrink a set, but a commit leaving the set retracts nothing — results are immutable history; the commit merely stops being an obligation.
+Monotone semantics is what makes distributed evaluation safe with no coordination beyond the existing CAS.
+
+*No pipeline state:* the work set is `trigger − results(self, any)` — the results ref is the materialization marker.
+The dedup key `(effect, oid)` over an at-least-once queue yields exactly-once outcomes with zero state outside the repository.
+
+*Recursion is structure, not a rule:* downstream-of-effects is syntactically visible — a query names `results(...)` or it does not.
+Closure is opted into by writing the query you mean; the accidental fork bomb is unreachable.
+
 Pipeline invariants:
 
 [arabic]
-. `post-receive` matches `(refname, old, new)` against
-`refs/meta/effects/*`; matches enqueue `(effect, refname, new_oid)`.
-That tuple is the dedup key — the queue is at-least-once; git’s content
-addressing makes idempotency nearly free.
-. Pushes are never blocked; the durable enqueue is the entire
-synchronous cost.
-. A worker dequeues, materializes declared toolchains from
-`refs/meta/toolchains/*`, executes in a sandbox — one trait, two
-backends: Fly.io Sprite hosted, Docker local. Host-direct exists only
-behind an explicit `--unsandboxed`.
-. Results return *only* via signed push to the effect’s results ref, one
-ref per tested commit (`refs/meta/results/<effect>/<short-oid>`), so
-concurrent results never conflict.
+. `post-receive` remains a dumb matcher: a query's ref footprint is statically extractable, so a transition maps to affected queries, which enqueue re-evaluation.
+Set entry is computed incrementally from the `old..new` frontier, bounded by commit-graph generation numbers.
+. Pushes are never blocked; the durable enqueue is the entire synchronous cost.
+. A worker dequeues, materializes declared toolchains from `refs/meta/toolchains/*`, and executes in a sandbox — one trait, multiple backends: Fly.io Sprite, Docker.
+Host-direct exists only behind an explicit `--unsandboxed`.
+. Results return *only* as signed commits pushed to the effect's results ref, one ref per tested commit (`refs/meta/results/<effect>/<short-oid>`), so concurrent results never conflict.
 
-*Recursion rule:* triggers never match `refs/meta/results/*` or
-`refs/meta/index/*`. Results and indexes are pushes, so effects could
-trigger effects; that closure must be opted into per effect, never
-arrived at by accident.
+*Identity discipline:* the runner is a member, not an ambient authority.
+A result signature proves who pushed the result, not that the run was faithful; official results are official because canonical results refs are writable only by designated worker keys — a refname rule, not a runtime property.
+Any member may run any effect on their own executor and account; their results land in `refs/meta/results/~<member>/*` or the inbox, adoptable by merge like everything else, with the trust decision explicit in the adoption.
+Anyone can run CI; nobody can impersonate the verdict.
 
-The sandbox bounds the runtime blast radius; the admin-only write rule
-on `refs/meta/effects/*` bounds who can schedule execution at all.
+*Where the line holds:* no content predicates beyond `results(…, status)`, no time atoms, no external-event atoms.
+A query language that reads file contents is a build system's dependency scanner in the trigger layer; that work belongs inside effects, not around them.
+The bet, stated as a bet: DAG membership plus results membership is a sufficient trigger basis, and composition happens in the repository, not in a workflow language.
+
+The sandbox bounds the runtime blast radius; the admin-only write rule on `refs/meta/effects/*` bounds who can schedule execution on canonical infrastructure at all.
 Hosted mode requires both.
 
 '''''
 
 == The loop
 
-Abstractions 4 and 5 are dual: one write path in, one side-effect path
-out — and the side-effect path closes back into the write path, because
-results are signed pushes by a worker that is just another member. All
-state changes, human or machine, flow through the same verified, audited
-channel. This closure is the design’s central property.
+Abstractions 4, 5, and 6 close into each other: signed commits are the only way state changes, the gate is the only admission judgment, effects are the only side-effect path — and effect results are signed commits by workers that are just members, judged by the same gate.
+All state changes, human or machine, flow through one verified, audited channel, and the repository is the message bus.
+This closure is the design's central property.
+
+'''''
+
+== Composition (consequence of the abstractions)
+
+No code knows where it is running; the core is handed trait objects and never asks.
+Any `if hosted` branch inside the library is the design failing.
+
+The seams:
+
+* `RefStore` — reads plus atomic multi-ref CAS.
+Local: loose refs written by our code, not `git update-ref`, so local mutations honor the same CAS discipline.
+Hosted: Postgres rows.
+* `ObjectStore` — local: the odb; hosted: Tigris.
+* `EventSink` — where post-receive matches go.
+Local: null; hosted: a durable queue.
+* `Executor` — Docker, Sprite, or unsandboxed, chosen by whoever built it.
+
+"Push" conflates object transfer with a verified ref transaction; locally, transfer is vacuous.
+The unit the library exposes is `receive(refs, objects, events, proposal)`: gate evaluation, effect matching, and enqueue live inside it, above the traits.
+Frontends construct a `Proposal` and call it — the CLI and local UI in-process against the odb, smart-HTTP by unpacking the wire pack into the `ObjectStore` first.
+Local and hosted do not share a push path; they share `receive`, with only the trait impls swapped.
+That is the correctness anchor for writes, parallel to `git effect run` for execution.
+
+Composition roots are the only place deployment exists — roughly fifty lines each of trait construction and wiring:
+
+* `git-ents` (CLI): file `RefStore`, odb, Docker executor, null `EventSink`, advisory gate.
+`git ents serve` is the same wiring plus the smart-HTTP frontend on loopback.
+Local effect execution is pull (`git effect run`), never a daemon watching refs; the queue is the only skipped component, and it carries no correctness content.
+* `git-ents-server` (hosted): Postgres, Tigris, durable queue, Sprite executor, mandatory gate.
+* The worker — queue consumer, executor, push-back client — is a real seam in the library and a packaging decision in the binary; it stays inside `git-ents-server` until scale forces the split, but never shares in-process state with receive.
+
+What to run is repo data; how to run it is a deployment property.
+An effect must not be able to demand its own executor or `--unsandboxed`.
+Config selects trait impls at the root and never leaks past it; core code reading config is a trait that should exist and does not.
+
+Store and executor are orthogonal axes, so the matrix has quadrants nobody designs: local store plus Sprite executor is `git effect run --executor sprite` with your own Fly token, and it works because everything the run needs is repo data.
+The honesty test for the seams: a third root — say single-node self-hosting on SQLite, local fs, and Docker — must be constructible without touching the library.
 
 '''''
 
 == Derived, not fundamental
 
-Instances and consequences of the five, listed for orientation:
+Instances and consequences of the six, listed for orientation:
 
-* *CI checks* — the first shipped effect: trigger on branch pushes, run
-a command, publish results. Future effects (comment notifications,
-member-cache rebuilds, ATProto mirroring) are registrations, not
-subsystems.
-* *Toolchains* — typed trees under `refs/meta/toolchains/*`; a resource
-effects declare, not a trigger. The repo carries its own execution
-environment with provenance, as ~1KB hash-pinned manifests; only the
-sandbox touches the bytes. They keep a subcommand only because
-import/activation logic is nontrivial; if that shrinks, the subcommand
-dies.
-* *Members, accounts, comments* — typed trees behind meta-refs (1+2),
-written via signed pushes (4).
-* *Fanout indexes* — discovery without ref enumeration:
-`refs/meta/index/*` maps object oids to the entities anchored to them,
-rebuilt by an effect (5) and written via the worker’s signed push (4).
-Clients read the index; a stale or absent index degrades to scanning
-ref tips, never to wrong answers.
-* *Rendering registry* — documents render by MIME type through one
-lookup table (HTML web, plain-text CLI; unknown types pass through).
+* *CI checks* — the first shipped effect: trigger on branch pushes, run a command, publish results.
+* *Pipelines* — query composition, not a subsystem: staged CI is `rev(refs/heads/main) ∩ results(unit, pass)`, fan-in is intersection, conditional edges are difference.
+The pipeline state is the results namespace.
+* *The inbox workflow* — the email-patch model rebuilt on the primitives: inbox ref as mailing list, adoption merge as the maintainer applying a signed patch.
+* *User-funded CI* — hosted CI is not load-bearing: a contributor with no canonical push access gets full CI on the real toolchains, self-executed, results shareable and verifiable.
+The server's monopoly reduces to custody of the canonical refs.
+* *Toolchains* — typed trees under `refs/meta/toolchains/*`; a resource effects declare, not a trigger.
+The repo carries its own execution environment with provenance, as ~1KB hash-pinned manifests; only the sandbox touches the bytes.
+They keep a subcommand only because import/activation logic is nontrivial; if that shrinks, the subcommand dies.
+* *Members, accounts, comments* — typed trees behind meta-refs (1+2), written as signed commits (4), admitted by the gate (5).
+* *Fanout indexes* — discovery without ref enumeration: `refs/meta/index/*` maps object oids to the entities anchored to them, rebuilt by an effect (6) and written via the worker's signed commit (4).
+Clients read the index; a stale or absent index degrades to scanning ref tips, never to wrong answers.
+* *Rendering registry* — documents render by MIME type through one lookup table (HTML web, plain-text CLI; unknown types pass through).
 Implementation choice.
-* *Embeddable server* — `git-ents-server` is a library first; the serve
-command, standalone binary, and hooks-as-subcommands are thin wrappers.
-Implementation choice.
+* *Embeddable server* — `git-ents-server` is a library first; the serve command, standalone binary, and hooks-as-subcommands are thin wrappers.
+This is not merely packaging: it is what keeps all authorization and effect-matching logic in the library rather than smeared across subprocess boundaries.
 
 '''''
 
 == Command surface (consequence of the abstractions)
 
-Primitives are local plumbing; `git ents` adds exactly one capability:
-remote synchronization (fetch the relevant `refs/meta/*` first).
+Primitives are local plumbing; `git ents` adds exactly one capability: remote synchronization (fetch the relevant `refs/meta/*` first).
 
 ....
 git store show refs/meta/member/joey     # generic escape hatch: pretty-prints
@@ -190,8 +250,11 @@ git comment show
 
 git effect list
 git effect add ci --on 'refs/heads/*' --toolchain rust-1.88 -- cargo test
+git effect add integ --on 'rev(refs/heads/main) & results(ci, pass)' \
+                     --toolchain rust-1.88 -- cargo test --features integ
 git effect show ci [<commit>]     # definition + results for a commit
-git effect run ci [--at <commit>] # local execution: identical toolchain
+git effect run ci [--at <commit>] [--executor docker|sprite]
+                                  # local execution: identical toolchain
                                   # materialization and sandbox path,
                                   # queue skipped — nothing else differs
 git effect log ci                 # results ref history
@@ -201,8 +264,7 @@ git toolchain view rust-1.88
 git toolchain log rust-1.88
 ....
 
-`git effect run` is the correctness anchor: local and hosted execution
-share the identical path or the abstraction is decoration.
+Two correctness anchors: `git effect run` shares the identical materialization and sandbox path with the hosted worker, and every mutation frontend shares the identical `receive` with the hosted server — or the abstractions are decoration.
 
 Porcelain:
 
@@ -213,9 +275,12 @@ git ents account create|link
 git ents effect ...
 git ents toolchain ...
 git ents comment ...
+git ents inbox list|adopt
 git ents login
 git ents serve | server
 ....
+
+Revocation is a state on the member entity, not deletion — a revoked key must be explicitly rejected, whereas deletion would merely make old signatures unverifiable.
 
 '''''
 
@@ -226,19 +291,19 @@ git ents serve | server
 | |Local (`git ents serve`) |Hosted (`git-ents-server`)
 |Repositories |Real working repositories |Bare repositories
 |Discovery |Current repo or directory scan |Created on first push
-|Auth |Signed pushes optional by default |Signed pushes required
-|Effects |Execute inside a Docker container |Execute inside a Fly.io
-Sprite
+|Ref store |Loose refs via `RefStore`, CAS-disciplined |Postgres rows, atomic CAS
+|Object store |The odb |Tigris
+|Gate |Advisory — writes annotated, never blocked |Mandatory — failure aborts the CAS
+|Effects |Pull, via `git effect run` (Docker default) |Push-triggered, durable queue, Fly.io Sprite
 |Purpose |Personal forge, development, demos |Production forge
 |===
 
-Working repos reject pushes to the checked-out branch; the local server
-sets `receive.denyCurrentBranch=updateInstead` so pushes also update the
-working tree. Known edge: `updateInstead` fails on a dirty worktree, so
-branch-push behavior is not perfectly identical to hosted mode —
-metadata pushes are.
+Working repos reject pushes to the checked-out branch; the local server sets `receive.denyCurrentBranch=updateInstead` so pushes also update the working tree.
+Known edge: `updateInstead` fails on a dirty worktree, so branch-push behavior is not perfectly identical to hosted mode — metadata behavior is.
+Worktree update is frontend business, after `receive` accepts; core never touches a worktree.
 
-Pushes to `refs/meta/*` never touch the working tree, so all metadata
-behaves identically in both modes: the deployment model is an
-implementation detail of the data model — a direct consequence of
-abstraction 1.
+Pushes to `refs/meta/*` never touch the working tree, so all metadata behaves identically in both modes: the deployment model is an implementation detail of the data model — a direct consequence of abstractions 1 and 5.
+
+Bootstrap remains the known gap: an empty member list admits every push so the first member can enroll.
+Hosted, this leaves "first push owns the repo" open per repository; closing it — repository creation requires an existing account — needs a server-level key→account registry, because bare repos are created on the first `info/refs` request, before any push certificate exists.
+Direction chosen, not yet enforced.
