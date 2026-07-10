@@ -7,6 +7,7 @@ app = 'git-ents-server'
 primary_region = 'iad'
 
 [build]
+  # crates/git-ents-server doesn't exist yet post-redo; path is stale until it's rebuilt
   dockerfile = "../crates/git-ents-server/Dockerfile"
 
 [env]

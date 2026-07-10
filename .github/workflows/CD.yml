@@ -5,16 +5,6 @@ on:
     branches:
       - main
     paths:
-      - "crates/git-ents/**"
-      - "crates/git-ents-server/**"
-      - "crates/git-ents-core/**"
-      - "crates/git-anchor/**"
-      - "crates/git-comment/**"
-      - "crates/git-effect/**"
-      - "crates/git-member/**"
-      - "crates/git-signed-push/**"
-      - "crates/git-store/**"
-      - "crates/git-toolchain/**"
       - ".config/fly.toml"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -47,7 +37,7 @@ jobs:
         if: github.event_name == 'release'
         run: |
           TAG="${{ github.event.release.tag_name }}"
-          if [[ "$TAG" =~ ^git-vendor-v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+          if [[ "$TAG" =~ ^git-ents-v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
             echo "match=true" >> "$GITHUB_OUTPUT"
           else
             echo "match=false" >> "$GITHUB_OUTPUT"
@@ -96,9 +86,5 @@ jobs:
       group: deploy-server
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy to Fly.io
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy -c .config/fly.toml -a git-ents-server --remote-only
+      - name: Stub - no server crate yet
+        run: echo "Deploy is a stub until crates/git-ents-server exists."
