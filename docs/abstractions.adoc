@@ -18,7 +18,7 @@ A ref under `refs/meta/*` is simultaneously the unit of:
 * *Authorization* — refname-keyed rules gate who may advance the ref.
 * *History* — the ref's commit history is the audit trail.
 
-*Granularity rule:* one ref per independently-authored entity (`refs/meta/member/*`, `refs/meta/comments/*`, `refs/meta/effects/*`, `refs/meta/results/*`); one ref for repo-global state (`refs/meta/account`, `refs/meta/config`).
+*Granularity rule:* one ref per independently-authored entity (`refs/meta/member/*`, `refs/meta/issues/*`, `refs/meta/comments/*`, `refs/meta/effects/*`, `refs/meta/results/*`); one ref for repo-global state (`refs/meta/account`, `refs/meta/config`).
 Entities that different actors write concurrently must not share a ref.
 Writes stay conflict-free; reads aggregate refs into views.
 
@@ -244,7 +244,8 @@ The server's monopoly reduces to custody of the canonical refs.
 * *Toolchains* — typed trees under `refs/meta/toolchains/*`; a resource effects declare, not a trigger.
 The repo carries its own execution environment with provenance, as ~1KB hash-pinned manifests; only the sandbox touches the bytes.
 They keep a subcommand only because import/activation logic is nontrivial; if that shrinks, the subcommand dies.
-* *Members, accounts, comments* — typed trees behind meta-refs (1+2), written as signed commits (4), admitted by the gate (5).
+* *Members, accounts, issues, comments* — typed trees behind meta-refs (1+2), written as signed commits (4), admitted by the gate (5).
+Issues are the plainest instance of all: assignees, labels, and states are struct fields, so multiple assignees or custom states are schema, not platform features.
 * *Fanout indexes* — discovery without ref enumeration: `refs/meta/index/*` maps object oids to the entities anchored to them, rebuilt by an effect (6) and written via the worker's signed commit (4).
 Clients read the index; a stale or absent index degrades to scanning ref tips, never to wrong answers.
 * *Redaction* — the deliberate exception to retention: an object-level yank, scoped to content reachable only from `refs/meta/*`.
