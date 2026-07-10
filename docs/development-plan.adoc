@@ -29,15 +29,22 @@ anything in the next phase depends on it.
 == Phase 0: bootstrap
 
 Before any crate lands, redeploy the existing Fly app
-(`.config/fly.toml`) as a headless machine serving stock git's
-smart-HTTP backend (`git http-backend`) against a bare repo on the
-`odb` volume — no `gix-receive`, no gate, no CI or Sprite executor.
-This phase exists solely so `git.ents.cloud` is a real `origin` from
-day one; every phase number below is one higher than in any prior
-ordering of this document.
+(`.config/fly.toml`) as a headless machine serving two things behind
+one host — no `gix-receive`, no gate, no CI or Sprite executor:
+
+* stock git's smart-HTTP backend (`git http-backend`) against a bare
+  repo on the `odb` volume, so `git.ents.cloud` is a real `origin` from
+  day one; and
+* `tracey web`, reading a plain working tree a post-receive hook checks
+  out on every push (the same `updateInstead` trick Phase 6 formalizes
+  for real), so the same host shows live spec coverage on HEAD.
+
+Every phase number below is one higher than in any prior ordering of
+this document.
 Nothing here is salvaged or reusable code — the single-node hosted
-root in Phase 6 (`git-ents`, the CLI-complete milestone) replaces this
-backend wholesale, at the same hostname.
+root in Phase 6 (`git-ents`, the CLI-complete milestone) replaces the
+git backend wholesale, at the same hostname; whether it keeps serving
+the coverage dashboard is a later call.
 
 == Crate schedule
 
@@ -173,7 +180,8 @@ backend wholesale, at the same hostname.
 
 * *Phase 0 exit*: `git.ents.cloud` resolves over HTTPS; `git clone` and
   `git push` round-trip against it using stock git; this repo's
-  `origin` points at it.
+  `origin` points at it; the `tracey web` dashboard at the same host
+  reflects HEAD's coverage after each push.
 * *Phase 1 → 2*: `gix-ref-store` passes a CAS conformance suite
   (concurrent writers, crash injection); `gix-receive` round-trips a push
   from stock git.
