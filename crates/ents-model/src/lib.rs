@@ -35,8 +35,9 @@
 //! - `model.redaction` — [`Redaction`].
 //! - `model.account` — [`Account`].
 //! - `meta-ref.namespace`, `meta-ref.granularity` — [`namespace`].
-//! - `meta-ref.inbox` — [`namespace`]: the `refs/meta/inbox/*` half
-//!   ([`namespace::inbox_ref`], [`namespace::is_inbox`]) and the
+//! - `meta-ref.inbox` — [`namespace`]: the `refs/meta/inbox/<member>/<id>`
+//!   half ([`namespace::inbox_ref`], [`namespace::inbox_owner`],
+//!   [`namespace::is_inbox`]) and the
 //!   `refs/meta/self/<member>/<effect>/<short-oid>` self-run mirror half
 //!   ([`namespace::self_result_ref`], [`namespace::self_run_owner`]).
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.

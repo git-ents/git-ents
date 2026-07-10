@@ -124,11 +124,53 @@ pub fn self_run_owner(name: &FullNameRef) -> Option<MemberId> {
     Some(MemberId::new(member))
 }
 
-/// The ref holding an inbox entity awaiting adoption —
-/// `refs/meta/inbox/<id>` (`meta-ref.inbox`).
+/// The ref holding one inbox entity authored by `member`, awaiting
+/// adoption — `refs/meta/inbox/<member>/<id>` (`meta-ref.inbox`).
+///
+/// The member segment leads, symmetric with [`self_result_ref`], so the
+/// gate's authorization keys off the refname alone: a member — either
+/// provenance — may write only under its own segment, and nobody,
+/// admins included, writes into another member's inbox.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name = namespace::inbox_ref(&MemberId::new("jdc"), "issue-42").expect("valid");
+/// assert_eq!(name.as_bstr(), "refs/meta/inbox/jdc/issue-42");
+/// ```
 // @relation(meta-ref.inbox, scope=function)
-pub fn inbox_ref(id: &str) -> Result<FullName> {
-    build(format!("refs/meta/inbox/{id}"))
+pub fn inbox_ref(member: &MemberId, id: &str) -> Result<FullName> {
+    build(format!("refs/meta/inbox/{member}/{id}"))
+}
+
+/// The member segment of a `refs/meta/inbox/<member>/...` refname, or
+/// `None` when `name` is not under the inbox namespace or carries no
+/// member segment (`meta-ref.inbox`).
+///
+/// Mirrors [`self_run_owner`]: the gate keys inbox authorization on this
+/// segment, so it is extracted here, next to the namespace table.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name: gix::refs::FullName = "refs/meta/inbox/jdc/issue-42".try_into().expect("valid");
+/// assert_eq!(namespace::inbox_owner(name.as_ref()), Some(MemberId::new("jdc")));
+///
+/// // The legacy unscoped shape has no owner to authorize.
+/// let unscoped: gix::refs::FullName = "refs/meta/inbox/issue-42".try_into().expect("valid");
+/// assert_eq!(namespace::inbox_owner(unscoped.as_ref()), None);
+/// ```
+// @relation(meta-ref.inbox, scope=function)
+#[must_use]
+pub fn inbox_owner(name: &FullNameRef) -> Option<MemberId> {
+    let path = name.as_bstr().to_string();
+    let rest = path.strip_prefix("refs/meta/inbox/")?;
+    let (member, _) = rest.split_once('/')?;
+    Some(MemberId::new(member))
 }
 
 /// The ref holding the toolchain manifest named `name` —
@@ -174,7 +216,9 @@ pub enum Namespace {
     Toolchain,
     /// `refs/meta/redactions/*`.
     Redaction,
-    /// `refs/meta/inbox/*` — general inbox entities awaiting adoption.
+    /// `refs/meta/inbox/<member>/*` — entities awaiting adoption,
+    /// each under its author's own segment (`meta-ref.inbox`,
+    /// [`inbox_ref`], [`inbox_owner`]).
     Inbox,
     /// The fixed `refs/meta/account` ref.
     Account,
@@ -238,19 +282,21 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
     }
 }
 
-/// Whether a `refs/meta/*` refname names an inbox entity —
-/// `refs/meta/inbox/*` — per `meta-ref.inbox`.
+/// Whether a `refs/meta/*` refname is under the inbox namespace —
+/// `refs/meta/inbox/<member>/*` — per `meta-ref.inbox`.
 ///
-/// A member's self-run result mirror lives under its own top-level
-/// `refs/meta/self/*` namespace ([`self_result_ref`]), not under the inbox,
-/// so it is deliberately not matched here.
+/// This is namespace membership only; which member owns the segment is
+/// [`inbox_owner`]'s answer. A member's self-run result mirror lives
+/// under its own top-level `refs/meta/self/*` namespace
+/// ([`self_result_ref`]), not under the inbox, so it is deliberately not
+/// matched here.
 ///
 /// # Examples
 ///
 /// ```
 /// use ents_model::namespace;
 ///
-/// let inbox: gix::refs::FullName = "refs/meta/inbox/abc".try_into().expect("valid");
+/// let inbox: gix::refs::FullName = "refs/meta/inbox/jdc/issue-42".try_into().expect("valid");
 /// assert!(namespace::is_inbox(inbox.as_ref()));
 ///
 /// let canonical: gix::refs::FullName = "refs/meta/results/unit/abc123".try_into().expect("valid");
@@ -287,7 +333,7 @@ mod tests {
     #[case::self_run("refs/meta/self/jdc/unit/abc123", Some(Namespace::SelfRun))]
     #[case::toolchain("refs/meta/toolchains/rust-stable", Some(Namespace::Toolchain))]
     #[case::redaction("refs/meta/redactions/abc", Some(Namespace::Redaction))]
-    #[case::inbox("refs/meta/inbox/abc", Some(Namespace::Inbox))]
+    #[case::inbox("refs/meta/inbox/jdc/issue-42", Some(Namespace::Inbox))]
     #[case::account("refs/meta/account", Some(Namespace::Account))]
     #[case::config("refs/meta/config", Some(Namespace::Config))]
     #[case::outside_meta("refs/heads/main", None)]
@@ -302,7 +348,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::inbox_entity("refs/meta/inbox/abc", true)]
+    #[case::inbox_entity("refs/meta/inbox/jdc/issue-42", true)]
+    #[case::unscoped_inbox_is_still_the_namespace("refs/meta/inbox/legacy", true)]
     #[case::canonical_result("refs/meta/results/unit/abc123", false)]
     #[case::self_run_mirror("refs/meta/self/jdc/unit/abc123", false)]
     #[case::member("refs/meta/member/jdc", false)]
@@ -329,6 +376,23 @@ mod tests {
     }
 
     #[rstest]
+    #[case::scoped("refs/meta/inbox/jdc/issue-42", Some("jdc"))]
+    #[case::deep_id("refs/meta/inbox/worker-1/a/b", Some("worker-1"))]
+    #[case::unscoped_legacy("refs/meta/inbox/issue-42", None)]
+    #[case::self_run("refs/meta/self/jdc/unit/abc", None)]
+    #[case::outside_meta("refs/heads/main", None)]
+    // @relation(meta-ref.inbox, scope=function, role=Verifies)
+    fn inbox_owner_extracts_only_the_member_segment(
+        #[case] refname: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            inbox_owner(name(refname).as_ref()),
+            expected.map(MemberId::new)
+        );
+    }
+
+    #[rstest]
     // @relation(meta-ref.namespace, scope=function, role=Verifies)
     fn every_builder_stays_under_refs_meta() {
         let id = MemberId::new("jdc");
@@ -339,7 +403,7 @@ mod tests {
             effect_ref("unit").expect("valid"),
             result_ref("unit", "abc123").expect("valid"),
             self_result_ref(&id, "unit", "abc123").expect("valid"),
-            inbox_ref("abc").expect("valid"),
+            inbox_ref(&id, "issue-42").expect("valid"),
             toolchain_ref("rust-stable").expect("valid"),
             redaction_ref("abc").expect("valid"),
         ];
