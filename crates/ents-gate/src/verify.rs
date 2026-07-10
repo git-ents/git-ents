@@ -271,15 +271,13 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
 ///   (`meta-ref.inbox`, `effect.self-run`).
 /// - `refs/meta/effects/*` requires an admin-registered member
 ///   regardless of anything else (`effect.admin-only`).
+/// - `refs/meta/inbox/<member>/*` is writable only by `<member>`, either
+///   provenance — admins included may not write another member's
+///   segment, because adoption is a merge onto the canonical ref, never
+///   a write into the contributor's inbox (`meta-ref.inbox`).
 /// - A self-attested member is not authorized for canonical refs — its
 ///   writes are limited to its own inbox and self-run namespaces
 ///   (`model.member-provenance`).
-/// - `refs/meta/inbox/*`: the spec's "its own inbox" cannot be keyed on
-///   the refname because `refs/meta/inbox/*` encodes no member segment
-///   (open question between `meta-ref.inbox` and
-///   `model.member-provenance`); until the spec picks a shape, the gate
-///   fails closed for self-attested members and admits admin-registered
-///   ones, and says so in the refusal.
 // @relation(gate.tip-signed, effect.admin-only, model.member-provenance, scope=function)
 fn authorize(name: &FullName, id: &MemberId, member: &Member) -> Option<Refusal> {
     let namespace = namespace::classify(name.as_ref())?;
@@ -305,17 +303,26 @@ fn authorize(name: &FullName, id: &MemberId, member: &Member) -> Option<Refusal>
                 )
             }
         }
-        Namespace::Inbox => match member.provenance {
-            Provenance::AdminRegistered => None,
-            Provenance::SelfAttested => refuse(
-                "inbox authorization for self-attested members is not yet decidable: \
-                 refs/meta/inbox/* encodes no member segment, so \"its own inbox\" \
-                 (model.member-provenance) cannot be keyed on the refname; failing closed \
-                 until the spec picks a shape"
-                    .into(),
-                false,
-            ),
-        },
+        // The inbox is owner-keyed exactly like the self-run namespace:
+        // a member — either provenance — writes only its own
+        // refs/meta/inbox/<member>/* segment, and nobody, admins
+        // included, writes another member's (meta-ref.inbox; adoption
+        // is a merge onto the canonical ref, never a write into the
+        // contributor's inbox). The legacy unscoped shape has no owner
+        // segment, so it authorizes no one.
+        Namespace::Inbox => {
+            if namespace::inbox_owner(name.as_ref()).as_ref() == Some(id) {
+                None
+            } else {
+                refuse(
+                    format!(
+                        "refs/meta/inbox/<member>/* is writable only by that member; \
+                         {id} does not own this ref"
+                    ),
+                    false,
+                )
+            }
+        }
         Namespace::Effect => match member.provenance {
             Provenance::AdminRegistered => None,
             Provenance::SelfAttested => refuse(

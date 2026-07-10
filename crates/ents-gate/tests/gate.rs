@@ -280,7 +280,6 @@ fn code_refs_are_not_subject_to_the_tip_invariant() {
 #[case::canonical_issue("refs/meta/issues/1", true)]
 #[case::canonical_result("refs/meta/results/unit/abc", true)]
 #[case::effects_is_admin_only("refs/meta/effects/unit", true)]
-#[case::inbox_shape_is_an_open_spec_question("refs/meta/inbox/xyz", false)]
 #[case::another_self_run("refs/meta/self/admin/unit/abc", false)]
 // @relation(model.member-provenance, effect.admin-only, gate.tip-signed, scope=function, role=Verifies)
 fn self_attested_members_are_limited_to_their_own_namespaces(
@@ -310,8 +309,30 @@ fn a_member_may_write_its_own_self_run_namespace() {
 }
 
 #[rstest]
+#[case::own_segment_self_attested(false, "refs/meta/inbox/guest/issue-1", true)]
+#[case::own_segment_admin(true, "refs/meta/inbox/admin/issue-1", true)]
+#[case::foreign_segment_self_attested(false, "refs/meta/inbox/admin/issue-1", false)]
+#[case::foreign_segment_even_for_admins(true, "refs/meta/inbox/guest/issue-1", false)]
+#[case::unscoped_legacy_shape_owns_nothing(true, "refs/meta/inbox/issue-1", false)]
+// @relation(meta-ref.inbox, model.member-provenance, gate.tip-signed, scope=function, role=Verifies)
+fn inbox_segments_are_owner_only_for_both_provenances(
+    #[case] as_admin: bool,
+    #[case] refname: &str,
+    #[case] admitted: bool,
+) {
+    let f = forge();
+    let key = if as_admin { &f.admin } else { &f.guest };
+    let new = proposal(&f, vec![], Some(refname), Some(key), 300);
+    let verdict = run(&f, refname, Some(new));
+    if admitted {
+        expect_pass(&verdict, AdmissionKind::TipInvariant);
+    } else {
+        expect_fail(&verdict, Requirement::TipSigned);
+    }
+}
+
+#[rstest]
 #[case::effects("refs/meta/effects/unit")]
-#[case::inbox("refs/meta/inbox/xyz")]
 #[case::results("refs/meta/results/unit/abc")]
 // @relation(effect.admin-only, gate.tip-signed, scope=function, role=Verifies)
 fn admin_registered_members_may_write_canonical_namespaces(#[case] refname: &str) {

@@ -52,13 +52,15 @@ pub(crate) fn dwim_candidates(name: &str) -> Vec<String> {
 }
 
 /// A parsed `rev()` expression: whitespace-separated terms, `^`-negated
-/// terms subtracted, `A..B` sugar for `^A B` — the rev-list shape of
-/// `query.rev`'s "ordinary Git revspec or ref glob".
+/// terms subtracted, `A..B` sugar for `^A B` — exactly the
+/// rev-list-shaped subset of gitrevisions(7) that `query.rev`
+/// normatively states.
 ///
-/// Unsupported revspec forms (`~n`/`^n` suffixes, `...`, `@{...}`,
+/// The forms outside the subset (`~n`/`^n` suffixes, `A...B`, `@{...}`,
 /// `^{...}`, abbreviated hex) are an explicit [`ParseError`], never a
-/// silent empty set; the supported surface is what the composition
-/// idioms and `query.rev`'s own examples use.
+/// silent empty or wrong set, exactly as the requirement demands;
+/// growing the subset is a compatible, additive extension.
+// @relation(query.rev, scope=file)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevExpr {
     include: Vec<RevTerm>,
@@ -140,7 +142,8 @@ impl RevExpr {
 }
 
 /// Parse one term, rejecting `refs/meta/*` shapes (`query.rev`) and
-/// revspec operators this evaluator does not support.
+/// every revspec operator outside the requirement's stated subset.
+// @relation(query.rev, scope=function)
 fn parse_term(term: &str, whole_token: &str) -> Result<RevTerm, ParseError> {
     let unsupported = || ParseError::UnsupportedRev {
         token: whole_token.to_owned(),

@@ -134,7 +134,7 @@ impl std::fmt::Display for Refusal {
         if self.inbox_alternative {
             write!(
                 f,
-                "; you can still submit this change under refs/meta/inbox/* for adoption by an authorized member"
+                "; you can still submit this change under your own refs/meta/inbox/<member>/* segment for adoption by an authorized member"
             )?;
         }
         Ok(())

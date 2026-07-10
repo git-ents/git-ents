@@ -47,21 +47,27 @@
 //! and `gate.advisory-local` are caller policies (`ents-receive`, the
 //! composition roots) — this crate contributes the shared verdict and,
 //! for the advisory sites, the verdict-time reason rendering including
-//! the inbox alternative ([`Refusal`]). `gate.adoption-no-cherry-pick`
-//! is a prohibition on adoption *tooling* (`ents-sync`): a cherry-pick
-//! produces an ordinary commit by the placer, which no pure function
-//! over the result could distinguish, so the gate has nothing to check.
+//! the inbox alternative ([`Refusal`]). The prohibition on cherry-pick
+//! as an adoption mechanism binds the adoption *tooling*
+//! (`sync.adoption-no-cherry-pick`, enforced by `ents-sync`): a
+//! cherry-pick produces an ordinary commit by the placer, which no pure
+//! function over the result could distinguish, so the gate has nothing
+//! to check — gate.sdoc's Adoption section says the same.
 //!
 //! # Authorization model
 //!
 //! "Signed by a member authorized for that refname" uses exactly the
-//! rules the spec pins today: self-run namespaces are owner-only,
-//! `refs/meta/effects/*` is admin-only (`effect.admin-only`), and
-//! self-attested members are refused canonical refs until promoted
-//! (`model.member-provenance`). Finer-grained, config-stored refname
-//! rules (for example designating worker keys for one effect's results
-//! namespace, `effect.official`) are a later, additive narrowing: they
-//! arrive with a Config entity in `ents-model`, not a new gate.
+//! rules the spec pins today: self-run and inbox namespaces are
+//! owner-only — a member of either provenance writes only its own
+//! `refs/meta/self/<member>/*` and `refs/meta/inbox/<member>/*`
+//! segments, and nobody, admins included, writes another member's
+//! (`meta-ref.inbox`) — `refs/meta/effects/*` is admin-only
+//! (`effect.admin-only`), and self-attested members are refused
+//! canonical refs until promoted (`model.member-provenance`).
+//! Finer-grained, config-stored refname rules (for example designating
+//! worker keys for one effect's results namespace, `effect.official`)
+//! are a later, additive narrowing: they arrive with a Config entity in
+//! `ents-model`, not a new gate.
 //!
 //! Signature-time semantics: a signature is judged against the member
 //! entity in force *at the commit's own timestamp*, recovered by walking

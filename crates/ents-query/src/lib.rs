@@ -21,11 +21,13 @@
 //! - `query.grammar`, `query.set-ops` — [`Query`], the parser, and
 //!   [`SetOp`]; left-associative, one precedence level.
 //! - `query.rev` — [`RevExpr`]; `refs/meta/*` patterns are rejected at
-//!   parse time, never silently evaluated. The supported revspec
-//!   surface is refnames, `refs/` globs, full hex oids, `^negation`,
-//!   and `A..B`; other revspec forms are an explicit
-//!   [`ParseError::UnsupportedRev`], a deliberate subset deferred until
-//!   a consumer needs it.
+//!   parse time, never silently evaluated. The supported surface is
+//!   exactly the rev-list-shaped subset the requirement states —
+//!   refnames (short or full), `refs/` globs, full hex oids,
+//!   `^negation`, and `A..B` — and every form outside it (`~n`/`^n`,
+//!   `A...B`, `@{...}`, abbreviated hex) is an explicit
+//!   [`ParseError::UnsupportedRev`]; growing the subset is a
+//!   compatible, additive extension.
 //! - `query.results` — resolution is a refname scan of the effect's
 //!   results namespace; membership tests compare hex prefixes and walk
 //!   no history.
