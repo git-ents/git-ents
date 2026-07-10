@@ -20,7 +20,6 @@ and re-verified, not rediscovered.
 * *fable* — the two crates where a quiet bug is a security hole or a
   wrong design (`ents-gate`, `ents-query` core semantics), public-API
   review of every crate at its phase boundary, and integration.
-* *haiku* — trivial glue (the honesty-test root).
 
 Every crate lands with Tracey annotations mapping its spec rules
 (`.config/tracey/config.styx` already covers `docs/spec/`), tests run
@@ -97,7 +96,11 @@ anything in the next phase depends on it.
 | sonnet
 | Orchestration above traits that already exist by now: gate
   policy (mandatory/advisory), footprint matching, enqueue, `(effect,
-  oid)` dedup, redaction at ingest. Defines `EventSink`. Fable reviews the
+  oid)` dedup, redaction at ingest. Defines `EventSink`, reconstructible
+  from repository state as the work set `trigger − results(self, any)`
+  (`query.workset`); the in-memory impl plus a boot-time reconciliation
+  scan is the reference implementation, durability deferred as a
+  performance property (`receive.reconstructible`). Fable reviews the
   `receive()` signature — every frontend is downstream of it.
 
 | `ents-sync`
@@ -117,29 +120,40 @@ anything in the next phase depends on it.
   readiness probes and sprite quirks from `pre-redo`; the design is
   settled, the environment is the risk.
 
-| `ents-web`
-| 4
-| Medium
-| sonnet
-| Broad surface, low algorithmic depth. Signing identity injected by the
-  root. Accepts the honest `ents-receive` dependency (no write facade).
-
 | `git-ents` (bin)
 | 5
 | Medium
 | sonnet
-| Local root wiring (~50 lines) plus the real cost: subcommand surface,
-  `serve` = `ents-web` + `gix-receive` on loopback,
-  `denyCurrentBranch=updateInstead` worktree edge.
+| Local root wiring (~50 lines) plus the real cost: subcommand surface
+  and the `denyCurrentBranch=updateInstead` worktree edge. Headless — no
+  `serve` subcommand yet (arrives Phase 6 with `ents-web`). Doubles as
+  the single-node hosted root: loose refs and a real odb on a Fly volume
+  behind `gix-receive`, an in-memory `EventSink` with a boot-time
+  reconciliation scan, and the Sprite executor, deployed at
+  `git.ents.cloud`. Milestone: CLI-complete.
+
+| `ents-web`
+| 6
+| Medium
+| sonnet
+| Broad surface, low algorithmic depth. Lands `serve` in `git-ents`,
+  turning the single-node hosted root into a hosted web UI with
+  sessions/CSRF (`roots.web-session`). Signing identity is injected by
+  the composition root; the crate assumes nothing about network
+  reachability, so in-process webview embedding stays a supported
+  deployment (`roots.web-agnostic`).
 
 | `git-ents-server` (bin)
-| 5
+| 7
 | High
 | opus
 | Postgres `RefStore` (multi-ref CAS in a transaction), Tigris object
-  store behind gitoxide traits, durable-queue `EventSink`, Sprite
-  executor, path validation, sessions/CSRF. Salvage from the scale-out
-  work at `pre-redo`; worker stays a mode until scale splits it.
+  store behind gitoxide traits, and a durable-queue `EventSink` — a new
+  composition root swapped in with zero library-crate edits. This phase
+  IS the honesty test (`roots.honesty-test`): entry is triggered by
+  measured storage/load pressure (the kiln-cache growth analysis), not a
+  date. Reuses the Sprite executor and sessions/CSRF from `git-ents`;
+  salvage the store code from the scale-out work at `pre-redo`.
 |===
 
 == Phase gates
@@ -153,10 +167,14 @@ anything in the next phase depends on it.
 * *Phase 3 → 4*: end-to-end local write path (`receive` in-process,
   advisory gate, null `EventSink`) green; sync merge fuzz-tested against
   divergent typed trees.
-* *Phase 5 exit*: the honesty test — a third single-node root (SQLite,
-  local fs, Docker; `roots.honesty-test`) built by *haiku* from library
-  crates alone, no library modification. If haiku can't write it in ~50
-  lines, the seams failed, not haiku.
+* *Phase 5 exit*: the CLI-complete milestone — every porcelain command
+  green against the single-node hosted root; the boot-time
+  reconciliation scan regenerates obligations correctly after a
+  `kill -9` of the in-memory queue.
+* *Phase 7 exit*: the honesty test (`roots.honesty-test`) — the
+  Postgres/Tigris/durable-queue root is wired as a new composition root
+  with zero library-crate modification; a diff of library-crate
+  contents between phase entry and phase exit MUST be empty.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
