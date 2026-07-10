@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/ents-model", "crates/gix-ref-store"]
+members = [
+    "crates/ents-model",
+    "crates/ents-testutil",
+    "crates/gix-ref-store",
+]
 
 [workspace.package]
 edition = "2024"
@@ -12,6 +16,9 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+ents-model = { path = "crates/ents-model" }
+ents-testutil = { path = "crates/ents-testutil" }
+gix-ref-store = { path = "crates/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [
     "lang-rust",
     "lang-toml",
@@ -63,6 +70,7 @@ rayon = "1"
 rstest = "0.26"
 semver = "1"
 spdx = "0.13"
+ssh-key = { version = "0.6", features = ["ed25519"] }
 target-lexicon = "0.13"
 tempfile = "3"
 thiserror = "2"
