@@ -27,8 +27,9 @@ The CLI and the local UI MUST call `receive` in-process against the local
 object database.
 Smart-HTTP MUST unpack the incoming wire pack into the `ObjectStore` before
 calling `receive`.
-Local and hosted MUST NOT diverge into separate push paths; they share
-`receive`, which is the correctness anchor for writes.
+Local and hosted MUST NOT share a push path; they MUST share `receive`,
+with only the trait implementations swapped, which is the correctness
+anchor for writes.
 --
 
 [role="requirement", id="receive.refstore-seam"]

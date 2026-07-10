@@ -126,9 +126,10 @@ struct Effect {
     trigger: CommitQuery,          // a commit set as a function of ref state
     toolchains: Vec<ToolchainRef>, // e.g. ["rust-1.88"]
     run: Command,
-    results: RefName,              // e.g. "refs/meta/results/<name>/*"
 }
 ----
+
+Results location is derived by convention, never declared by the effect: an effect cannot choose where its verdicts land.
 
 *Trigger semantics:* the trigger denotes a set of commits; the effect fires once per commit that *enters* the set.
 The query algebra is deliberately tiny:
