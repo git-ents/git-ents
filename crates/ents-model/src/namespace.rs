@@ -138,11 +138,22 @@ pub enum Namespace {
     Account,
     /// The fixed `refs/meta/config` ref.
     Config,
+    /// Under `refs/meta/*`, but in no namespace this build of the vocabulary
+    /// knows. `model.extensibility` requires a stock server to carry entity
+    /// types it cannot parse, so the gate and `receive` must be able to
+    /// route an unknown meta namespace generically rather than confuse it
+    /// with a ref that is not forge state at all — which is why this is a
+    /// variant and not a `None`.
+    Unknown,
 }
 
-/// Classify a `refs/meta/*` refname by which entity's namespace it falls in,
-/// or `None` if `name` is not under `refs/meta/*` at all
+/// Classify a `refs/meta/*` refname by which entity's namespace it falls in.
+///
+/// Returns `None` only when `name` is not under `refs/meta/*` at all
 /// (`meta-ref.namespace`: "All forge state MUST live under `refs/meta/*`").
+/// A refname under `refs/meta/*` whose namespace this build does not know
+/// classifies as [`Namespace::Unknown`] instead — it is still forge state
+/// (`model.extensibility`), just state this vocabulary cannot interpret.
 ///
 /// # Examples
 ///
@@ -154,8 +165,11 @@ pub enum Namespace {
 ///
 /// let outside: gix::refs::FullName = "refs/heads/main".try_into().expect("valid");
 /// assert_eq!(namespace::classify(outside.as_ref()), None);
+///
+/// let novel: gix::refs::FullName = "refs/meta/reviews/7".try_into().expect("valid");
+/// assert_eq!(namespace::classify(novel.as_ref()), Some(Namespace::Unknown));
 /// ```
-// @relation(meta-ref.namespace, meta-ref.granularity, scope=function)
+// @relation(meta-ref.namespace, meta-ref.granularity, model.extensibility, scope=function)
 #[must_use]
 pub fn classify(name: &FullNameRef) -> Option<Namespace> {
     let path = name.as_bstr().to_string();
@@ -177,7 +191,7 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "toolchains" => Some(Namespace::Toolchain),
         "redactions" => Some(Namespace::Redaction),
         "inbox" => Some(Namespace::Inbox),
-        _ => None,
+        _ => Some(Namespace::Unknown),
     }
 }
 
@@ -234,7 +248,8 @@ mod tests {
     #[case::account("refs/meta/account", Some(Namespace::Account))]
     #[case::config("refs/meta/config", Some(Namespace::Config))]
     #[case::outside_meta("refs/heads/main", None)]
-    #[case::unrecognized("refs/meta/index/abc", None)]
+    #[case::unrecognized("refs/meta/index/abc", Some(Namespace::Unknown))]
+    #[case::novel_namespace("refs/meta/reviews/7", Some(Namespace::Unknown))]
     // @relation(meta-ref.namespace, meta-ref.granularity, scope=function, role=Verifies)
     fn classify_matches_the_namespace_table(
         #[case] refname: &str,
