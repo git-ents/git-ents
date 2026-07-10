@@ -188,7 +188,11 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
             break;
         }
     }
-    // @relation(gate.tip-signed, gate.bootstrap, scope=function)
+    // A tip whose signature belongs to no authorized member is refused
+    // even when it fast-forwards cleanly — which is exactly why
+    // fast-forwarding a canonical ref directly to a contributor's
+    // commit cannot be adoption (gate.adoption-no-fast-forward).
+    // @relation(gate.tip-signed, gate.bootstrap, gate.adoption-no-fast-forward, scope=function)
     let Some((id, member)) = signer else {
         return refuse(
             Requirement::TipSigned,
@@ -237,7 +241,12 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
 
     // gate.fast-forward: the parent hash is the anti-replay freshness
     // binding; the CAS precondition below pins the same old tip.
-    // @relation(gate.fast-forward, scope=function)
+    // Descent through *any* parent suffices, and only the tip is
+    // signature-checked — which is what makes an authorized member's
+    // merge the adoption mechanism (gate.adoption-merge) and the
+    // resolution for a member's own racing machines
+    // (gate.same-actor-divergence).
+    // @relation(gate.fast-forward, gate.adoption-merge, gate.same-actor-divergence, scope=function)
     if let Some(old) = old
         && !descends_from(objects, new, old)?
     {
