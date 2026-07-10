@@ -45,7 +45,7 @@ anything in the next phase depends on it.
 | Medium
 | sonnet
 | Read/CAS trait split per `arch.refstore-read-cas-split`; loose-ref impl
-  ports the CAS discipline from `pre-redo` (`receive.loose-cas-discipline`:
+  ports the CAS discipline from `pre-redo` (`arch.loose-cas-discipline`:
   no shelling to `git update-ref`). Fable reviews the trait before
   phase 2 consumes it.
 

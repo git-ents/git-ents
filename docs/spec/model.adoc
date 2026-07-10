@@ -5,6 +5,22 @@ carries specific forge semantics.
 This file specifies that semantics — what each entity must mean, not its
 field-by-field Rust representation.
 
+[role="requirement", id="model.extensibility"]
+.Schema Extensibility Is Source-Level
+--
+Extending an entity MUST mean changing its `#[derive(Facet)]` struct and
+recompiling the tools that interpret it; runtime-defined schemas MUST
+NOT be treated as a v1 goal.
+A facet shape MUST be compile-time-defined: runtime-readable, never
+runtime-constructible.
+This is possible because the gate and `receive` are content-agnostic —
+verification depends on signature, refname, trailer, and DAG descent
+(<<gate.tip-signed>> through <<gate.fast-forward>>), never on tree
+contents — so a stock server MUST be able to carry entity types it
+cannot parse; only the clients that interpret a given entity type need
+to recompile.
+--
+
 '''''
 
 === Member
@@ -74,6 +90,21 @@ Anchor resolution, projection onto other revisions, and reachability are
 specified in `anchor.adoc` and apply to a Comment's anchor unchanged.
 --
 
+=== Issue
+
+[role="requirement", id="model.issue"]
+.Issue Is a Typed Tree, One Ref Per Issue
+--
+An Issue entity MUST be a typed tree under its own ref in
+`refs/meta/issues/*`, one ref per issue (<<meta-ref.granularity>>),
+written, gated, synced, and audited exactly like a comment.
+An Issue entity MUST carry a title, a body, a state, assignees, and
+labels as struct fields; multiple assignees and custom states are
+schema, not platform features.
+This field list MAY be extended — extending the issue model is a
+typed-tree change, not a platform request (<<model.extensibility>>).
+--
+
 === Effect
 
 [role="requirement", id="model.effect-definition"]
@@ -111,6 +142,20 @@ Who may touch the bytes it references is run semantics, specified in
 A toolchain is a resource an effect declares as a dependency
 (<<model.effect-definition>>), never a trigger condition in its own
 right.
+--
+
+=== Redaction
+
+[role="requirement", id="model.redaction"]
+.Redaction Records a Yank, Not the Content
+--
+A Redaction entity MUST be a signed entity under `refs/meta/redactions/*`
+carrying the target object's oid, a human-readable reason, and the
+admin signature authorizing the yank (<<receive.redaction-admin-only>>).
+It MUST NOT carry the redacted content itself.
+Enforcement at ingest and the reader-facing marker are receive and
+meta-ref semantics, specified in <<receive.redaction-ingest>> and
+<<meta-ref.tip-invariant>>.
 --
 
 === Account

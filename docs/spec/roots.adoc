@@ -10,11 +10,11 @@ An `if hosted` branch inside the library is the design failing.
 [role="requirement", id="roots.composition"]
 .Deployment Lives Only at the Root
 --
-The four seams (`RefStore`, the object store via `gix_object::Find` /
-`Exists` / `Write`, `EventSink`, `Executor`) MUST be wired together only in
-a composition root.
-Library code outside a root MUST NOT select among implementations of
-these seams.
+A composition root is the sole place all four seams — `RefStore`, the
+object store via `gix_object::Find` / `Exists` / `Write`, `EventSink`,
+`Executor` — are wired together, applying <<arch.store-composition-root>>
+and <<arch.no-hosted-branch>> across the full seam set, not just store
+implementations.
 --
 
 [role="requirement", id="roots.local"]

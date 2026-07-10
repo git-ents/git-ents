@@ -55,7 +55,7 @@ the same merge machinery as <<sync.divergence-merge>> and
 [role="requirement", id="sync.local-advisory"]
 .Local Store Accepts Regardless of Verdict
 --
-The local store MUST accept a write regardless of the gate's verdict; the
-gate's advisory role (<<gate.advisory-local>>) governs annotation only, and
-sync MUST NOT use a failing local verdict to block a local write.
+Sync MUST honor the gate's advisory role locally (<<gate.advisory-local>>):
+it MUST NOT use a failing local verdict to block a local write.
+The rejection consequence sync owns instead is <<sync.inbox-routing>>.
 --
