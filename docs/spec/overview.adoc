@@ -2,12 +2,14 @@
 Joey Carpinelli <joseph.carpinelli@icloud.com>
 
 [abstract]
-`git-ents` is a Git forge: a self-hosted, membership-gated Git server with a
-browser UI, a CLI, asynchronous CI checks, an issue tracker, and anchored
-code comments.
-Every piece of state — members, configuration, checks, runs, issues,
+`git-ents` is a Git forge: membership, issues, anchored code comments,
+code review, and CI-style effects, with a browser UI and a CLI.
+Every piece of state — members, configuration, effects, results, issues,
 comments — lives in the repository itself as typed documents on git
-meta-refs, versioned and auditable, with no external database.
+meta-refs, versioned, signed, and auditable, with no external database.
+A hosted server is only custody of the canonical refs: a store that runs
+the same verification gate any clone can run, plus a queue that
+dispatches effects.
 
 The spec is organized around the load-bearing abstractions (rationale in
 `docs/abstractions.adoc`), each a parent section with its dependent entities
@@ -156,11 +158,13 @@ implementation.
 
 | `git-ents` (bin)
 | Local composition root.
-|
+| `ents-receive`, `ents-effect`, `ents-web`, `ents-anchor`, `ents-sync`,
+`gix-receive`, `gix-ref-store`
 
 | `git-ents-server` (bin)
 | Hosted composition root.
-|
+| `ents-receive`, `ents-effect`, `ents-web`, `gix-receive`,
+`gix-ref-store`
 |===
 
 === Boundary Rules
