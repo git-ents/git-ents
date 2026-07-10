@@ -1,3 +1,6 @@
+# Scoped Commits (scopedcommits.com): "<scope>: <description>".
+# `committed` has no native scoped-commits style, so `allowed_types` here
+# holds scope names, not Conventional Commit types.
 subject_length = 90
 subject_capitalized = false
 subject_not_punctuated = true
@@ -6,19 +9,21 @@ hard_line_length = 0
 line_length = 230
 style = "conventional"
 allowed_types = [
-    "fix",
-    "feat",
-    "chore",
+    "anchor",
+    "effect",
+    "gate",
+    "meta-ref",
+    "model",
+    "query",
+    "receive",
+    "roots",
+    "sync",
     "docs",
-    "style",
-    "refactor",
-    "revert",
-    "perf",
-    "test",
-]
-allowed_scopes = [
+    "spec",
     "checks",
     "release",
+    "treewide",
+    "multi",
 ]
 merge_commit = false
 no_fixup = false
