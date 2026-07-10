@@ -370,6 +370,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-gate"
+version = "0.0.0"
+dependencies = [
+ "ents-model",
+ "ents-testutil",
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-ref-store",
+ "rstest",
+ "ssh-key",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-model"
 version = "0.0.0"
 dependencies = [

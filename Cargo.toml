@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/ents-gate",
     "crates/ents-model",
     "crates/ents-testutil",
     "crates/gix-ref-store",
@@ -16,6 +17,7 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+ents-gate = { path = "crates/ents-gate" }
 ents-model = { path = "crates/ents-model" }
 ents-testutil = { path = "crates/ents-testutil" }
 gix-ref-store = { path = "crates/gix-ref-store" }
