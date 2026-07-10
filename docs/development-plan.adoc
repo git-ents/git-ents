@@ -26,6 +26,19 @@ Every crate lands with Tracey annotations mapping its spec rules
 via `cargo nextest run`, and a fable review of the public API before
 anything in the next phase depends on it.
 
+== Phase 0: bootstrap
+
+Before any crate lands, redeploy the existing Fly app
+(`.config/fly.toml`) as a headless machine serving stock git's
+smart-HTTP backend (`git http-backend`) against a bare repo on the
+`odb` volume — no `gix-receive`, no gate, no CI or Sprite executor.
+This phase exists solely so `git.ents.cloud` is a real `origin` from
+day one; every phase number below is one higher than in any prior
+ordering of this document.
+Nothing here is salvaged or reusable code — the single-node hosted
+root in Phase 6 (`git-ents`, the CLI-complete milestone) replaces this
+backend wholesale, at the same hostname.
+
 == Crate schedule
 
 [cols="2,1,1,1,4", options="header"]
@@ -33,23 +46,23 @@ anything in the next phase depends on it.
 | Crate | Phase | Complexity | Agent | Notes
 
 | `facet-git-tree`
-| 0
+| 1
 | Low
 | sonnet
 | Exists (external repo). Stays domain-blind. Land the
   `#[facet(transparent)]` fix upstream and drop the local `[patch]`.
 
 | `gix-ref-store`
-| 0
+| 1
 | Medium
 | sonnet
 | Read/CAS trait split per `arch.refstore-read-cas-split`; loose-ref impl
   ports the CAS discipline from `pre-redo` (`arch.loose-cas-discipline`:
   no shelling to `git update-ref`). Fable reviews the trait before
-  phase 2 consumes it.
+  phase 3 consumes it.
 
 | `gix-receive`
-| 0
+| 1
 | High
 | opus
 | Smart-HTTP wire framing + pack ingestion, zero policy. Protocol-v2 and
@@ -57,7 +70,7 @@ anything in the next phase depends on it.
   Quarantine semantics per `receive.object-access`.
 
 | `ents-model`
-| 1
+| 2
 | Low
 | sonnet
 | Entity structs, namespaces, trailers, taxonomy — declarative, but it is
@@ -65,7 +78,7 @@ anything in the next phase depends on it.
   review matter more than the code. Absorbs git-metadata's trailer work.
 
 | `ents-gate`
-| 2
+| 3
 | Medium
 | fable
 | Small in lines, security-critical in every line: tip signature,
@@ -74,7 +87,7 @@ anything in the next phase depends on it.
   call sites.
 
 | `ents-query`
-| 2
+| 3
 | High
 | fable
 | The critical path: grammar/parser (easy), static footprint extraction,
@@ -83,7 +96,7 @@ anything in the next phase depends on it.
   semantics against synthetic ref histories.
 
 | `ents-anchor`
-| 2
+| 3
 | Medium
 | sonnet
 | Mostly a port: projection (blame + fuzzy context match) survives at
@@ -91,7 +104,7 @@ anything in the next phase depends on it.
   (embed blob + context, no gitlinks).
 
 | `ents-receive`
-| 3
+| 4
 | Medium
 | sonnet
 | Orchestration above traits that already exist by now: gate
@@ -104,7 +117,7 @@ anything in the next phase depends on it.
   `receive()` signature — every frontend is downstream of it.
 
 | `ents-sync`
-| 3
+| 4
 | High
 | opus
 | Fetch/push plumbing is routine; the schema-aware three-way merge over
@@ -112,7 +125,7 @@ anything in the next phase depends on it.
   Absorbs git-store's merge.
 
 | `ents-effect`
-| 4
+| 5
 | Medium
 | sonnet
 | `Executor` trait + Docker/Sprite backends (feature-gated), toolchain
@@ -121,19 +134,19 @@ anything in the next phase depends on it.
   settled, the environment is the risk.
 
 | `git-ents` (bin)
-| 5
+| 6
 | Medium
 | sonnet
 | Local root wiring (~50 lines) plus the real cost: subcommand surface
   and the `denyCurrentBranch=updateInstead` worktree edge. Headless — no
-  `serve` subcommand yet (arrives Phase 6 with `ents-web`). Doubles as
+  `serve` subcommand yet (arrives Phase 7 with `ents-web`). Doubles as
   the single-node hosted root: loose refs and a real odb on a Fly volume
   behind `gix-receive`, an in-memory `EventSink` with a boot-time
   reconciliation scan, and the Sprite executor, deployed at
   `git.ents.cloud`. Milestone: CLI-complete.
 
 | `ents-web`
-| 6
+| 7
 | Medium
 | sonnet
 | Broad surface, low algorithmic depth. Lands `serve` in `git-ents`,
@@ -144,7 +157,7 @@ anything in the next phase depends on it.
   deployment (`roots.web-agnostic`).
 
 | `git-ents-server` (bin)
-| 7
+| 8
 | High
 | opus
 | Postgres `RefStore` (multi-ref CAS in a transaction), Tigris object
@@ -158,20 +171,23 @@ anything in the next phase depends on it.
 
 == Phase gates
 
-* *Phase 0 → 1*: `gix-ref-store` passes a CAS conformance suite
+* *Phase 0 exit*: `git.ents.cloud` resolves over HTTPS; `git clone` and
+  `git push` round-trip against it using stock git; this repo's
+  `origin` points at it.
+* *Phase 1 → 2*: `gix-ref-store` passes a CAS conformance suite
   (concurrent writers, crash injection); `gix-receive` round-trips a push
   from stock git.
-* *Phase 2 → 3*: gate verdicts proven identical across call sites;
+* *Phase 3 → 4*: gate verdicts proven identical across call sites;
   query evaluator handles the staged-pipeline and fan-in idioms
   incrementally on a synthetic repo.
-* *Phase 3 → 4*: end-to-end local write path (`receive` in-process,
+* *Phase 4 → 5*: end-to-end local write path (`receive` in-process,
   advisory gate, null `EventSink`) green; sync merge fuzz-tested against
   divergent typed trees.
-* *Phase 5 exit*: the CLI-complete milestone — every porcelain command
+* *Phase 6 exit*: the CLI-complete milestone — every porcelain command
   green against the single-node hosted root; the boot-time
   reconciliation scan regenerates obligations correctly after a
   `kill -9` of the in-memory queue.
-* *Phase 7 exit*: the honesty test (`roots.honesty-test`) — the
+* *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
   Postgres/Tigris/durable-queue root is wired as a new composition root
   with zero library-crate modification; a diff of library-crate
   contents between phase entry and phase exit MUST be empty.
