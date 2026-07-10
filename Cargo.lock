@@ -370,6 +370,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-anchor"
+version = "0.0.0"
+dependencies = [
+ "ents-model",
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "proptest",
+ "rstest",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-gate"
 version = "0.0.0"
 dependencies = [
