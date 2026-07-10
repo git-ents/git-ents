@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = []
+members = ["crates/gix-ref-store"]
 
 [workspace.package]
 edition = "2024"
@@ -48,6 +48,7 @@ gix-actor = "0.41"
 gix-date = "0.15"
 gix-features = { version = "0.48", features = ["zlib"] }
 gix-hash = { version = "0.25", features = ["sha1"] }
+gix-lock = "23.0"
 gix-object = "0.61"
 gix-odb = "0.81"
 gix-pack = "0.71"
