@@ -401,6 +401,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-query"
+version = "0.0.0"
+dependencies = [
+ "ents-model",
+ "ents-testutil",
+ "facet-git-tree",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-ref-store",
+ "proptest",
+ "rstest",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-testutil"
 version = "0.0.0"
 dependencies = [
