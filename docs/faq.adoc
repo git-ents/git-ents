@@ -192,8 +192,12 @@ Because it is that workflow rebuilt on native primitives: inbox ref as mailing l
 Everything writes locally; the gate never blocks a local write.
 Policy is repository state, so the gate evaluates the actual canonical rules offline, staleness bounded by your last fetch.
 
-*I want to know before pushing whether my push will be accepted.*
-The push pre-flight runs the same gate function the hosted store runs at CAS time; it is a prediction that can only be stale, never wrong about the rules.
+*I fire up the local UI — what do the green and red verdicts actually mean?*
+Say policy lets you write `joey/*` and `refs/meta/issue/*`.
+Commit to an issue, or to `joey/*`, and the UI shows green.
+Commit to `main` and it shows orange or red — "when you push, the server will reject this: your signing key is not authorized for `refs/heads/main`" — with an offer to send it to your inbox instead.
+Nothing was ever blocked locally: every verdict, in the UI or at push pre-flight, is a prediction of the same gate function the hosted store runs, evaluated against the policy your last fetch brought down.
+That prediction can go stale but is never wrong about the rules it has, and the inbox offer appears the moment a verdict turns red, not only after an actual rejection.
 
 *I want to understand what the hosted server actually is.*
 A store with a mandatory gate and a durable queue: custody of canonical refs, admission with teeth, and effect dispatch.
@@ -248,9 +252,10 @@ History before the epoch is archival, the same stance the typed tree takes towar
 *I want to know what happens when someone force-pushes a branch my effect watches.*
 Trigger sets are monotone and entry-only: a commit leaving the set retracts nothing, because results are immutable history — it simply stops being an obligation.
 
-*I want to push to a checked-out branch on my local server.*
-Local serving sets `receive.denyCurrentBranch=updateInstead`, so accepted pushes also update the working tree.
-Known edge: `updateInstead` fails on a dirty worktree, so branch pushes are not perfectly identical to hosted mode — metadata pushes are, because `refs/meta/*` never touches a worktree.
+*How does the integration-test harness push into a live working tree?*
+Signed writes go through the same in-process `receive()` as everything else; there is no local git-serving transport as a product feature.
+Only the test harness pushes objects into a checked-out repo from outside, and for that narrow case it sets `receive.denyCurrentBranch=updateInstead`, so an accepted push also updates the working tree.
+Known edge: `updateInstead` fails on a dirty worktree, so this never affects `refs/meta/*`, which doesn't touch a worktree at all.
 
 *I want to script against the forge from my editor or CI.*
 `git-ents-server` is a library first; the serve command and binaries are thin wrappers, and the primitives (`git store`, `git anchor`, `git comment`, `git effect`, `git toolchain`) are plumbing over the same library.
