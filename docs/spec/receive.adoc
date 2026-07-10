@@ -95,6 +95,20 @@ The queue fed by `receive` is at-least-once; the dedup key MUST be
 state kept outside the repository.
 --
 
+[role="requirement", id="receive.reconstructible"]
+.The Queue Is Reconstructible From Repository State
+--
+The set of pending obligations an `EventSink` enqueues MUST be derivable
+from repository state alone, per the work set defined in
+<<query.workset>>.
+An `EventSink` implementation MAY lose queued events on crash, provided
+the composition root reconciles obligations from repository state at
+startup before serving further pushes.
+A durable queue MUST be treated as a performance optimization, never a
+correctness requirement; the dedup key in <<receive.dedup>> is unchanged
+by reconciliation.
+--
+
 [role="requirement", id="receive.redaction-admin-only"]
 .Redaction Records Are Admin-Only
 --
