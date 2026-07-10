@@ -22,6 +22,7 @@ Delete it and every clone still contains the members, the policy, the discussion
 Locally, transfer is vacuous — so the system's real write primitive is the transaction: `receive(refs, objects, events, proposal)`, a library function pure over storage traits.
 Every mutation frontend — CLI, local web UI, smart-HTTP — constructs a proposal and calls the same function.
 Local and hosted do not share a push path; they share `receive`.
+`git ents serve` is that local web UI: HTML over loopback, an implementation detail, signing every edit in-process with the user's own key exactly like the CLI does.
 
 Mutations are author-signed commits, not push certificates.
 A push cert signs a transition and evaporates at the transport layer; a commit signature replicates with the repo and verifies in every clone, forever.
@@ -31,6 +32,7 @@ Refname binding lives in an `Ents-Ref:` trailer; anti-replay is fast-forward-plu
 Because writing and verifying are separated, local is genuinely offline-first: the local store accepts any write and the gate merely annotates.
 You can author while unenrolled, work against an unfetched member list, and accumulate meta-refs the canonical store would reject.
 The gate is the same pure function everywhere; only its consequence differs — advisory locally, mandatory at the hosted CAS.
+Every advisory verdict, whether rendered in the local UI the moment you commit or at push pre-flight, is a prediction of that same hosted outcome, computed offline against policy as of your last fetch — it can go stale, but it is never wrong about the rules it has.
 
 '''''
 
@@ -38,6 +40,8 @@ The gate is the same pure function everywhere; only its consequence differs — 
 
 A commit signature proves authorship; refname rules prove placement; the two are deliberately distinct.
 In the normal case one person is both, and the tip invariant — every meta-ref tip is signed by a member authorized for that refname — is checkable after the fact by anyone with a clone.
+The two layers keep strict vocabulary: identity is commit signing, the sole mechanism locally and what the gate evaluates for meta-ref admission everywhere; a transport ACL — a push cert, a connection credential — decides only who may connect and update `refs/heads/*`, and never carries meta-ref admission semantics.
+The same refname-rule data feeds both layers, enforced at the transport door for code refs and at the gate for meta-refs, which is why a local verdict predicts both uniformly.
 
 When author and placer differ, the mechanism is adoption: an authorized member merges the contributor's signed commit onto the canonical ref.
 The merge satisfies the tip invariant; the contributor's signature survives intact in ancestry.
