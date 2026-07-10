@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gix-ref-store"]
+members = ["crates/ents-model", "crates/gix-ref-store"]
 
 [workspace.package]
 edition = "2024"
@@ -57,6 +57,7 @@ object_store = { version = "0.14", default-features = false, features = [
     "aws",
 ] }
 maud = { version = "0.27", features = ["axum"] }
+proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 rayon = "1"
 rstest = "0.26"

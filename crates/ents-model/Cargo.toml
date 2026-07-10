@@ -1,0 +1,21 @@
+[package]
+name = "ents-model"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+facet-git-tree = { workspace = true }
+gix = { workspace = true }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rstest = { workspace = true }
+
+[lints]
+workspace = true
