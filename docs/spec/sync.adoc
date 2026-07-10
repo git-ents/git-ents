@@ -29,10 +29,13 @@ stale, never as one that can be wrong about the rules
 [role="requirement", id="sync.inbox-routing"]
 .Rejection Routes to the Inbox
 --
-When pre-flight predicts, or the canonical store actually returns, a
-rejection of a push to a canonical meta-ref, sync MUST offer to route the
-same commit to the author's `refs/meta/inbox/*` ref instead of discarding
-it.
+Any negative advisory verdict against a canonical meta-ref — the local UI
+verdict at commit time (<<gate.advisory-local>>), push pre-flight
+(<<sync.pre-flight>>), or the canonical store's actual rejection — MUST
+cause sync to offer routing the same commit to the author's
+`refs/meta/inbox/*` ref instead of discarding it.
+The offer MUST appear the moment the verdict goes negative, not only
+after a push is actually attempted and refused.
 --
 
 [role="requirement", id="sync.divergence-merge"]

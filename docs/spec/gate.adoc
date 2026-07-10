@@ -89,6 +89,10 @@ The local store MUST accept any write and run the gate only as a verdict
 annotating the result; a failing verdict MUST NOT block the write.
 Enforcing the gate locally would destroy offline-first: a user could not
 author while unenrolled, or work against an unfetched member list.
+A failing local verdict, computed entirely offline against last-fetched
+policy (<<gate.policy-as-state>>), MUST surface the inbox alternative
+(<<sync.inbox-routing>>) at verdict time, not only once a push is
+actually rejected.
 --
 
 [role="requirement", id="gate.call-sites"]
@@ -99,6 +103,18 @@ The gate MUST be the same function at every call site: hosted CAS
 and push pre-flight (<<sync.pre-flight>>).
 A pre-flight verdict is a prediction that can only go stale; it MUST NOT
 diverge from the rules the hosted store will actually apply.
+--
+
+[role="requirement", id="gate.verdict-reason"]
+.Verdict Carries a Machine-Readable Reason
+--
+On failure the gate MUST return which requirement
+(<<gate.tip-signed>> through <<gate.atomic-cas>>) failed and the subject
+refname, not a bare pass/fail.
+Every advisory call site (<<gate.advisory-local>>, <<sync.pre-flight>>)
+MUST render this reason to the user — for example, "your signing key is
+not authorized for `refs/heads/main`" — so a negative verdict is
+actionable before a push is ever attempted.
 --
 
 === Adoption
