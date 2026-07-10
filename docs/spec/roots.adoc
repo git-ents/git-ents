@@ -23,8 +23,9 @@ implementations.
 The `git-ents` CLI's composition root MUST wire: a loose-ref `RefStore`,
 the local odb as object store, a Docker `Executor`, a null `EventSink`, and
 the advisory gate (<<gate.advisory-local>>).
-`git ents serve` MUST reuse this same wiring, adding only the smart-HTTP
-frontend on loopback.
+`git ents serve` MUST reuse this same wiring, adding only the `ents-web`
+HTTP frontend on loopback — the web UI, never git's smart-HTTP wire
+protocol, which the local root MUST NOT expose.
 Local effect execution MUST be pull, via `git effect run`, never a daemon
 watching refs; the queue is the only component this root skips
 (<<effect.local-run>>).
@@ -79,16 +80,35 @@ In-process webview embedding, with no network transport at all, MUST
 remain a supported deployment alongside hosted and local-loopback serving.
 --
 
+[NOTE]
+====
+Example: policy lets Joey write `joey/*` and `refs/meta/issue/*`. He
+starts the local UI (<<roots.web-signing>>). A commit to an issue, or
+to `joey/*`, shows green. A commit to `main` shows orange or red —
+"when you push, the server will reject this: your signing key is not
+authorized for `refs/heads/main`" (<<gate.verdict-reason>>) — with an
+offer to send it to his inbox instead (<<sync.inbox-routing>>).
+Nothing was ever blocked locally: every verdict is a prediction of the
+gate, evaluated against policy as of Joey's last fetch
+(<<gate.policy-as-state>>), rendered by the same in-process signing
+this section specifies — never a separate git-serving transport.
+====
+
 [role="requirement", id="roots.worktree-update"]
-.Local Serve and the Working Tree
+.Test-Harness Pushes Into a Working Tree
 --
-The `git-ents` local root MUST set `receive.denyCurrentBranch=updateInstead`
-so an accepted branch push also updates the working tree.
+Pushing into a local repository's checked-out branch from outside is
+integration-test-harness capability, not a product-facing feature: the
+local root's user-facing serving surface is the web UI
+(<<roots.web-signing>>), never a git transport.
+For that harness case, the `git-ents` local root MUST set
+`receive.denyCurrentBranch=updateInstead` so an accepted branch push
+also updates the working tree.
 Worktree update MUST happen only after `receive` accepts the push, as
 frontend business; core code MUST NOT touch a worktree.
-A dirty worktree is a known edge where `updateInstead` fails, so
-branch-push behavior differs from hosted while metadata behavior, which
-never touches a worktree, stays identical.
+A dirty worktree is a known edge where `updateInstead` fails, so this
+harness path differs from hosted while metadata behavior, which never
+touches a worktree, stays identical.
 --
 
 [role="requirement", id="roots.web-session"]

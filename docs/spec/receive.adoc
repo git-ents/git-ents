@@ -28,6 +28,10 @@ none, for frontends where the transport itself carries no separate
 authentication.
 Gate evaluation (<<receive.unit>>) MUST be checkable against exactly
 this shape, independent of which frontend constructed the proposal.
+This transport-auth evidence is a connection-level ACL input for
+`refs/heads/*` (<<gate.principled-split>>) only; gate evaluation for
+meta-ref admission MUST ignore it entirely and MUST NOT consult it in
+place of the tip invariant (<<gate.signature-artifact>>).
 --
 
 [role="requirement", id="receive.shared-path"]

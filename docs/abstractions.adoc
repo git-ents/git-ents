@@ -106,9 +106,10 @@ The epoch-setting commit is the first gated tip of the config ref, which resolve
 * The local store accepts any write and runs the gate as a verdict; failure annotates (*advisory*).
 
 Enforcing the gate locally would destroy offline-first: you could not author while unenrolled or work against an unfetched member list.
-You can always write locally what hosted will never accept; the sync path's answer to a rejected canonical push is an offer to push to your inbox ref instead.
+You can always write locally what hosted will never accept; the moment a verdict predicts rejection — at commit time in the local UI, or at push pre-flight — sync offers to route the commit to your inbox ref instead, not only after an actual rejection.
 
 Three call sites, one function: hosted CAS, local UI verdict, push pre-flight.
+A verdict is never a bare pass/fail: on failure it carries which rule failed and for which refname, so the local UI and pre-flight can render an actionable reason — "your signing key is not authorized for `refs/heads/main`" — instead of an opaque no.
 The hosted server is not where policy lives; it is the one place where the verdict has teeth.
 
 The local web UI signs as the user, with the user's own member key, indistinguishable from CLI-authored commits.
@@ -327,8 +328,8 @@ Revocation is a state on the member entity, not deletion — a revoked key must 
 |Purpose |Personal forge, development, demos |Production forge
 |===
 
-Working repos reject pushes to the checked-out branch; the local server sets `receive.denyCurrentBranch=updateInstead` so pushes also update the working tree.
-Known edge: `updateInstead` fails on a dirty worktree, so branch-push behavior is not perfectly identical to hosted mode — metadata behavior is.
+`git ents serve` is the local web UI, not a git-serving transport; the one place a working repo accepts an external branch push is the integration-test harness, for which the local root sets `receive.denyCurrentBranch=updateInstead` so an accepted push also updates the working tree.
+Known edge: `updateInstead` fails on a dirty worktree, so this harness path is not perfectly identical to hosted mode — metadata behavior is.
 Worktree update is frontend business, after `receive` accepts; core never touches a worktree.
 
 Pushes to `refs/meta/*` never touch the working tree, so all metadata behaves identically in both modes: the deployment model is an implementation detail of the data model — a direct consequence of abstractions 1 and 5.
