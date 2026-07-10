@@ -1,6 +1,2 @@
+.DS_Store
 target/
-.claude/
-PROMPT.md
-*.html
-# Askama view templates are source, not generated HTML output.
-!crates/git-ents-server/templates/*.html
