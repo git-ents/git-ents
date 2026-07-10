@@ -74,17 +74,55 @@ pub fn result_ref(effect: &str, short_oid: &str) -> Result<FullName> {
     build(format!("refs/meta/results/{effect}/{short_oid}"))
 }
 
-// NOTE: `meta-ref.inbox` also specifies a member's self-run result mirror at
-// `refs/meta/results/~<member>/<effect>/<short_oid>`. That refname cannot be
-// constructed: `~` is one of the bytes `git-check-ref-format` (and
-// `gix_validate::reference::name`, which mirrors it) rejects unconditionally
-// in any refname component, so `gix::refs::FullName::try_from` fails for
-// every value of `<member>`, not just some. This is a spec rule that cannot
-// be implemented as written (per the STOP CONDITION on such rules) — no
-// `inbox_result_ref` builder is provided, and it is not claimed as covered.
-// A spec resolution (a different separator, since `~` itself is not
-// git-legal) is needed before `ents-gate`/`ents-receive` can route this
-// case.
+/// The ref mirroring one effect's result that `member` produced on their own
+/// executor — `refs/meta/self/<member>/<effect>/<short_oid>`
+/// (`meta-ref.inbox`, `effect.self-run`).
+///
+/// `self` is its own top-level namespace, a fixed segment from the spec's
+/// namespace table, so the canonical results glob
+/// (`refs/meta/results/<effect>/*`) and the self-run glob
+/// (`refs/meta/self/<member>/*`) are disjoint by construction.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name = namespace::self_result_ref(&MemberId::new("jdc"), "unit", "abc123")
+///     .expect("valid segments");
+/// assert_eq!(name.as_bstr(), "refs/meta/self/jdc/unit/abc123");
+/// ```
+// @relation(meta-ref.inbox, scope=function)
+pub fn self_result_ref(member: &MemberId, effect: &str, short_oid: &str) -> Result<FullName> {
+    build(format!("refs/meta/self/{member}/{effect}/{short_oid}"))
+}
+
+/// The member segment of a `refs/meta/self/<member>/...` refname, or `None`
+/// when `name` is not under the self-run namespace (`meta-ref.inbox`).
+///
+/// The gate keys self-run authorization on this segment — a member may write
+/// only their *own* self-run mirror — so it is extracted here, next to the
+/// namespace table it belongs to, rather than re-parsed by every caller.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name: gix::refs::FullName = "refs/meta/self/jdc/unit/abc123".try_into().expect("valid");
+/// assert_eq!(namespace::self_run_owner(name.as_ref()), Some(MemberId::new("jdc")));
+///
+/// let canonical: gix::refs::FullName = "refs/meta/results/unit/abc123".try_into().expect("valid");
+/// assert_eq!(namespace::self_run_owner(canonical.as_ref()), None);
+/// ```
+// @relation(meta-ref.inbox, scope=function)
+#[must_use]
+pub fn self_run_owner(name: &FullNameRef) -> Option<MemberId> {
+    let path = name.as_bstr().to_string();
+    let rest = path.strip_prefix("refs/meta/self/")?;
+    let (member, _) = rest.split_once('/')?;
+    Some(MemberId::new(member))
+}
 
 /// The ref holding an inbox entity awaiting adoption —
 /// `refs/meta/inbox/<id>` (`meta-ref.inbox`).
@@ -109,12 +147,11 @@ pub fn redaction_ref(id: &str) -> Result<FullName> {
 
 /// Which entity namespace a `refs/meta/*` refname falls in.
 ///
-/// Deliberately coarser than the refname itself: a canonical result and its
-/// inbox mirror both classify as [`Namespace::Result`], since
-/// `meta-ref.inbox` requires them to "hold the same typed trees as their
-/// canonical counterparts; only the refname rule differs" — that refname
-/// rule (who may write which case) is authorization, [`is_inbox`]'s job and
-/// ultimately the gate's, not a distinct entity kind.
+/// The inbox and self-run namespaces classify as their own variants even
+/// though `meta-ref.inbox` requires them to "hold the same typed trees as
+/// their canonical counterparts; only the refname rule differs" — that
+/// refname rule is exactly what the gate routes on, so the distinction
+/// belongs in this table rather than re-derived by every caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Namespace {
@@ -126,8 +163,13 @@ pub enum Namespace {
     Comment,
     /// `refs/meta/effects/*`.
     Effect,
-    /// `refs/meta/results/*`, canonical or inbox (`is_inbox`).
+    /// `refs/meta/results/*` — canonical results only; a member's self-run
+    /// mirror is [`Namespace::SelfRun`], disjoint by construction
+    /// (`meta-ref.inbox`).
     Result,
+    /// `refs/meta/self/<member>/*` — self-run result mirrors
+    /// (`meta-ref.inbox`, [`self_result_ref`]).
+    SelfRun,
     /// `refs/meta/toolchains/*`.
     Toolchain,
     /// `refs/meta/redactions/*`.
@@ -188,6 +230,7 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "comments" => Some(Namespace::Comment),
         "effects" => Some(Namespace::Effect),
         "results" => Some(Namespace::Result),
+        "self" => Some(Namespace::SelfRun),
         "toolchains" => Some(Namespace::Toolchain),
         "redactions" => Some(Namespace::Redaction),
         "inbox" => Some(Namespace::Inbox),
@@ -195,13 +238,12 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
     }
 }
 
-/// Whether a `refs/meta/*` refname names an inbox entity or an inbox result
-/// mirror — `refs/meta/inbox/*` — per `meta-ref.inbox`.
+/// Whether a `refs/meta/*` refname names an inbox entity —
+/// `refs/meta/inbox/*` — per `meta-ref.inbox`.
 ///
-/// The results-mirror half of `meta-ref.inbox`
-/// (`refs/meta/results/~<member>/...`) is not checked here: as the note
-/// above `inbox_ref` explains, `~` is not a legal refname byte, so no
-/// [`FullNameRef`] can ever hold that shape for this function to recognize.
+/// A member's self-run result mirror lives under its own top-level
+/// `refs/meta/self/*` namespace ([`self_result_ref`]), not under the inbox,
+/// so it is deliberately not matched here.
 ///
 /// # Examples
 ///
@@ -242,6 +284,7 @@ mod tests {
     #[case::comment("refs/meta/comments/abc", Some(Namespace::Comment))]
     #[case::effect("refs/meta/effects/unit", Some(Namespace::Effect))]
     #[case::result("refs/meta/results/unit/abc123", Some(Namespace::Result))]
+    #[case::self_run("refs/meta/self/jdc/unit/abc123", Some(Namespace::SelfRun))]
     #[case::toolchain("refs/meta/toolchains/rust-stable", Some(Namespace::Toolchain))]
     #[case::redaction("refs/meta/redactions/abc", Some(Namespace::Redaction))]
     #[case::inbox("refs/meta/inbox/abc", Some(Namespace::Inbox))]
@@ -261,10 +304,28 @@ mod tests {
     #[rstest]
     #[case::inbox_entity("refs/meta/inbox/abc", true)]
     #[case::canonical_result("refs/meta/results/unit/abc123", false)]
+    #[case::self_run_mirror("refs/meta/self/jdc/unit/abc123", false)]
     #[case::member("refs/meta/member/jdc", false)]
     // @relation(meta-ref.inbox, scope=function, role=Verifies)
     fn is_inbox_matches_only_inbox_namespaces(#[case] refname: &str, #[case] expected: bool) {
         assert_eq!(is_inbox(name(refname).as_ref()), expected);
+    }
+
+    #[rstest]
+    #[case::self_run("refs/meta/self/jdc/unit/abc123", Some("jdc"))]
+    #[case::self_run_deep_effect("refs/meta/self/worker-1/it/deadbeef", Some("worker-1"))]
+    #[case::bare_self_segment("refs/meta/self/jdc", None)]
+    #[case::canonical_result("refs/meta/results/unit/abc123", None)]
+    #[case::outside_meta("refs/heads/main", None)]
+    // @relation(meta-ref.inbox, scope=function, role=Verifies)
+    fn self_run_owner_extracts_only_the_self_namespace_member(
+        #[case] refname: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            self_run_owner(name(refname).as_ref()),
+            expected.map(MemberId::new)
+        );
     }
 
     #[rstest]
@@ -277,6 +338,7 @@ mod tests {
             comment_ref("abc").expect("valid"),
             effect_ref("unit").expect("valid"),
             result_ref("unit", "abc123").expect("valid"),
+            self_result_ref(&id, "unit", "abc123").expect("valid"),
             inbox_ref("abc").expect("valid"),
             toolchain_ref("rust-stable").expect("valid"),
             redaction_ref("abc").expect("valid"),

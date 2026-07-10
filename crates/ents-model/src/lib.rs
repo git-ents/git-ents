@@ -35,16 +35,10 @@
 //! - `model.redaction` — [`Redaction`].
 //! - `model.account` — [`Account`].
 //! - `meta-ref.namespace`, `meta-ref.granularity` — [`namespace`].
-//! - `meta-ref.inbox` — [`namespace`], **partially**: the
-//!   `refs/meta/inbox/*` half is implemented and tested
-//!   ([`namespace::inbox_ref`], [`namespace::is_inbox`]). The
-//!   `refs/meta/results/~<member>/...` results-mirror half is a spec rule
-//!   that cannot be implemented as written — `~` is a byte
-//!   `git-check-ref-format` (and `gix_validate::reference::name`, which
-//!   mirrors it) rejects unconditionally in any refname, so no
-//!   `gix::refs::FullName` can ever hold that shape. See the note above
-//!   `namespace::inbox_ref` for the full detail; this is flagged as a STOP
-//!   CONDITION rather than worked around with a substitute character.
+//! - `meta-ref.inbox` — [`namespace`]: the `refs/meta/inbox/*` half
+//!   ([`namespace::inbox_ref`], [`namespace::is_inbox`]) and the
+//!   `refs/meta/self/<member>/<effect>/<short-oid>` self-run mirror half
+//!   ([`namespace::self_result_ref`], [`namespace::self_run_owner`]).
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.
 //! - `meta-ref.trailers` — [`trailer`].
 //!
