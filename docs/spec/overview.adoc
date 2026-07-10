@@ -159,7 +159,7 @@ implementation.
 | `git-ents` (bin)
 | Local composition root.
 | `ents-receive`, `ents-effect`, `ents-web`, `ents-anchor`, `ents-sync`,
-`gix-receive`, `gix-ref-store`
+`gix-ref-store`
 
 | `git-ents-server` (bin)
 | Hosted composition root.

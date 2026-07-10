@@ -11,6 +11,19 @@ hard-won once (CAS discipline, anchor projection, docker readiness,
 sprite quirks, backend conformance, Postgres/Tigris store code) is ported
 and re-verified, not rediscovered.
 
+Tools and abstractions before scale-out govern the ordering below: a
+phase earns its place by exercising a real abstraction (the gate, the
+query engine, `receive`, sync) against stock git, not by anticipating
+load git itself would have to buckle under. `gix-receive` is the clearest
+instance — a custom wire-framing crate structurally required only once
+Postgres-backed refs make git's own `receive-pack` impossible to run
+directly, so it moves out of the foundation and into the scale-out phase
+alongside the Postgres `RefStore`, Tigris objects, and the durable queue
+it ships with. Until that phase, git's own `receive-pack` is the one
+hosted and local serving transport; the single-node root at
+`git.ents.cloud` (Phase 6) is stock git wearing the same gate everything
+else runs, not a bespoke protocol.
+
 == Agent scheme
 
 * *sonnet* — bulk and medium-complexity implementation, ports from
@@ -67,14 +80,6 @@ the coverage dashboard is a later call.
   ports the CAS discipline from `pre-redo` (`arch.loose-cas-discipline`:
   no shelling to `git update-ref`). Fable reviews the trait before
   phase 3 consumes it.
-
-| `gix-receive`
-| 1
-| High
-| opus
-| Smart-HTTP wire framing + pack ingestion, zero policy. Protocol-v2 and
-  sideband subtleties; conformance-test against real `git` clients.
-  Quarantine semantics per `receive.object-access`.
 
 | `ents-model`
 | 2
@@ -147,10 +152,11 @@ the coverage dashboard is a later call.
 | Local root wiring (~50 lines) plus the real cost: subcommand surface
   and the `denyCurrentBranch=updateInstead` worktree edge. Headless — no
   `serve` subcommand yet (arrives Phase 7 with `ents-web`). Doubles as
-  the single-node hosted root: loose refs and a real odb on a Fly volume
-  behind `gix-receive`, an in-memory `EventSink` with a boot-time
-  reconciliation scan, and the Sprite executor, deployed at
-  `git.ents.cloud`. Milestone: CLI-complete.
+  the single-node hosted root: loose refs and a real odb on a Fly volume,
+  served behind git's own `receive-pack` — the same stock-git transport
+  Phase 0 bootstraps, now invoking `receive()` from a hook — with an
+  in-memory `EventSink` and a boot-time reconciliation scan, and the
+  Sprite executor, deployed at `git.ents.cloud`. Milestone: CLI-complete.
 
 | `ents-web`
 | 7
@@ -163,17 +169,29 @@ the coverage dashboard is a later call.
   reachability, so in-process webview embedding stays a supported
   deployment (`roots.web-agnostic`).
 
+| `gix-receive`
+| 8
+| High
+| opus
+| Scale-out only: structurally necessary once the Postgres `RefStore`
+  leaves no on-disk repo for git's own `receive-pack` to act on, not
+  before. Smart-HTTP wire framing + pack ingestion, zero policy.
+  Protocol-v2 and sideband subtleties; conformance-test against real
+  `git` clients. Quarantine semantics per `receive.object-access`.
+
 | `git-ents-server` (bin)
 | 8
 | High
 | opus
 | Postgres `RefStore` (multi-ref CAS in a transaction), Tigris object
-  store behind gitoxide traits, and a durable-queue `EventSink` — a new
+  store behind gitoxide traits, a durable-queue `EventSink`, and
+  `gix-receive` replacing git's own `receive-pack` as transport — a new
   composition root swapped in with zero library-crate edits. This phase
   IS the honesty test (`roots.honesty-test`): entry is triggered by
   measured storage/load pressure (the kiln-cache growth analysis), not a
   date. Reuses the Sprite executor and sessions/CSRF from `git-ents`;
-  salvage the store code from the scale-out work at `pre-redo`.
+  salvage the store code and gix-receive framing from the scale-out work
+  at `pre-redo`.
 |===
 
 == Phase gates
@@ -183,8 +201,7 @@ the coverage dashboard is a later call.
   `origin` points at it; the `tracey web` dashboard at the same host
   reflects HEAD's coverage after each push.
 * *Phase 1 → 2*: `gix-ref-store` passes a CAS conformance suite
-  (concurrent writers, crash injection); `gix-receive` round-trips a push
-  from stock git.
+  (concurrent writers, crash injection).
 * *Phase 3 → 4*: gate verdicts proven identical across call sites;
   query evaluator handles the staged-pipeline and fan-in idioms
   incrementally on a synthetic repo.
@@ -196,9 +213,11 @@ the coverage dashboard is a later call.
   reconciliation scan regenerates obligations correctly after a
   `kill -9` of the in-memory queue.
 * *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
-  Postgres/Tigris/durable-queue root is wired as a new composition root
-  with zero library-crate modification; a diff of library-crate
-  contents between phase entry and phase exit MUST be empty.
+  Postgres/Tigris/durable-queue root, now served by `gix-receive` in
+  place of git's own `receive-pack`, is wired as a new composition root
+  with zero library-crate modification; `gix-receive` round-trips a push
+  from stock git, and a diff of library-crate contents between phase
+  entry and phase exit MUST be empty.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
