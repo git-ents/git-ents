@@ -236,6 +236,7 @@ compare-and-swap discipline and MUST NOT shell out to `git update-ref`,
 so local mutations honor the same CAS guarantee hosted storage provides.
 --
 
-The honesty test for these boundaries — a third single-node composition
-root constructible from library crates alone — is a deployment
-requirement and lives in `roots.adoc` as <<roots.honesty-test>>.
+The honesty test for these boundaries — a new composition root
+constructible from library crates alone, no library modification — is a
+deployment requirement and lives in `roots.adoc` as
+<<roots.honesty-test>>.

@@ -42,11 +42,14 @@ NOT share in-process state with `receive` (<<receive.unit>>).
 --
 
 [role="requirement", id="roots.honesty-test"]
-.Single-Node Honesty-Test Root (Deferred)
+.Scale-Out Root Is the Honesty Test
 --
-A third composition root — SQLite, local filesystem, and Docker — MUST be
-constructible without modifying library code, as the project's honesty
-test for the seam design.
+Wiring the Postgres `RefStore`, Tigris object store, and durable-queue
+`EventSink` (<<roots.hosted>>) as a new composition root MUST require
+zero modification to any library crate.
+This is the project's honesty test for the seam design: the proof is an
+actual production migration off the single-node hosted root, not a
+synthetic root built to demonstrate the seams.
 --
 
 [role="requirement", id="roots.config-isolation"]
@@ -65,6 +68,15 @@ key MUST itself be an enrolled member.
 The local web UI MUST sign edits with the user's own member key instead;
 the server-key indirection used hosted MUST NOT be imported into the local
 root.
+--
+
+[role="requirement", id="roots.web-agnostic"]
+.Web UI Is Deployment-Agnostic
+--
+The `ents-web` crate MUST receive its signing identity by injection from
+its composition root and MUST NOT assume it is reached over a network.
+In-process webview embedding, with no network transport at all, MUST
+remain a supported deployment alongside hosted and local-loopback serving.
 --
 
 [role="requirement", id="roots.worktree-update"]
