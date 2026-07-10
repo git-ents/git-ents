@@ -40,7 +40,7 @@ In the interest of transparency (one of this project's core values) the values t
 === Simplicity
 
 This project aspires to be simple.
-All project metadata – issues, reviews, contributors, repository configurations, releases, etc. – are stored in one databasss: Git's at-rest data model.
+All project metadata – issues, reviews, contributors, repository configurations, releases, etc. – are stored in one database: Git's at-rest data model.
 Of course, we will not force the usage of a data model that fundamentally cannot represent modern software projects.
 If we determine the core thesis of this project is false, we will reevaluate.
 As stated above, this project is experimental!
