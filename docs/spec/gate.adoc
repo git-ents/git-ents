@@ -1,8 +1,8 @@
 == The Gate
 
 Verification is a pure function over ref-store reads: it MUST depend only on
-the read half of the ref store, never on write access or on any state
-outside `refs/meta/*`.
+the read half of the `RefStore` seam (<<arch.refstore-read-cas-split>>),
+never on write access or on any state outside `refs/meta/*`.
 The gate is the one admission judgment in the design; every mutation, human
 or machine, is admitted or refused by this same function (see
 <<receive.unit>>).

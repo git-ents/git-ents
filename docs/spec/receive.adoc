@@ -48,18 +48,11 @@ anchor for writes.
 [role="requirement", id="receive.refstore-seam"]
 .RefStore Seam
 --
-The `RefStore` seam MUST expose reads and atomic multi-ref
-compare-and-swap, with reads split into their own trait so a read-only
-caller (<<gate.tip-signed>>) cannot depend on write access.
+The `RefStore` seam `receive` is handed MUST satisfy the read/CAS split
+specified in <<arch.refstore-read-cas-split>>.
 --
 
-[role="requirement", id="receive.loose-cas-discipline"]
-.Loose Ref CAS Discipline
---
-A loose-ref `RefStore` implementation MUST write refs through its own
-compare-and-swap discipline and MUST NOT shell out to `git update-ref`,
-so local mutations honor the same CAS guarantee hosted storage provides.
---
+// moved: receive.loose-cas-discipline -> arch.loose-cas-discipline (overview.adoc)
 
 [role="requirement", id="receive.object-access"]
 .Object Access Via gitoxide
