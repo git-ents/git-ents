@@ -17,6 +17,19 @@ matching, and enqueue MUST live inside `receive`, above its trait
 parameters, never duplicated in a caller.
 --
 
+[role="requirement", id="receive.proposal-shape"]
+.Proposal Is the Fourth Argument's Shape
+--
+`receive`'s `proposal` argument MUST carry: the set of proposed ref
+transitions, each a `(refname, old-oid, new-oid)` triple; the objects
+accompanying those transitions; and any transport-auth evidence the
+frontend collected (a signed-push credential, a smart-HTTP session), or
+none, for frontends where the transport itself carries no separate
+authentication.
+Gate evaluation (<<receive.unit>>) MUST be checkable against exactly
+this shape, independent of which frontend constructed the proposal.
+--
+
 [role="requirement", id="receive.shared-path"]
 .One Receive, Every Frontend
 --
@@ -87,6 +100,19 @@ own.
 The queue fed by `receive` is at-least-once; the dedup key MUST be
 `(effect, oid)`, so that redelivery yields exactly-once outcomes with zero
 state kept outside the repository.
+--
+
+[role="requirement", id="receive.redaction-admin-only"]
+.Redaction Records Are Admin-Only
+--
+A push to `refs/meta/redactions/*` MUST be rejected unless the pushing
+member is admin-registered, regardless of any other role rule
+`refs/meta/config` may define.
+Authorizing a yank withholds bytes from every future reader of the
+repository, which needs more trust than an ordinary branch push, so
+this rule MUST be enforced explicitly and MUST be statable as the
+single refname glob `refs/meta/redactions/*`, mirroring
+<<effect.admin-only>>.
 --
 
 [role="requirement", id="receive.redaction-ingest"]

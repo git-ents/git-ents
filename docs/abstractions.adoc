@@ -42,7 +42,7 @@ Ref-level metadata that is not entity content belongs in commit-message trailers
 Two trailers are reserved: `Schema-Version:` for explicit encoding detection if it is ever needed, and `Ents-Ref:` for refname binding (see 4).
 Versioning or binding in the tree would pollute both the schema and the merge path.
 
-*Tip invariant:* the tip of a meta-ref is always readable by the current binary; history is archival.
+*Tip invariant:* the tip of a meta-ref is always readable by the binary that owns the entity type; a non-owning binary treats the tree as opaque and degrades to generic display (`git store show`); history is archival.
 (Redacted entries are the one qualification: readers surface a withheld object as a redaction marker, never an error — see Derived.)
 
 === 3. Anchor

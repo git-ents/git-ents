@@ -27,8 +27,9 @@ authorization (refname-keyed rules gate who may advance it), and history
 .Granularity Rule
 --
 A meta-ref MUST hold exactly one independently-authored entity:
-`refs/meta/member/*`, `refs/meta/comments/*`, `refs/meta/effects/*`, and
-`refs/meta/results/*` each decompose one ref per entity.
+`refs/meta/member/*`, `refs/meta/issues/*`, `refs/meta/comments/*`,
+`refs/meta/effects/*`, and `refs/meta/results/*` each decompose one ref
+per entity.
 Repository-global state with a single writer-of-record MUST instead live
 on one fixed ref, such as `refs/meta/account` or `refs/meta/config`.
 Entities that different actors write concurrently MUST NOT share a ref.
@@ -78,8 +79,11 @@ to the refname it was authored for.
 [role="requirement", id="meta-ref.tip-invariant"]
 .Tip Invariant
 --
-The tip of a meta-ref MUST always be readable by the current binary;
-only history is archival.
+The tip of a meta-ref MUST always be readable by the binary that owns
+the entity type; a non-owning binary MUST treat the tree as opaque and
+degrade to generic display (`git store show`), never an error
+(<<model.extensibility>>).
+Only history is archival.
 A reader that encounters a withheld (redacted) object while reading a
 meta-ref's tip MUST surface a redaction marker, never an error
 (<<receive.redaction-ingest>>) — the sole qualification to this
