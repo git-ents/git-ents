@@ -46,6 +46,16 @@ It does by construction: `git clone` plus fetching `refs/meta/*` moves the entir
 
 '''''
 
+== Issues
+
+*I want an issue tracker.*
+An issue is a typed tree on its own ref under `refs/meta/issues/*` — written, gated, synced, and audited exactly like a comment.
+
+*I want multiple assignees, custom states, or fields no forge offers.*
+Assignees, labels, and states are struct fields, and the struct is the schema; extending the issue model is a typed-tree change, not a platform request.
+
+'''''
+
 == Comments and anchors
 
 *I want to leave a comment on specific lines of code.*

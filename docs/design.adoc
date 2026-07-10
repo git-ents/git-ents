@@ -47,6 +47,10 @@ This resurrects the email-patch workflow on native primitives.
 The inbox ref is the mailing list; the adoption merge is the maintainer applying a signed patch; the trust decision is explicit, recorded, and attributed on both sides.
 A rejected canonical push degrades to an inbox offer, not an error.
 
+Redaction is the one deliberate exception to immutability.
+A yank is an admin-signed entity under `refs/meta/redactions/*`, enforced at ingest so content addressing cannot silently refill the hole; readers see a redaction marker where the bytes were, never an error, and the oid stays in history as evidence.
+It is best-effort by nature — no design can recall bytes from clones that already fetched, which is as true of git and email as it is here, and is stated rather than implied away.
+
 Workers are inside the same trust model.
 An effect runner is a member with a key, scoped by refname rules, revocable as repository state — never an ambient authority.
 "Official CI" is not a runtime property; it is a refname rule saying canonical results refs are writable only by designated worker keys.
@@ -61,6 +65,7 @@ An effect subscribes to a commit-set query and fires once per commit entering th
 Pipelines are query composition, not orchestration: staged CI is an intersection with a results set, fan-in is intersection, conditional edges are difference.
 The pipeline's state is the results namespace; the work set is `trigger − results(self, any)`; exactly-once outcomes fall out of content addressing with zero state outside the repo.
 Semantics are monotone and entry-only, which is what makes distributed evaluation safe with nothing but the existing CAS.
+A run's exit status is always a result — `pass` or `fail` means the effect ran; infrastructure failure is not a result but a bounded queue retry, whose exhaustion writes a terminal `error` so no obligation retries forever and no transient outage discharges one prematurely.
 
 Execution is orthogonal to storage.
 What to run is repo data; how to run it is a deployment property chosen at a composition root — so "local store, cloud executor" is a quadrant that exists without being designed: `git effect run --executor sprite` on your own account.
