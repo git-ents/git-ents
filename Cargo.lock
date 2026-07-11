@@ -384,6 +384,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-effect"
+version = "0.0.0"
+dependencies = [
+ "ents-gate",
+ "ents-model",
+ "ents-query",
+ "ents-receive",
+ "ents-testutil",
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-ref-store",
+ "rstest",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-gate"
 version = "0.0.0"
 dependencies = [

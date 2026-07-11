@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ents-anchor",
+    "crates/ents-effect",
     "crates/ents-gate",
     "crates/ents-model",
     "crates/ents-query",
