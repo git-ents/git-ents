@@ -126,12 +126,14 @@ impl Recipe {
                         .parse::<u8>()
                         .map_err(|e| invalid(format!("invalid strip count: {e}")))?;
                     let dest = fields.next().unwrap_or("").to_owned();
-                    components.push(Component {
+                    let component = Component {
                         url,
                         sha256,
                         strip,
                         dest,
-                    });
+                    };
+                    validate_component(&component)?;
+                    components.push(component);
                 }
                 if components.is_empty() {
                     return Err(invalid(
@@ -250,6 +252,45 @@ fn invalid(detail: impl Into<String>) -> Error {
     }
 }
 
+/// Refuse a [`Component`] whose fields are unsafe downstream: `sha256` and
+/// `dest` become filesystem path segments ([`cache_key`]) and, via the
+/// Sprite backend's extract-once check, part of an in-sandbox `sh -c`
+/// string; `url` is handed to `curl` and quoted contexts. Checked at
+/// [`Recipe::parse`] so a hostile recipe never reaches those sites, and
+/// re-checked before any fetch for a [`Recipe`] constructed directly in
+/// code.
+fn validate_component(component: &Component) -> Result<()> {
+    if component.sha256.len() != 64 || !component.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::InvalidComponent(format!(
+            "sha256 must be 64 hex characters, got {:?}",
+            component.sha256
+        )));
+    }
+    if component.url.is_empty()
+        || component.url.contains('\'')
+        || component.url.chars().any(char::is_whitespace)
+    {
+        return Err(Error::InvalidComponent(format!(
+            "unsafe url {:?}",
+            component.url
+        )));
+    }
+    let dest_ok = component.dest.is_empty()
+        || (component.dest != "."
+            && component.dest != ".."
+            && component
+                .dest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')));
+    if !dest_ok {
+        return Err(Error::InvalidComponent(format!(
+            "unsafe dest {:?}",
+            component.dest
+        )));
+    }
+    Ok(())
+}
+
 /// A stable, filesystem-safe cache key for a [`Recipe`]: the embedded
 /// tree's own hex oid, or each downloaded component's sha256 joined in
 /// extraction order — the same bytes extracted differently (a different
@@ -299,6 +340,14 @@ pub fn cache_key(recipe: &Recipe) -> String {
 /// assert!(bin.is_dir());
 /// ```
 pub fn materialize(recipe: &Recipe, objects: &impl Find, cache_root: &Path) -> Result<PathBuf> {
+    // Validate before `cache_key` embeds any component field in a path:
+    // `Recipe::parse` already refused a hostile recipe, but a `Recipe`
+    // built directly in code never went through parse.
+    if let Recipe::Downloaded { components } = recipe {
+        for component in components {
+            validate_component(component)?;
+        }
+    }
     let root = cache_root.join(cache_key(recipe));
     let bin = root.join("bin");
     if bin.is_dir() {
@@ -335,12 +384,7 @@ pub fn materialize(recipe: &Recipe, objects: &impl Find, cache_root: &Path) -> R
 }
 
 fn fetch_component(component: &Component, root: &Path) -> Result<()> {
-    if component.dest.contains('/') || component.dest.contains("..") {
-        return Err(Error::InvalidComponent(format!(
-            "unsafe dest {:?}",
-            component.dest
-        )));
-    }
+    validate_component(component)?;
     let dest = if component.dest.is_empty() {
         root.join("bin")
     } else {
@@ -499,6 +543,7 @@ fn remove_dir(path: &Path) -> Result<()> {
 mod tests {
     #![allow(clippy::expect_used, reason = "unit test")]
 
+    use ents_testutil::ObjectStore;
     use rstest::rstest;
 
     use super::*;
@@ -533,7 +578,7 @@ mod tests {
         let a = Recipe::Downloaded {
             components: vec![Component {
                 url: "u".into(),
-                sha256: "s".repeat(64),
+                sha256: "a".repeat(64),
                 strip: 1,
                 dest: String::new(),
             }],
@@ -541,11 +586,49 @@ mod tests {
         let b = Recipe::Downloaded {
             components: vec![Component {
                 url: "u".into(),
-                sha256: "s".repeat(64),
+                sha256: "a".repeat(64),
                 strip: 2,
                 dest: String::new(),
             }],
         };
         assert_ne!(cache_key(&a), cache_key(&b));
+    }
+
+    #[rstest]
+    #[case::sha256_too_short(&format!("downloaded\nhttps://x.test/a.tar.gz {} 1 \n", "a".repeat(40)))]
+    #[case::sha256_not_hex(&format!("downloaded\nhttps://x.test/a.tar.gz {} 1 \n", "z".repeat(64)))]
+    #[case::url_with_quote(&format!("downloaded\nhttps://x'y.test/a.tar.gz {} 1 \n", "a".repeat(64)))]
+    #[case::dest_parent_dir(&format!("downloaded\nhttps://x.test/a.tar.gz {} 1 ..\n", "a".repeat(64)))]
+    #[case::dest_with_unsafe_bytes(&format!("downloaded\nhttps://x.test/a.tar.gz {} 1 a$b\n", "a".repeat(64)))]
+    // @relation(effect.toolchains, scope=function, role=Verifies)
+    fn parse_rejects_a_component_unsafe_for_paths_or_shell(#[case] text: &str) {
+        let err = Recipe::parse(text).expect_err("unsafe component");
+        assert!(matches!(err, Error::InvalidComponent(_)), "got {err:?}");
+    }
+
+    #[rstest]
+    // @relation(effect.toolchains, scope=function, role=Verifies)
+    fn materialize_validates_a_directly_constructed_component() {
+        // A Recipe built in code never went through parse, but its sha256
+        // and dest still become filesystem path segments (cache_key) and,
+        // on the Sprite backend, part of an in-sandbox shell string — so
+        // materialize re-checks before touching either.
+        let objects = ObjectStore::default();
+        let recipe = Recipe::Downloaded {
+            components: vec![Component {
+                url: "https://x.test/a.tar.gz".into(),
+                sha256: "../escape".into(),
+                strip: 1,
+                dest: String::new(),
+            }],
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = materialize(&recipe, &objects, dir.path()).expect_err("unsafe component");
+        assert!(matches!(err, Error::InvalidComponent(_)), "got {err:?}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("readable").count(),
+            0,
+            "the refusal must come before any cache path is created"
+        );
     }
 }

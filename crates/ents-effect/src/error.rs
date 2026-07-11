@@ -124,9 +124,12 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// A [`crate::Component`] carried a `dest` unsafe to use as a path
-    /// segment (not empty and not a single safe component), or a `url` or
-    /// `sha256` unsafe to interpolate into a shell command.
+    /// A [`crate::Component`] carried a `dest` that is not empty or a
+    /// single safe path segment, a `url` that is empty or carries
+    /// whitespace or a quote, or a `sha256` that is not 64 hex characters
+    /// — all of which feed filesystem paths, `curl`, or an in-sandbox
+    /// shell string downstream. Checked when a recipe is parsed
+    /// ([`crate::Recipe::parse`]) and re-checked before any fetch.
     #[error("invalid toolchain component: {0}")]
     InvalidComponent(String),
 
