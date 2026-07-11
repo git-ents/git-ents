@@ -1,5 +1,5 @@
 //! `sync`: remote synchronization for the forge — the one capability
-//! `git ents` adds over the local primitives (`docs/spec/sync.sdoc`).
+//! `git ents` adds over the local primitives (`docs/spec/sync.adoc`).
 //!
 //! Sync fetches and pushes `refs/meta/*` and, crucially, turns the gate's
 //! verdict into a decision the user acts on before pushing. Its single hard
@@ -20,7 +20,7 @@
 //!
 //! # Spec coverage
 //!
-//! From `docs/spec/sync.sdoc`:
+//! From `docs/spec/sync.adoc`:
 //!
 //! - `sync.forge-transfer` — [`transfer::fetch`], [`transfer::push`]: both
 //!   copy each meta-ref's full object closure, commit objects verbatim, so

@@ -264,3 +264,168 @@ fn push_routes_an_unauthorized_canonical_push_to_the_inbox() {
         "canonical ref must be untouched"
     );
 }
+
+/// A ref store that simulates a racing writer: the first transaction it
+/// receives is preceded by a competing ref move, landing exactly in the
+/// window between a caller's read (or pre-flight) and its CAS.
+struct RacingStore<'a> {
+    inner: &'a MemRefStore,
+    race: std::sync::Mutex<Option<(FullName, gix_hash::ObjectId)>>,
+}
+
+impl<'a> RacingStore<'a> {
+    fn new(inner: &'a MemRefStore, name: FullName, oid: gix_hash::ObjectId) -> Self {
+        Self {
+            inner,
+            race: std::sync::Mutex::new(Some((name, oid))),
+        }
+    }
+}
+
+impl gix_ref_store::RefStoreRead for RacingStore<'_> {
+    fn get(
+        &self,
+        name: &gix::refs::FullNameRef,
+    ) -> gix_ref_store::Result<Option<gix_hash::ObjectId>> {
+        self.inner.get(name)
+    }
+
+    fn iter_prefix(&self, prefix: &str) -> gix_ref_store::Result<gix_ref_store::RefIter> {
+        self.inner.iter_prefix(prefix)
+    }
+}
+
+impl gix_ref_store::RefStore for RacingStore<'_> {
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "test fixture: a poisoned mutex is a broken test, not a condition under test"
+    )]
+    fn transaction(
+        &self,
+        edits: &[gix_ref_store::RefEdit],
+    ) -> gix_ref_store::Result<gix_ref_store::TxOutcome> {
+        if let Some((name, oid)) = self.race.lock().unwrap().take() {
+            self.inner.set(name.as_ref(), oid);
+        }
+        self.inner.transaction(edits)
+    }
+}
+
+/// The staleness race pre-flight admits (`sync.pre-flight`: "a prediction
+/// that can only be stale"): another writer advances the remote ref between
+/// the passing verdict and the CAS. The rejected transaction must surface
+/// as [`Pushed::Stale`] — never as a fabricated success — and the racing
+/// writer's tip must survive untouched.
+// @relation(sync.pre-flight, scope=function, role=Verifies)
+#[test]
+fn push_reports_a_lost_cas_race_as_stale_not_success() {
+    let admin = Keypair::from_seed(1);
+    let remote_refs = MemRefStore::default();
+    let remote_objects = ObjectStore::default();
+    boot(&remote_refs, &remote_objects, &admin, None);
+
+    let local_refs = MemRefStore::default();
+    let local_objects = ObjectStore::default();
+    boot(&local_refs, &local_objects, &admin, None);
+
+    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
+    let ours = write_meta_entity(
+        &local_refs,
+        &local_objects,
+        name.clone(),
+        &issue("open"),
+        Some(&admin),
+        300,
+    );
+
+    // The racing writer's competing tip, landed on the remote the instant
+    // push's transaction begins — after pre-flight has already passed.
+    let racer = {
+        let tree = facet_git_tree::serialize_into(&issue("closed"), &remote_objects).unwrap();
+        write_commit(
+            &remote_objects,
+            &CommitSpec {
+                tree,
+                parents: vec![],
+                message: "racer".into(),
+                seconds: 310,
+            },
+            Some(&admin),
+        )
+    };
+    let racing = RacingStore::new(&remote_refs, name.clone(), racer);
+
+    let pushed = push(
+        &racing,
+        &remote_objects,
+        &local_objects,
+        &name,
+        ours,
+        &MemberId::new("admin"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        pushed,
+        Pushed::Stale(name.clone()),
+        "a lost CAS race must not be reported as Advanced"
+    );
+    assert_eq!(
+        remote_refs.get(name.as_ref()).unwrap(),
+        Some(racer),
+        "the racing writer's tip must survive; nothing was written"
+    );
+}
+
+/// The same race on the fetch side: a local writer moves the ref between
+/// fetch's read and its transaction. The ref must land in
+/// [`ents_sync::transfer::FetchReport::stale`], never in `updated`, and the
+/// concurrent writer's tip must survive.
+// @relation(sync.forge-transfer, scope=function, role=Verifies)
+#[test]
+fn fetch_reports_a_lost_cas_race_as_stale_not_updated() {
+    let key = Keypair::from_seed(1);
+    let remote_refs = MemRefStore::default();
+    let remote_objects = ObjectStore::default();
+    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
+    write_meta_entity(
+        &remote_refs,
+        &remote_objects,
+        name.clone(),
+        &issue("open"),
+        Some(&key),
+        300,
+    );
+
+    let local_refs = MemRefStore::default();
+    let local_objects = ObjectStore::default();
+    // A concurrent local writer creates the same ref mid-fetch, defeating
+    // the MustNotExist precondition fetch read moments earlier.
+    let racer = {
+        let tree = facet_git_tree::serialize_into(&issue("closed"), &local_objects).unwrap();
+        write_commit(
+            &local_objects,
+            &CommitSpec {
+                tree,
+                parents: vec![],
+                message: "racer".into(),
+                seconds: 310,
+            },
+            Some(&key),
+        )
+    };
+    let racing = RacingStore::new(&local_refs, name.clone(), racer);
+
+    let report = fetch(&remote_refs, &remote_objects, &racing, &local_objects).unwrap();
+
+    assert!(
+        report.updated.is_empty(),
+        "a rejected CAS must not be reported as updated: {report:?}"
+    );
+    assert_eq!(report.stale, vec![name.clone()]);
+    assert_eq!(
+        local_refs.get(name.as_ref()).unwrap(),
+        Some(racer),
+        "the concurrent writer's tip must survive; nothing was written"
+    );
+}

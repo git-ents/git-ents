@@ -3,8 +3,8 @@
 //! An [`Error`] means sync could not *reach* a result — an object could
 //! not be read or written, a ref store failed, a commit did not decode.
 //! It is never a merge conflict or a negative verdict: a
-//! [`crate::Conflict`] and a [`ents_gate::Verdict::Fail`] are both reached
-//! results the caller acts on, not failures to compute one.
+//! [`crate::Merge::Conflict`] and a [`ents_gate::Verdict::Fail`] are both
+//! reached results the caller acts on, not failures to compute one.
 
 use gix_hash::ObjectId;
 

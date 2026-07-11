@@ -15,6 +15,16 @@
 //! [`push`] runs pre-flight against the remote's own policy before moving a
 //! ref, so a rejected canonical push surfaces the inbox alternative instead
 //! (`sync.pre-flight`, `sync.inbox-routing`).
+//!
+//! One known tension, deliberate at this phase: both directions advance the
+//! destination ref through [`RefStore::transaction`] directly, while
+//! `receive.unit` names `receive()` as the sole entry point through which a
+//! ref is mutated. The destination seam here is stand-in plumbing until the
+//! remote side is receive-backed — the hosted hook that calls `receive()`
+//! arrives with the phase-6 single-node root, and the local write path is
+//! already `ents-receive`'s — so until then no redaction ingest or effect
+//! enqueue happens on a transfer destination beyond what the boot-time
+//! reconciliation scan (`receive.reconstructible`) later recovers.
 
 use ents_gate::Update;
 use ents_model::MemberId;
@@ -52,6 +62,10 @@ pub struct FetchReport {
     pub unchanged: Vec<FullName>,
     /// Refs whose local and remote tips diverged — resolve by merging.
     pub diverged: Vec<Diverged>,
+    /// Refs whose CAS was rejected: another local writer moved the ref
+    /// between this fetch's read and its transaction, so nothing was
+    /// written. Re-running fetch re-classifies them against the new tip.
+    pub stale: Vec<FullName>,
 }
 
 /// Fetch every `refs/meta/*` ref from `remote` into `local`, moving the
@@ -66,9 +80,10 @@ pub struct FetchReport {
 ///
 /// # Errors
 ///
-/// Propagates ref-store and object failures; a stale CAS during the ref
-/// update surfaces as an [`crate::Error`]-free skip is *not* done here —
-/// fetch runs single-writer against the local store.
+/// Propagates ref-store and object failures. A rejected CAS — another
+/// local writer moved a ref between this fetch's read and its transaction
+/// — is not an error: the ref is reported in [`FetchReport::stale`] and
+/// nothing is written for it.
 ///
 /// # Examples
 ///
@@ -108,23 +123,21 @@ pub fn fetch(
         match local_tip {
             Some(local) if local == remote_tip => report.unchanged.push(name),
             Some(local) if descends_from(local_objects, remote_tip, local)? => {
-                advance(
-                    local_refs,
-                    &name,
-                    Expected::MustExistAndMatch(local),
-                    remote_tip,
-                )?;
-                report.updated.push(name);
+                let expected = Expected::MustExistAndMatch(local);
+                match advance(local_refs, &name, expected, remote_tip)? {
+                    TxOutcome::Applied => report.updated.push(name),
+                    TxOutcome::Rejected { .. } => report.stale.push(name),
+                }
             }
             Some(local) => report.diverged.push(Diverged {
                 name,
                 local,
                 remote: remote_tip,
             }),
-            None => {
-                advance(local_refs, &name, Expected::MustNotExist, remote_tip)?;
-                report.updated.push(name);
-            }
+            None => match advance(local_refs, &name, Expected::MustNotExist, remote_tip)? {
+                TxOutcome::Applied => report.updated.push(name),
+                TxOutcome::Rejected { .. } => report.stale.push(name),
+            },
         }
     }
     Ok(report)
@@ -144,18 +157,34 @@ pub enum Pushed {
     /// divergence — merge first — or a refname mismatch). The ref was not
     /// pushed; the prediction is carried for the caller to render.
     Refused(Box<PreFlight>),
+    /// The pre-flight prediction went stale between judgment and CAS:
+    /// another writer advanced the remote ref, the transaction was
+    /// rejected, and nothing was written. This is exactly the staleness a
+    /// prediction admits (`sync.pre-flight`) — fetch, merge if divergent,
+    /// and push again.
+    Stale(FullName),
 }
 
 /// Push one local meta-ref `name` to `remote`, pre-flighting against the
 /// remote's own policy first (`sync.pre-flight`).
 ///
-/// The local tip's object closure is copied to the remote only once
-/// pre-flight passes; a predicted rejection routes to the inbox
-/// (`sync.inbox-routing`) or is reported, and nothing is transferred. This
-/// runs the identical gate the remote will run at CAS time
-/// (`gate.call-sites`), so the result is a prediction that can only be
-/// stale, never wrong about the rules. Local writes are never blocked by
-/// this — that is [`mod@crate::preflight`]'s and the local store's concern
+/// The local tip's object closure is copied to the remote *before* the
+/// verdict is computed — the gate must be able to read the proposed
+/// objects, exactly as the hosted CAS judges after ingest — so a refused
+/// push deliberately leaves those objects in the remote object store even
+/// though no ref comes to point at them. That residue matters for
+/// redaction: recorded redaction targets refuse re-ingest at the `receive`
+/// boundary (`receive.redaction-ingest`), and purging unreferenced objects
+/// is the store's garbage collection, not this function's. Only the *ref*
+/// is gated: a predicted rejection routes to the inbox
+/// (`sync.inbox-routing`) or is reported, and the remote's refs are
+/// untouched. Pre-flight runs the identical gate the remote will run at
+/// CAS time (`gate.call-sites`), so the result is a prediction that can
+/// only be stale, never wrong about the rules — and when it *does* go
+/// stale (a racing writer advances the remote between judgment and CAS)
+/// the rejected transaction is reported as [`Pushed::Stale`], never as
+/// success. Local writes are never blocked by any of this — that is
+/// [`mod@crate::preflight`]'s and the local store's concern
 /// (`sync.local-advisory`); push is the one place a verdict gates an
 /// actual (remote) write.
 ///
@@ -189,8 +218,10 @@ pub fn push(
     let expected = remote_refs
         .get(name.as_ref())?
         .map_or(Expected::MustNotExist, Expected::MustExistAndMatch);
-    advance(remote_refs, name, expected, local_tip)?;
-    Ok(Pushed::Advanced(name.clone()))
+    match advance(remote_refs, name, expected, local_tip)? {
+        TxOutcome::Applied => Ok(Pushed::Advanced(name.clone())),
+        TxOutcome::Rejected { name } => Ok(Pushed::Stale(name)),
+    }
 }
 
 /// Apply one ref advance as a single-edit CAS transaction.
