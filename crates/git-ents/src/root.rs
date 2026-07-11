@@ -6,19 +6,18 @@
 //!
 //! - [`LocalRoot`] (`roots.local`): the plain CLI, wired against whatever
 //!   repository the current directory is in — loose-ref `RefStore`, the
-//!   local odb, a null `EventSink`, the advisory gate. `Executor` is
-//!   chosen per invocation (`git ents effect run --executor`), never
-//!   fixed by this root, since local execution is pull-only
-//!   (`effect.local-run`) and never itself runs an effect as part of
-//!   composing the root.
-//! - [`HostedRoot`] (the single-node hosted root the development plan's
-//!   `git-ents` row describes: "loose refs and a real odb on a Fly
-//!   volume, served behind git's own `receive-pack`... with an in-memory
-//!   `EventSink` and a boot-time reconciliation scan, and the Sprite
-//!   executor"): the same loose-ref/odb primitives as [`LocalRoot`], but
-//!   the mandatory gate, an in-memory `EventSink`, and a `SpriteExecutor`
-//!   — wired by the `git-ents hook` plumbing subcommands
-//!   ([`crate::hook`]) that git's own `receive-pack` invokes.
+//!   local odb, a null `EventSink`, the advisory gate, and a fixed
+//!   `DockerExecutor` (there is no `--executor` flag anywhere in
+//!   [`crate::cli`] to choose otherwise; local execution stays pull-only,
+//!   via `git effect run`, per `effect.local-run`).
+//! - [`HostedRoot`] (`roots.single-node-hosted`, the single-node hosted
+//!   root the development plan's `git-ents` row describes: "loose refs and
+//!   a real odb on a Fly volume, served behind git's own `receive-pack`...
+//!   with an in-memory `EventSink` and a boot-time reconciliation scan, and
+//!   the Sprite executor"): the same loose-ref/odb primitives as
+//!   [`LocalRoot`], but the mandatory gate, an in-memory `EventSink`, and a
+//!   fixed `SpriteExecutor` — wired by the `git-ents hook` plumbing
+//!   subcommands ([`crate::hook`]) that git's own `receive-pack` invokes.
 //!
 //! Neither root is `roots.hosted` (`git-ents-server`, phase 8): that root
 //! replaces the `RefStore` and object store with Postgres and Tigris and
@@ -46,10 +45,11 @@
 //! `HostedRoot` are two distinct types, never one type with an
 //! `if hosted` branch, and every command module ([`crate::commands`])
 //! takes an already-constructed root, never constructing a store itself.
-// @relation(roots.composition, roots.config-isolation, arch.store-composition-root, arch.no-hosted-branch, scope=file)
+// @relation(roots.composition, roots.local, roots.single-node-hosted, roots.config-isolation, arch.store-composition-root, arch.no-hosted-branch, scope=file)
 
 use std::path::{Path, PathBuf};
 
+use ents_effect::Executor;
 use ents_receive::{Mode, NullEventSink};
 use gix_ref_store::LooseRefStore;
 
@@ -106,6 +106,11 @@ pub struct LocalRoot {
     /// The null `EventSink` (`roots.local`): local effect execution is
     /// pull-only, so nothing is ever enqueued here (`effect.local-run`).
     pub events: NullEventSink,
+    /// The fixed `Executor` this root wires (`roots.local`): a
+    /// `DockerExecutor`. Boxed because `LocalRoot` and `HostedRoot` fix
+    /// different concrete backends and every command module is written
+    /// against the trait, never a specific one.
+    pub executor: Box<dyn Executor>,
 }
 
 impl LocalRoot {
@@ -124,6 +129,7 @@ impl LocalRoot {
             refs,
             objects,
             events: NullEventSink,
+            executor: Box::new(ents_effect::DockerExecutor),
         })
     }
 
@@ -179,7 +185,17 @@ pub struct HostedRoot {
     /// The in-memory `EventSink`, reconciled at boot
     /// (`receive.reconstructible`).
     pub events: ents_receive::MemoryEventSink,
+    /// The fixed `Executor` this root wires (`roots.single-node-hosted`): a
+    /// `SpriteExecutor` targeting [`HOSTED_WORKER_NAME`].
+    pub executor: Box<dyn Executor>,
 }
+
+/// The Sprite name (and commit author name) the single-node hosted root's
+/// worker uses — shared between [`HostedRoot`]'s `SpriteExecutor` and
+/// [`crate::hook::post_receive`]'s result-commit author, so the two stay
+/// the same identity by construction rather than by two literals staying
+/// in sync by hand.
+pub const HOSTED_WORKER_NAME: &str = "git-ents-hosted-worker";
 
 impl HostedRoot {
     /// Open the hosted composition root against the repository at `path`,
@@ -204,6 +220,7 @@ impl HostedRoot {
             refs,
             objects,
             events,
+            executor: Box::new(ents_effect::SpriteExecutor::new(HOSTED_WORKER_NAME)),
         })
     }
 

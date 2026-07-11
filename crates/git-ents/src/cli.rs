@@ -23,7 +23,7 @@ pub struct Cli {
 }
 
 /// Every top-level `git ents` subcommand.
-// @relation(roots.local, roots.worktree-update, scope=file)
+// @relation(roots.local, roots.worktree-update, roots.single-node-hosted, scope=file)
 #[derive(Facet)]
 #[repr(u8)]
 pub enum Top {
@@ -32,11 +32,28 @@ pub enum Top {
     /// `gpg.format=ssh`, and set `receive.denyCurrentBranch=updateInstead`
     /// so the integration-test harness can push into this repository's
     /// checked-out branch (`roots.worktree-update`).
+    ///
+    /// With `--hosted`, configures the single-node hosted root instead
+    /// (`roots.single-node-hosted`): a signing key for the hosted worker,
+    /// and this binary's own `pre-receive`/`post-receive` hooks installed
+    /// into a bare repository's `hooks/` directory. Without these hooks
+    /// installed, a hosted bare repository accepts every push ungated —
+    /// stock git's `receive-pack` has no gate of its own.
     Setup {
         /// Key to sign with; defaults to `user.signingkey`, else a new
         /// `~/.ssh/id_ed25519` is generated.
         #[facet(args::named)]
         key: Option<PathBuf>,
+        /// Configure the single-node hosted root instead of the local
+        /// one: install this binary's `hook pre-receive`/`hook
+        /// post-receive` into a bare repository's own hooks, and a
+        /// signing key for the hosted worker.
+        #[facet(args::named, default)]
+        hosted: bool,
+        /// The bare repository to configure with `--hosted`; defaults to
+        /// the current directory. Ignored without `--hosted`.
+        #[facet(args::positional, default)]
+        path: Option<PathBuf>,
     },
     /// Manage the repository members at `refs/meta/member/<username>`.
     Members {

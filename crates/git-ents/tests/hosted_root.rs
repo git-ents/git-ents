@@ -17,24 +17,40 @@ use std::process::Command;
 
 use git_ents::root::LocalRoot;
 
-/// Install `pre-receive` and `post-receive` hooks on `bare` that shell to
-/// the built `git-ents` binary's plumbing subcommands
-/// (`crate::hook::pre_receive`, `crate::hook::post_receive`) — exactly
-/// what a real deployment's hook scripts do.
-fn install_hooks(bare: &Path) {
-    let bin = common::bin_path();
-    let hooks_dir = bare.join("hooks");
-    std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+/// Install `pre-receive` and `post-receive` hooks on `bare` by running the
+/// real, built `git ents setup --hosted` command — not a test-harness
+/// stand-in — over a subprocess, exactly how an operator deploying the
+/// single-node hosted root would (`roots.single-node-hosted`).
+///
+/// Neither test defines an effect, so `post-receive` never has a pending
+/// obligation to sign results for — meaning it is safe for the scratch
+/// `HOME` this generates a key under to be cleaned up once this function
+/// returns; nothing later needs to load that key again.
+fn setup_hosted(bare: &Path) {
+    let scratch_home = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(common::bin_path())
+        .arg("setup")
+        .arg("--hosted")
+        .arg(bare)
+        // Isolate from the ambient environment the same way `git()` below
+        // does, but keep a real (scratch) HOME: `setup --hosted` needs
+        // somewhere to generate a signing key when neither `--key` nor
+        // `user.signingkey` resolves to one.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("HOME", scratch_home.path())
+        .output()
+        .expect("git-ents runs");
+    assert!(output.status.success(), "{output:?}");
+
     for hook in ["pre-receive", "post-receive"] {
-        let script = format!("#!/bin/sh\nexec {:?} hook {hook}\n", bin.display());
-        let path = hooks_dir.join(hook);
-        std::fs::write(&path, script).expect("write hook");
+        let path = bare.join("hooks").join(hook);
+        assert!(path.exists(), "setup --hosted must install {hook}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let mut perms = std::fs::metadata(&path).expect("meta").permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&path, perms).expect("chmod");
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
+            assert!(mode & 0o111 != 0, "{hook} must be executable: {mode:o}");
         }
     }
 }
@@ -69,15 +85,16 @@ fn build_member_commit(clone: &Path, key: &Path, username: &str) {
 }
 
 /// A bootstrap enrollment pushed to the single-node hosted root round
-/// trips: the mandatory gate (`gate.mandatory-hosted`) admits it under the
-/// bootstrap window (`gate.bootstrap`) exactly as the advisory local root
-/// would, and the ref lands on the bare repository for real, over a real
-/// `git push`.
-// @relation(roots.local, roots.composition, gate.mandatory-hosted, gate.bootstrap, scope=function, role=Verifies)
+/// trips: `setup_hosted` (`git ents setup --hosted`, `roots.single-node-hosted`)
+/// installs the real hooks, then the mandatory gate (`gate.mandatory-hosted`)
+/// admits the push under the bootstrap window (`gate.bootstrap`) exactly as
+/// the advisory local root would, and the ref lands on the bare repository
+/// for real, over a real `git push`.
+// @relation(roots.local, roots.composition, roots.single-node-hosted, gate.mandatory-hosted, gate.bootstrap, scope=function, role=Verifies)
 #[test]
 fn bootstrap_push_round_trips_through_the_hosted_root() {
     let bare = common::Fixture::new_bare(20);
-    install_hooks(bare.path());
+    setup_hosted(bare.path());
 
     let clone_dir = tempfile::tempdir().expect("tempdir");
     let clone_output = git(
@@ -115,7 +132,7 @@ fn bootstrap_push_round_trips_through_the_hosted_root() {
 #[test]
 fn unauthorized_push_is_refused_by_the_hosted_root() {
     let bare = common::Fixture::new_bare(22);
-    install_hooks(bare.path());
+    setup_hosted(bare.path());
 
     // First, a legitimate admin bootstraps the repository.
     let admin_clone = tempfile::tempdir().expect("tempdir");

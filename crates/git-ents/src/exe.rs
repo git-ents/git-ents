@@ -23,10 +23,25 @@ use crate::root::{HostedRoot, LocalRoot};
 /// Any [`crate::Error`] the dispatched command reports.
 pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
     match cli.command {
-        Top::Setup { key } => {
+        Top::Setup {
+            key,
+            hosted: true,
+            path,
+        } => {
+            let target = path.unwrap_or_else(|| ".".into());
+            let key_path = commands::setup::run_hosted(&target, key)?;
+            let _ = writeln!(out, "signing key: {}", key_path.display());
+            let _ = writeln!(out, "hooks installed in {}/hooks", target.display());
+            Ok(())
+        }
+        Top::Setup {
+            key,
+            hosted: false,
+            path: _,
+        } => {
             let root = LocalRoot::discover(".")?;
-            let path = commands::setup::run(&root, key)?;
-            let _ = writeln!(out, "signing key: {}", path.display());
+            let key_path = commands::setup::run(&root, key)?;
+            let _ = writeln!(out, "signing key: {}", key_path.display());
             Ok(())
         }
         Top::Members { action } => run_members(action, out),
@@ -125,8 +140,7 @@ fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()>
             let _ = writeln!(out, "defined {name}");
         }
         EffectAction::Run { name, at, key } => {
-            let executor = ents_effect::DockerExecutor;
-            let outcomes = commands::effect::run(&root, &name, at, key, &executor)?;
+            let outcomes = commands::effect::run(&root, &name, at, key, root.executor.as_ref())?;
             for (oid, outcome) in outcomes {
                 let _ = writeln!(out, "{oid}\t{:?}", outcome.result);
             }
@@ -228,9 +242,13 @@ fn run_hook(action: HookAction, out: &mut impl std::io::Write) -> Result<()> {
             let repo = gix::open(&root.path)?;
             let key_path = crate::sign::resolve_key_path(&repo, None)?;
             let signer = crate::sign::Signer::load(&key_path)?;
-            let executor = ents_effect::SpriteExecutor::new("git-ents-hosted-worker");
-            let ran =
-                crate::hook::post_receive(&root, &executor, scratch.path(), cache.path(), &signer)?;
+            let ran = crate::hook::post_receive(
+                &root,
+                root.executor.as_ref(),
+                scratch.path(),
+                cache.path(),
+                &signer,
+            )?;
             let _ = writeln!(out, "ran {ran} effect(s)");
             Ok(())
         }

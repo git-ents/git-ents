@@ -53,11 +53,15 @@
 //! responsibility. Git runs `pre-receive` with new objects visible only
 //! through `GIT_OBJECT_DIRECTORY` (the quarantine) plus
 //! `GIT_ALTERNATE_OBJECT_DIRECTORIES` (the real odb) until the push is
-//! accepted; [`crate::root::HostedRoot::open`] honors
-//! `GIT_OBJECT_DIRECTORY` when the environment sets it (which git does for
-//! `pre-receive`, and does not for `post-receive`, whose objects are by
-//! then no longer quarantined), and `gix_odb::at` follows the quarantine
-//! directory's own `info/alternates` back to the real odb transparently.
+//! accepted; [`crate::root::HostedRoot::open`] honors `GIT_OBJECT_DIRECTORY`
+//! when the environment sets it (which git does for `pre-receive`, and does
+//! not for `post-receive`, whose objects are by then no longer quarantined).
+//! `gix_odb::at` itself only ever follows a physical `info/alternates`
+//! *file*, and git's own quarantine directory never has one — so this
+//! crate's own [`crate::root::QuarantineObjects`] is what actually chains
+//! the two directories, entirely in-process (no alternates file is ever
+//! written to disk; see that type's own doc for why an earlier attempt at
+//! writing one was wrong).
 //!
 //! # No separate daemon
 //!
@@ -198,7 +202,7 @@ pub fn post_receive(
     ents_receive::reconcile(&root.refs, &root.objects, &root.events)?;
 
     let author = gix::actor::Signature {
-        name: "git-ents-hosted-worker".into(),
+        name: crate::root::HOSTED_WORKER_NAME.into(),
         email: "worker@git.ents.cloud".into(),
         time: gix::date::Time {
             seconds: std::time::SystemTime::now()
@@ -277,11 +281,11 @@ fn read_effect(refs: &dyn RefStoreRead, objects: &impl Find, name: &str) -> Resu
     };
     // Confirm the trigger still parses, mirroring `reconcile`'s own
     // tolerance rule; an effect whose trigger is unparsable is treated as
-    // "nothing to run" rather than a hard failure.
-    let _: Query = effect
-        .trigger
-        .parse()
-        .map_err(|_source| Error::InvalidArgument("unparsable trigger".to_owned()))?;
+    // "nothing to run" — `None`, not a hard failure that would abort the
+    // whole drain over one pre-existing malformed effect.
+    if effect.trigger.parse::<Query>().is_err() {
+        return Ok(None);
+    }
     Ok(Some(effect))
 }
 

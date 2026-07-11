@@ -123,7 +123,10 @@ fn write_dir_as_tree(dir: &Path, objects: &impl gix_object::Write) -> Result<gix
             path: item.path(),
             source,
         })?;
-        let filename = item.file_name().to_string_lossy().into_owned();
+        let filename = item.file_name().into_string().map_err(|raw| Error::Io {
+            path: dir.join(raw),
+            source: std::io::Error::other("non-UTF-8 filename cannot round-trip through a tree"),
+        })?;
         let (mode, oid) = if file_type.is_dir() {
             (EntryKind::Tree, write_dir_as_tree(&item.path(), objects)?)
         } else if file_type.is_file() {
