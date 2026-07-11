@@ -154,7 +154,8 @@ implementation.
 
 | `ents-web`
 | The local and hosted web UI.
-| `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`
+| `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`, `ents-forge`,
+`ents-kiln`
 
 | `git-ents` (bin)
 | Local composition root.
