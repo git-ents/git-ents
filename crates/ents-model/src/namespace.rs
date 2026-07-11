@@ -61,15 +61,17 @@ pub fn comment_ref(id: &str) -> Result<FullName> {
 }
 
 /// The ref holding the effect named `name` — `refs/meta/effects/<name>`
-/// (`meta-ref.granularity`).
-// @relation(meta-ref.granularity, scope=function)
+/// (`meta-ref.granularity`, `effect.definition`).
+// @relation(meta-ref.granularity, effect.definition, scope=function)
 pub fn effect_ref(name: &str) -> Result<FullName> {
     build(format!("refs/meta/effects/{name}"))
 }
 
 /// The canonical ref for one effect's result on one tested commit —
-/// `refs/meta/results/<effect>/<short_oid>` (`meta-ref.granularity`).
-// @relation(meta-ref.granularity, scope=function)
+/// `refs/meta/results/<effect>/<short_oid>` (`meta-ref.granularity`,
+/// `effect.definition`: derived from the effect's own name, never a
+/// stored pattern).
+// @relation(meta-ref.granularity, effect.definition, scope=function)
 pub fn result_ref(effect: &str, short_oid: &str) -> Result<FullName> {
     build(format!("refs/meta/results/{effect}/{short_oid}"))
 }
@@ -393,7 +395,7 @@ mod tests {
     }
 
     #[rstest]
-    // @relation(meta-ref.namespace, scope=function, role=Verifies)
+    // @relation(meta-ref.namespace, effect.definition, scope=function, role=Verifies)
     fn every_builder_stays_under_refs_meta() {
         let id = MemberId::new("jdc");
         let built = [

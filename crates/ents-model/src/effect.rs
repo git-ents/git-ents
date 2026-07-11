@@ -32,7 +32,7 @@ use facet::Facet;
 /// let back: Effect = facet_git_tree::deserialize(&id, &store).expect("deserialize");
 /// assert_eq!(back, effect);
 /// ```
-// @relation(model.effect-definition, meta-ref.typed-tree, model.extensibility, scope=file)
+// @relation(model.effect-definition, effect.definition, effect.deployment-property, meta-ref.typed-tree, model.extensibility, scope=file)
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Effect {
     /// The raw `CommitQuery` text denoting the commit set this effect
@@ -60,7 +60,7 @@ mod tests {
     use super::*;
 
     #[rstest]
-    // @relation(model.effect-definition, meta-ref.typed-tree, scope=function, role=Verifies)
+    // @relation(model.effect-definition, effect.definition, meta-ref.typed-tree, scope=function, role=Verifies)
     fn effect_round_trips_through_a_tree() {
         let effect = Effect {
             trigger: "rev(refs/heads/main) & results(unit, pass)".to_owned(),
@@ -76,7 +76,7 @@ mod tests {
     #[case::executor("executor")]
     #[case::sandbox("sandbox")]
     #[case::retry("retry")]
-    // @relation(model.effect-definition, scope=function, role=Verifies)
+    // @relation(model.effect-definition, effect.deployment-property, scope=function, role=Verifies)
     fn effect_never_carries_a_deployment_field(#[case] forbidden: &str) {
         let Type::User(UserType::Struct(struct_ty)) = Effect::SHAPE.ty else {
             panic!("Effect must reflect as a struct");
