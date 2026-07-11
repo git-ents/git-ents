@@ -41,9 +41,13 @@ into a view rather than depending on a shared, contended one.
 [role="requirement", id="meta-ref.inbox"]
 .Inbox and Self-Run Namespaces
 --
-`refs/meta/inbox/<member>/<canonical-suffix>` MUST hold entities authored
-by someone not authorized for the corresponding canonical ref, awaiting
-adoption.
+`refs/meta/inbox/<member>/<canonical-suffix>` MUST hold one entity
+authored by `<member>`, who is not authorized for the corresponding
+canonical ref, awaiting adoption; `<member>` MUST be the leading segment,
+symmetric with `refs/meta/self/<member>/*` below, so authorization
+(<<gate.tip-signed>>) keys off the refname alone, matching the granularity
+rule's one-entity-per-ref shape (<<meta-ref.granularity>>) instead of
+leaving `<member>` unencoded.
 `<canonical-suffix>` MUST be the corresponding canonical ref's entire path
 below `refs/meta/`, not a bare entity id: `refs/meta/issues/42` routes to
 `refs/meta/inbox/<member>/issues/42`, and a multi-segment canonical ref
@@ -52,10 +56,28 @@ such as `refs/meta/results/<effect>/<short-oid>`
 `refs/meta/inbox/<member>/results/<effect>/<short-oid>` in full — the
 namespace segment MUST be preserved so two different entity kinds can
 never collide under the same inbox id.
-`refs/meta/results/~<member>/<effect>/<short-oid>` MUST hold results a
+`<member>` MUST be authorized to create and update refs under only its
+own `refs/meta/inbox/<member>/*` segment; no member, including an
+admin-registered one, MAY write into another member's inbox segment.
+Adoption happens by an authorized member merging the inbox entity onto
+the canonical ref (<<gate.adoption-merge>>, <<sync.adoption-machinery>>),
+never by writing the contributor's inbox ref directly, so admin write access
+to another member's segment is never needed.
+An inbox ref MUST NOT be deleted on adoption or at any other time: it
+remains the contributor's own audit trail, exactly as a member entity is
+never deleted on revocation (<<model.member-revocation>>).
+`refs/meta/self/<member>/<effect>/<short-oid>` MUST hold results a
 member produced on their own executor rather than a designated worker,
 mirroring the canonical results pattern (<<effect.results-writeback>>)
 under the member's own namespace.
+`self` MUST be its own top-level namespace under `refs/meta/*`, a fixed
+segment from the spec's own namespace table (<<meta-ref.namespace>>) rather
+than a marker nested inside `refs/meta/results/*`: an effect name and a
+member id are both otherwise-unconstrained ref-path segments
+(<<effect.definition>>), so a marker sharing their position could collide
+with one; a sibling top-level segment cannot, and it keeps the canonical
+results glob (`refs/meta/results/<effect>/*`, <<effect.official>>) and the
+self-run glob (`refs/meta/self/<member>/*`) disjoint by construction.
 Both namespaces MUST hold the same typed trees as their canonical
 counterparts (<<meta-ref.typed-tree>>); only the refname rule differs.
 --

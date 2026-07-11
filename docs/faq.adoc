@@ -178,7 +178,7 @@ Their merge satisfies the tip invariant; your signature survives intact in ances
 Cherry-pick is forbidden as an adoption verb because it would destroy the signature it is meant to honor.
 
 *I want to prove my patch passes CI, without any access.*
-Run the project's real effects on your own executor; results land in your namespace (`refs/meta/results/~you/*`), signed by you, shareable and verifiable.
+Run the project's real effects on your own executor; results land in your namespace (`refs/meta/self/you/*`), signed by you, shareable and verifiable.
 A maintainer can adopt them, with the trust decision explicit in the adoption merge.
 
 *I want to know why this feels like the old email-patch workflow.*

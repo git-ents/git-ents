@@ -13,9 +13,13 @@ or machine, is admitted or refused by this same function (see
 .Tip Signature
 --
 The new tip of a meta-ref MUST be signed by a member authorized for that
-refname.
-This is checkable after the fact by anyone with a clone, not only by
-whoever ran the server.
+refname, judged against the member entity in force at acceptance time —
+the member ref's tip in the same snapshot the gate reads
+(<<model.member-revocation>>).
+Anyone with a clone can run the same judgment against the same snapshot,
+not only whoever ran the server; reconstructing what a past acceptance
+saw is an audit function over the deployment's out-of-scope op log, not
+a gate path.
 --
 
 [role="requirement", id="gate.refname-binding"]
@@ -45,8 +49,12 @@ read in <<gate.fast-forward>>.
 .Signature as Repository Data
 --
 A commit signature MUST be treated as a data artifact, not a transport
-artifact: it replicates with the repository and MUST verify offline in
-every clone, so verification evidence is itself repository state.
+artifact: it replicates with the repository and MUST verify
+cryptographically offline in every clone, so the signature evidence is
+itself repository state.
+Whether the signing key was authorized is a property of the snapshot the
+gate reads (<<gate.policy-as-state>>, <<model.member-revocation>>), not
+of the signature bytes.
 A push certificate carries no meta-ref semantics; it MUST NOT be consulted
 by the gate.
 --
@@ -124,6 +132,15 @@ aspirational until that mechanism exists.
 
 === Adoption
 
+The requirements below are consequences the gate enforces by judging only
+the tip plus DAG descent (this file's own introduction: verification is a
+pure function over ref-store reads). The prohibition on cherry-picking as
+an adoption mechanism is not among them: a cherry-picked commit, signed
+by the authorized member placing it, satisfies <<gate.tip-signed>> exactly as
+a hand-authored commit would, so no function over the resulting ref state
+can tell the two apart. That prohibition binds the adoption tooling
+instead — <<sync.adoption-no-cherry-pick>>.
+
 [role="requirement", id="gate.adoption-merge"]
 .Adoption Is a Merge
 --
@@ -133,14 +150,6 @@ merging the contributor's signed commit onto the canonical ref, even when
 the merge is trivial.
 The merge commit satisfies the tip invariant; the contributor's signed
 commit remains in ancestry with attribution intact.
---
-
-[role="requirement", id="gate.adoption-no-cherry-pick"]
-.Cherry-Pick Forbidden as Adoption
---
-Cherry-picking a contributor's commit MUST NOT be used as an adoption
-mechanism: it creates a new commit object and destroys the original
-author's signature.
 --
 
 [role="requirement", id="gate.adoption-no-fast-forward"]

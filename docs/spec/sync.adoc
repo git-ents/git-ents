@@ -32,8 +32,9 @@ stale, never as one that can be wrong about the rules
 Any negative advisory verdict against a canonical meta-ref — the local UI
 verdict at commit time (<<gate.advisory-local>>), push pre-flight
 (<<sync.pre-flight>>), or the canonical store's actual rejection — MUST
-cause sync to offer routing the same commit to the author's
-`refs/meta/inbox/*` ref instead of discarding it.
+cause sync to offer routing the same commit to a new ref under the
+author's own `refs/meta/inbox/<member>/*` segment (<<meta-ref.inbox>>)
+instead of discarding it.
 The offer MUST appear the moment the verdict goes negative, not only
 after a push is actually attempted and refused.
 --
@@ -53,6 +54,23 @@ A maintainer merging an inbox entity onto its canonical ref, and a
 maintainer adopting a contributor's self-run results, MUST both go through
 the same merge machinery as <<sync.divergence-merge>> and
 <<gate.adoption-merge>>, not a separate adoption code path.
+--
+
+[role="requirement", id="sync.adoption-no-cherry-pick"]
+.Cherry-Pick Forbidden as Adoption
+--
+The adoption machinery (<<sync.adoption-machinery>>) MUST NOT cherry-pick a
+contributor's commit as a substitute for merging it: cherry-picking
+creates a new commit object, placed and signed by the adopting member,
+and destroys the original author's signature.
+This binds the tooling, not the gate: a cherry-picked commit, signed by
+the authorized member placing it, satisfies the tip invariant
+(<<gate.tip-signed>> through <<gate.atomic-cas>>) exactly as a hand-authored
+commit would, so nothing in the resulting ref-store state lets a pure
+verifier tell the two apart after the fact (gate.sdoc's Adoption
+section). Preserving attribution is therefore a property this
+requirement demands of the merge machinery itself, not one the gate can
+check.
 --
 
 [role="requirement", id="sync.local-advisory"]

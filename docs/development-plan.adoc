@@ -87,7 +87,8 @@ the coverage dashboard is a later call.
 | sonnet
 | Entity structs, namespaces, trailers, taxonomy — declarative, but it is
   the vocabulary every crate imports, so spec fidelity and the public API
-  review matter more than the code. Absorbs git-metadata's trailer work.
+  review matter more than the code. Trailer parsing is new work, not a
+  port: no `git-metadata` crate exists at `pre-redo`.
 
 | `ents-gate`
 | 3

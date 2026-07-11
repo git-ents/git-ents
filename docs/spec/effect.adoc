@@ -148,7 +148,7 @@ runtime property of the machine that produced the result.
 --
 Any member MAY run any effect on their own executor and account.
 Such a member's results MUST land under the self-run namespace
-`refs/meta/results/~<member>/<effect>/<short-oid>` (<<meta-ref.inbox>>),
+`refs/meta/self/<member>/<effect>/<short-oid>` (<<meta-ref.inbox>>),
 never directly on the canonical results ref, and MUST be adoptable onto
 the canonical ref only through the same
 adoption merge as any other contribution (<<gate.adoption-merge>>,

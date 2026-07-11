@@ -25,7 +25,7 @@ Writes stay conflict-free; reads aggregate refs into views.
 Two namespaces are consequences of the granularity rule plus the gate (5):
 
 * `refs/meta/inbox/*` — entities authored by someone not authorized for a canonical ref, awaiting adoption.
-* `refs/meta/results/~<member>/*` — results produced by a member's own executor rather than a designated worker.
+* `refs/meta/self/<member>/*` — results produced by a member's own executor rather than a designated worker.
 
 Both hold the same typed trees as their canonical counterparts; only the refname rule differs.
 
@@ -172,7 +172,7 @@ Host-direct exists only behind an explicit `--unsandboxed`.
 
 *Identity discipline:* the runner is a member, not an ambient authority.
 A result signature proves who pushed the result, not that the run was faithful; official results are official because canonical results refs are writable only by designated worker keys — a refname rule, not a runtime property.
-Any member may run any effect on their own executor and account; their results land in `refs/meta/results/~<member>/*` or the inbox, adoptable by merge like everything else, with the trust decision explicit in the adoption.
+Any member may run any effect on their own executor and account; their results land in `refs/meta/self/<member>/*` or the inbox, adoptable by merge like everything else, with the trust decision explicit in the adoption.
 Anyone can run CI; nobody can impersonate the verdict.
 
 *Where the line holds:* no content predicates beyond `results(…, status)`, no time atoms, no external-event atoms.

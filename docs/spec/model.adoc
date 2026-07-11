@@ -42,10 +42,19 @@ database separate from the repository.
 --
 Revoking a member MUST record a revoked state on the member entity and
 MUST NOT delete the entity.
-A revoked key MUST be explicitly rejected for verifying any signature
-made after revocation, while a signature the key made before revocation
-MUST remain verifiable — deleting the entity instead would make old
-signatures unverifiable, the opposite of what an audit needs.
+Admission MUST consult the member entity currently in force — the tip of
+the member's ref in the same snapshot the gate reads (<<gate.tip-signed>>) —
+so a revoked key's new pushes are refused from the moment the revocation
+lands, regardless of any committer timestamp the pushed commit claims.
+A ref accepted before the revocation landed MUST remain valid: acceptance
+is never re-judged.
+The moment of acceptance is witnessed by the deployment's op log, which is
+out of scope for this specification and for every crate in this
+repository; verifying what a key signed while it was valid is an audit
+function over that witness and the retained entity history, never a gate
+admission path.
+The entity MUST be retained rather than deleted precisely so that audit
+stays possible.
 Unrevoking a member MUST be supported, returning the key to authorizing
 new signatures without altering the record of the period it was revoked.
 --
