@@ -100,6 +100,19 @@ pub enum Error {
     #[error("{0:?} is not valid UTF-8")]
     NotUtf8(PathBuf),
 
+    /// A tree entry carried a name that could escape or collide inside the
+    /// materialization destination — `.`, `..`, a path separator, or a
+    /// duplicate of an earlier entry in the same tree. Checkout runs on
+    /// the *host*, before any sandbox exists, so a crafted (fsck-invalid
+    /// but storable) tree is refused before anything is written.
+    #[error("refusing to materialize tree entry {name:?}: {detail}")]
+    UnsafeEntry {
+        /// The offending entry name.
+        name: String,
+        /// Why it was refused, human-readable.
+        detail: String,
+    },
+
     /// A path under a materialization destination could not be read or
     /// written.
     #[error("could not access {path}: {source}")]

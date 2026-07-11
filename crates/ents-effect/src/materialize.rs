@@ -7,7 +7,17 @@
 //! This is the one code path both the run loop's pushed-tree checkout and
 //! [`crate::toolchain::materialize`]'s `Embedded` case share
 //! (`effect.local-run`: "identical code path").
+//!
+//! Checkout runs on the *host*, before any sandbox exists, so it defends
+//! itself against a crafted tree (fsck-invalid but storable, and a trigger
+//! can match any pushed commit): entry names that could escape or collide
+//! inside `dest` — `.`, `..`, path separators, duplicates — are refused
+//! before anything is written ([`Error::UnsafeEntry`]), and within each
+//! tree symlink entries are written only after every other entry, so no
+//! write in the same checkout can be routed *through* a symlink the tree
+//! itself planted.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use gix_hash::ObjectId;
@@ -17,18 +27,34 @@ use gix_object::{Find, Kind, TreeRef};
 
 use crate::error::{Error, Result};
 
+/// Whether `name` is a single, plain path component that cannot escape or
+/// alias its parent directory.
+fn safe_entry_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
 /// Recursively write `tree`'s entries under `dest`, which must already
 /// exist. Blob entries are written verbatim, with the executable bit set
-/// per the entry's mode; tree entries recurse into a created subdirectory.
+/// per the entry's mode; tree entries recurse into a created subdirectory;
+/// within each tree, symlink entries are written after every other entry
+/// (see the module doc for why).
 ///
 /// # Errors
 ///
-/// [`Error::Submodule`] for a gitlink entry (this design embeds no
-/// submodule content, `effect.toolchains`'s neighboring retention rule);
-/// [`Error::NotUtf8`] for a non-UTF-8 filename; [`Error::Missing`] or
-/// [`Error::Decode`] for an unreadable object; [`Error::Io`] for a host
-/// filesystem failure. A symlink entry is written as a real symlink
-/// (`std::os::unix::fs::symlink`) pointing at its recorded target text.
+/// [`Error::UnsafeEntry`] for an entry name that could escape `dest` or
+/// duplicate an earlier entry; [`Error::Submodule`] for a gitlink entry
+/// (this design embeds no submodule content, `effect.toolchains`'s
+/// neighboring retention rule); [`Error::NotUtf8`] for a non-UTF-8
+/// filename; [`Error::Missing`] or [`Error::Decode`] for an unreadable
+/// object; [`Error::Io`] for a host filesystem failure. A symlink entry is
+/// written as a real symlink (`std::os::unix::fs::symlink`) pointing at
+/// its recorded target text.
+// @relation(effect.execution, scope=function)
 pub fn checkout(objects: &impl Find, tree: ObjectId, dest: &Path) -> Result<()> {
     let mut buf = Vec::new();
     let data = objects
@@ -61,7 +87,29 @@ pub fn checkout(objects: &impl Find, tree: ObjectId, dest: &Path) -> Result<()> 
         })
         .collect::<Result<Vec<_>>>()?;
 
-    for (name, kind, oid) in entries {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(entries.len());
+    for (name, _, _) in &entries {
+        if !safe_entry_name(name) {
+            return Err(Error::UnsafeEntry {
+                name: name.clone(),
+                detail: "not a plain single path component".to_owned(),
+            });
+        }
+        if !seen.insert(name.as_str()) {
+            return Err(Error::UnsafeEntry {
+                name: name.clone(),
+                detail: "duplicate entry in one tree".to_owned(),
+            });
+        }
+    }
+
+    // Symlinks last: nothing else written by this checkout can be routed
+    // through a link the same tree planted.
+    let (links, others): (Vec<_>, Vec<_>) = entries
+        .into_iter()
+        .partition(|(_, kind, _)| *kind == EntryKind::Link);
+
+    for (name, kind, oid) in others.into_iter().chain(links) {
         let path = dest.join(&name);
         match kind {
             EntryKind::Tree => {
@@ -254,5 +302,139 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let err = checkout(&objects, tree_oid, dir.path()).expect_err("must refuse a gitlink");
         assert!(matches!(err, Error::Submodule { .. }));
+    }
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn checkout_writes_a_symlink_entry_with_its_recorded_target() {
+        let objects = ObjectStore::default();
+        let target = objects.write_buf(Kind::Blob, b"README").expect("write");
+        let tree = Tree {
+            entries: vec![Entry {
+                mode: EntryMode::from(EntryKind::Link),
+                filename: "link".into(),
+                oid: target,
+            }],
+        };
+        let tree_oid = objects.write(&tree).expect("write tree");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        checkout(&objects, tree_oid, dir.path()).expect("checkout");
+
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_link(dir.path().join("link")).expect("is a symlink"),
+            std::path::PathBuf::from("README")
+        );
+    }
+
+    /// One raw (git wire format) tree entry — the fsck-invalid trees these
+    /// tests need cannot be built through gitoxide's own `Tree` writer,
+    /// which validates sorting; the attack ships bytes, so the tests do
+    /// too.
+    fn raw_entry(mode: &str, name: &[u8], oid: &ObjectId) -> Vec<u8> {
+        let mut entry = Vec::new();
+        entry.extend_from_slice(mode.as_bytes());
+        entry.push(b' ');
+        entry.extend_from_slice(name);
+        entry.push(0);
+        entry.extend_from_slice(oid.as_bytes());
+        entry
+    }
+
+    #[rstest::rstest]
+    #[case::parent_dir(b"..".as_slice())]
+    #[case::current_dir(b".".as_slice())]
+    #[case::path_separator(b"a/b".as_slice())]
+    #[case::backslash(b"a\\b".as_slice())]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn checkout_refuses_an_entry_name_that_could_escape_the_destination(#[case] name: &[u8]) {
+        let objects = ObjectStore::default();
+        let blob = objects.write_buf(Kind::Blob, b"owned\n").expect("write");
+        let tree_oid = objects
+            .write_buf(Kind::Tree, &raw_entry("100644", name, &blob))
+            .expect("a crafted tree is storable even though fsck-invalid");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = checkout(&objects, tree_oid, dir.path())
+            .expect_err("host-side checkout must refuse a traversal-shaped name");
+        assert!(matches!(err, Error::UnsafeEntry { .. }), "got {err:?}");
+        // Nothing may have been written before the refusal.
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("readable").count(),
+            0,
+            "the refusal must come before any write"
+        );
+    }
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn checkout_refuses_duplicate_entries_in_one_tree() {
+        // The concrete attack: a symlink named `sub` pointing outside the
+        // destination, then a tree entry also named `sub` — without the
+        // duplicate check, the recursion would write through the link.
+        let objects = ObjectStore::default();
+        let link_target = objects.write_buf(Kind::Blob, b"/tmp").expect("write");
+        let payload = objects.write_buf(Kind::Blob, b"escaped\n").expect("write");
+        let inner = Tree {
+            entries: vec![Entry {
+                mode: EntryMode::from(EntryKind::Blob),
+                filename: "payload".into(),
+                oid: payload,
+            }],
+        };
+        let inner_oid = objects.write(&inner).expect("write inner tree");
+
+        let mut raw = raw_entry("120000", b"sub", &link_target);
+        raw.extend_from_slice(&raw_entry("40000", b"sub", &inner_oid));
+        let tree_oid = objects
+            .write_buf(Kind::Tree, &raw)
+            .expect("a crafted tree is storable even though fsck-invalid");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err =
+            checkout(&objects, tree_oid, dir.path()).expect_err("duplicate names must be refused");
+        assert!(matches!(err, Error::UnsafeEntry { .. }), "got {err:?}");
+    }
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn checkout_writes_symlinks_after_every_other_entry() {
+        // A symlink sorted before a blob in the raw bytes must still be
+        // created after it — the ordering is behavioral, not cosmetic: it
+        // is what guarantees no later write in the same checkout can be
+        // routed through a link the tree planted.
+        let objects = ObjectStore::default();
+        let link_target = objects.write_buf(Kind::Blob, b"z-file").expect("write");
+        let blob = objects.write_buf(Kind::Blob, b"content\n").expect("write");
+        let tree = Tree {
+            entries: vec![
+                Entry {
+                    mode: EntryMode::from(EntryKind::Link),
+                    filename: "a-link".into(),
+                    oid: link_target,
+                },
+                Entry {
+                    mode: EntryMode::from(EntryKind::Blob),
+                    filename: "z-file".into(),
+                    oid: blob,
+                },
+            ],
+        };
+        let tree_oid = objects.write(&tree).expect("write tree");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        checkout(&objects, tree_oid, dir.path()).expect("checkout");
+
+        // Had the link been written first and the blob written through it,
+        // reading via the link and via the file would still agree — so
+        // assert on the filesystem's own record instead: the link must be
+        // a symlink, and the file a regular file, each with its own bytes.
+        let link_meta = std::fs::symlink_metadata(dir.path().join("a-link")).expect("stat");
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("z-file")).expect("read"),
+            "content\n"
+        );
     }
 }
