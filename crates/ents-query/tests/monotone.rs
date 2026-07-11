@@ -20,9 +20,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ents_model::Status;
+use ents_model::{Member, Provenance, Status};
 use ents_query::{Evaluator, Query, Transition};
-use ents_testutil::{MemRefStore, ObjectStore, advance_ref, record_result};
+use ents_testutil::{MemRefStore, ObjectStore, advance_ref, record_result, write_member};
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find as _};
 use gix_ref_store::RefStoreRead as _;
@@ -31,6 +31,7 @@ use proptest::prelude::*;
 const BRANCHES: [&str; 3] = ["refs/heads/main", "refs/heads/dev", "refs/heads/wip/x"];
 const EFFECTS: [&str; 2] = ["unit", "integ"];
 const STATUSES: [Status; 3] = [Status::Pass, Status::Fail, Status::Error];
+const MEMBERS: [&str; 2] = ["alice", "bob"];
 
 /// One randomized history operation.
 #[derive(Debug, Clone)]
@@ -52,6 +53,9 @@ enum Op {
         status: usize,
         short_len: usize,
     },
+    Member {
+        who: usize,
+    },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -67,6 +71,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
                 short_len
             }
         ),
+        (0..2usize).prop_map(|who| Op::Member { who }),
     ]
 }
 
@@ -151,7 +156,7 @@ fn by_prefix(universe: &HashSet<ObjectId>, shorts: &[String]) -> HashSet<ObjectI
         .collect()
 }
 
-/// The five checked queries and their independent full evaluations.
+/// The six checked queries and their independent full evaluations.
 fn oracle(objects: &ObjectStore, refs: &Refs, query_index: usize) -> HashSet<ObjectId> {
     let main = reach(objects, refs.get("refs/heads/main").copied());
     match query_index {
@@ -176,19 +181,29 @@ fn oracle(objects: &ObjectStore, refs: &Refs, query_index: usize) -> HashSet<Obj
             let dev = reach(objects, refs.get("refs/heads/dev").copied());
             main.union(&dev).copied().collect()
         }
-        _ => unreachable!("five queries"),
+        // `meta(refs/meta/member/*)` (`query.meta`): the tip commits of
+        // matching author-written meta-refs directly, never a
+        // reachability closure — computed independently of both
+        // `Query::footprint` and the evaluator's `meta_tips`.
+        5 => refs
+            .iter()
+            .filter(|(name, _)| name.starts_with("refs/meta/member/"))
+            .map(|(_, oid)| *oid)
+            .collect(),
+        _ => unreachable!("six queries"),
     }
 }
 
-const QUERIES: [&str; 5] = [
+const QUERIES: [&str; 6] = [
     "rev(refs/heads/main)",
     "rev(refs/heads/*) - rev(refs/heads/wip/*)",
     "rev(refs/heads/main) & results(unit, pass)",
     "results(unit, pass) & results(integ, pass)",
     "rev(refs/heads/main) | rev(refs/heads/dev)",
+    "meta(refs/meta/member/*)",
 ];
 
-/// Each of the five queries' static ref-footprint (`query.footprint`),
+/// Each of the six queries' static ref-footprint (`query.footprint`),
 /// hand-written independently of `Query::footprint` — this is what the
 /// oracle checks against, not a call into the thing under test.
 ///
@@ -207,7 +222,8 @@ fn footprint_touches(query_index: usize, moved: &str) -> bool {
         2 => moved == "refs/heads/main" || results_of("unit"),
         3 => results_of("unit") || results_of("integ"),
         4 => moved == "refs/heads/main" || moved == "refs/heads/dev",
-        _ => unreachable!("five queries"),
+        5 => moved.starts_with("refs/meta/member/"),
+        _ => unreachable!("six queries"),
     }
 }
 
@@ -274,6 +290,13 @@ proptest! {
                     );
                     Some(format!("refs/meta/results/{}/{short}", EFFECTS[effect]))
                 }
+                Op::Member { who } => {
+                    let id = MEMBERS[who];
+                    seconds += 100;
+                    let member = Member::new(format!("key-{id}"), Provenance::AdminRegistered);
+                    write_member(&refs, &objects, id, &member, None, seconds);
+                    Some(format!("refs/meta/member/{id}"))
+                }
             };
 
             let after = snapshot(&refs);
@@ -289,6 +312,18 @@ proptest! {
             };
 
             for (index, query) in queries.iter().enumerate() {
+                // The hand-written mirror must agree with the real
+                // `Query::footprint()` on every generated transition —
+                // any silent divergence between the mirror's theory and
+                // the implementation's derivation is a loud failure
+                // here, not a false pass downstream.
+                let touches = footprint_touches(index, &moved);
+                prop_assert_eq!(
+                    touches,
+                    query.footprint().matches(transition.name.as_ref()),
+                    "footprint mirror disagreement for {} on {:?}", QUERIES[index], moved
+                );
+
                 let full_before = oracle(&objects, &before, index);
                 let full_after = oracle(&objects, &after, index);
 
@@ -297,7 +332,7 @@ proptest! {
                 // outside it is a non-event no matter what the raw diff
                 // of two full evaluations would suggest.
                 let expected: std::collections::BTreeSet<ObjectId> =
-                    if footprint_touches(index, &moved) {
+                    if touches {
                         full_after.difference(&full_before).copied().collect()
                     } else {
                         std::collections::BTreeSet::new()
