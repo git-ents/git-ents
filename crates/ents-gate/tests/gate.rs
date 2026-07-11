@@ -173,13 +173,19 @@ fn non_member_signature_is_refused() {
     );
 }
 
+/// Revoke `id`'s key in the fixture, as an admin-signed mutation of the
+/// member's ref.
+fn revoke(f: &Forge, id: &str, key: &Keypair, provenance: Provenance, seconds: i64) {
+    let mut revoked = Member::new(key.public_openssh(), provenance);
+    revoked.revoke();
+    write_member(&f.refs, &f.objects, id, &revoked, Some(&f.admin), seconds);
+}
+
 #[rstest]
 // @relation(gate.tip-signed, model.member-revocation, scope=function, role=Verifies)
-fn signature_made_after_revocation_is_refused() {
+fn a_revoked_members_new_push_is_refused() {
     let f = forge();
-    let mut revoked = Member::new(f.admin.public_openssh(), Provenance::AdminRegistered);
-    revoked.revoke();
-    write_member(&f.refs, &f.objects, "admin", &revoked, Some(&f.admin), 400);
+    revoke(&f, "admin", &f.admin, Provenance::AdminRegistered, 400);
 
     let new = proposal(&f, vec![], Some("refs/meta/issues/1"), Some(&f.admin), 500);
     let verdict = run(&f, "refs/meta/issues/1", Some(new));
@@ -192,20 +198,62 @@ fn signature_made_after_revocation_is_refused() {
 
 #[rstest]
 // @relation(model.member-revocation, gate.tip-signed, scope=function, role=Verifies)
-fn signature_made_before_revocation_stays_verifiable() {
-    // The boundary is found by walking the member ref's history and
-    // deserializing the tree in force at the signature's timestamp —
-    // there is no validity-window field, by design.
+fn a_backdated_commit_cannot_reach_past_a_revocation() {
+    // The security-review regression: admission consults the member
+    // entity currently in force, so a revoked key authoring a NEW
+    // commit with a committer timestamp claimed from before the
+    // revocation — descending cleanly from the live tip — is still
+    // refused. No commit-supplied time participates in the judgment.
     let f = forge();
-    let new = proposal(&f, vec![], Some("refs/meta/issues/1"), Some(&f.admin), 300);
+    let refname = "refs/meta/issues/1";
+    let tip = write_meta_entity(
+        &f.refs,
+        &f.objects,
+        name(refname),
+        &ents_model::Status::Pass,
+        Some(&f.admin),
+        300,
+    );
+    revoke(&f, "admin", &f.admin, Provenance::AdminRegistered, 400);
 
-    let mut revoked = Member::new(f.admin.public_openssh(), Provenance::AdminRegistered);
-    revoked.revoke();
-    write_member(&f.refs, &f.objects, "admin", &revoked, Some(&f.admin), 400);
+    // Authored "at 300", pushed after the revocation at 400.
+    let backdated = proposal(&f, vec![tip], Some(refname), Some(&f.admin), 300);
+    expect_fail(&run(&f, refname, Some(backdated)), Requirement::TipSigned);
+}
 
-    // The gate runs *after* the revocation, on a commit signed before it.
+#[rstest]
+// @relation(model.member-revocation, gate.fast-forward, scope=function, role=Verifies)
+fn refs_accepted_before_a_revocation_are_never_rejudged() {
+    // A second admin keeps working on a ref whose current tip was
+    // placed by a member revoked afterwards: the accepted tip stays
+    // valid history — the gate judges only the proposed update, and
+    // fast-forwarding over ancestry signed by a now-revoked key is
+    // ordinary descent, not a re-judgment of past acceptance.
+    let f = forge();
+    let second = Keypair::from_seed(OUTSIDER_SEED);
+    enroll_member(
+        &f.refs,
+        &f.objects,
+        "second",
+        &second,
+        Provenance::AdminRegistered,
+        310,
+    );
+
+    let refname = "refs/meta/issues/1";
+    let tip = write_meta_entity(
+        &f.refs,
+        &f.objects,
+        name(refname),
+        &ents_model::Status::Pass,
+        Some(&f.admin),
+        320,
+    );
+    revoke(&f, "admin", &f.admin, Provenance::AdminRegistered, 400);
+
+    let continued = proposal(&f, vec![tip], Some(refname), Some(&second), 500);
     expect_pass(
-        &run(&f, "refs/meta/issues/1", Some(new)),
+        &run(&f, refname, Some(continued)),
         AdmissionKind::TipInvariant,
     );
 }

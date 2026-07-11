@@ -17,9 +17,6 @@ pub(crate) struct CommitData {
     pub tree: ObjectId,
     /// Parents, in order.
     pub parents: Vec<ObjectId>,
-    /// Committer timestamp, seconds since the Unix epoch — the time a
-    /// signature is judged against (`model.member-revocation`).
-    pub committer_seconds: i64,
     /// The full commit message, for trailer parsing.
     pub message: Vec<u8>,
 }
@@ -37,37 +34,23 @@ pub(crate) fn read_commit(objects: &dyn Find, oid: ObjectId) -> Result<Option<Co
         return Ok(None);
     }
     let raw = data.data.to_vec();
-    let (tree, parents, committer_seconds, message) = decode_commit(&raw, oid)?;
+    let (tree, parents, message) = decode_commit(&raw, oid)?;
     Ok(Some(CommitData {
         tree,
         parents,
-        committer_seconds,
         message,
         raw,
     }))
 }
 
-fn decode_commit(raw: &[u8], oid: ObjectId) -> Result<(ObjectId, Vec<ObjectId>, i64, Vec<u8>)> {
+fn decode_commit(raw: &[u8], oid: ObjectId) -> Result<(ObjectId, Vec<ObjectId>, Vec<u8>)> {
     let commit = CommitRef::from_bytes(raw, oid.kind()).map_err(|e| Error::Decode {
         oid,
         detail: e.to_string(),
     })?;
-    let committer_seconds = commit
-        .committer()
-        .map_err(|e| Error::Decode {
-            oid,
-            detail: format!("committer: {e}"),
-        })?
-        .time()
-        .map_err(|e| Error::Decode {
-            oid,
-            detail: format!("committer time: {e}"),
-        })?
-        .seconds;
     Ok((
         commit.tree(),
         commit.parents().collect(),
-        committer_seconds,
         commit.message.to_vec(),
     ))
 }

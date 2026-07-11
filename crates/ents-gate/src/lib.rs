@@ -69,13 +69,17 @@
 //! are a later, additive narrowing: they arrive with a Config entity in
 //! `ents-model`, not a new gate.
 //!
-//! Signature-time semantics: a signature is judged against the member
-//! entity in force *at the commit's own timestamp*, recovered by walking
-//! the member ref's history (`model.member-revocation`). This keeps
-//! verdicts reproducible after the fact in any clone — re-running the
-//! gate years later returns the same answer — at the documented cost
-//! that commit timestamps are author-controlled; the fast-forward
-//! requirement still forces any replay to descend from the live tip.
+//! Acceptance-time semantics: a signature is judged against the member
+//! entity *currently in force* — the member ref's tip in the same
+//! snapshot the gate reads (`model.member-revocation`). No
+//! commit-supplied timestamp participates, so a revoked key's new
+//! pushes are refused even with a backdated committer date; refs
+//! accepted before the revocation stay valid because acceptance is
+//! never re-judged. A verdict is therefore a pure function of the
+//! proposed update and current repository state: any clone reproduces
+//! it against the same snapshot, and reconstructing what a *past*
+//! acceptance saw is an audit function over the deployment's op log —
+//! explicitly out of scope for this crate and every other crate here.
 //!
 //! # Examples
 //!

@@ -1,8 +1,8 @@
 //! Policy loading: the member set, read from `refs/meta/member/*`
 //! through the read half of the ref store (`gate.policy-as-state`).
 //!
-//! The gate consults no state outside `refs/meta/*`: members, their
-//! revocation timelines, and the epoch (`crate::config`) are all
+//! The gate consults no state outside `refs/meta/*`: the member set,
+//! each member's current state, and the epoch (`crate::config`) are all
 //! repository state, so any frontend with a clone evaluates the actual
 //! policy offline, staleness bounded only by the age of its last fetch.
 
@@ -42,32 +42,21 @@ pub(crate) fn members(refs: &dyn RefStoreRead) -> Result<Vec<Enrolled>> {
     Ok(out)
 }
 
-/// The member entity in force at `at_seconds`, found by walking the
-/// member ref's own commit history (first-parent) from `tip` back to the
-/// newest mutation at or before that time, and deserializing *that*
-/// commit's tree.
+/// The member entity currently in force: the typed tree behind `tip`,
+/// the member ref's tip as read in the same verification snapshot.
 ///
-/// This is how revocation gets its before/after boundary with no
-/// validity-window field on the entity (`model.member-revocation`): the
-/// ref's commit chain is the audit trail (`meta-ref.namespace`), so the
-/// state, provenance, and key that judge a signature are the ones the
-/// chain records for the signature's own timestamp. `Ok(None)` means the
-/// member had not been enrolled yet at `at_seconds`.
+/// Admission consults only this current entity
+/// (`model.member-revocation`): a revoked key's new pushes are refused
+/// from the moment the revocation lands, regardless of any committer
+/// timestamp the pushed commit claims — a backdated commit changes
+/// nothing, because no commit-supplied time participates in the
+/// judgment. Refs accepted before a revocation stay valid because
+/// acceptance is never re-judged; reconstructing what a past acceptance
+/// saw is an audit function over the deployment's out-of-scope op log,
+/// not a gate path.
 // @relation(model.member-revocation, gate.policy-as-state, scope=function)
-pub(crate) fn member_at(
-    objects: &dyn Find,
-    tip: ObjectId,
-    at_seconds: i64,
-) -> Result<Option<Member>> {
-    let mut cursor = Some(tip);
-    while let Some(oid) = cursor {
-        let commit = expect_commit(objects, oid)?;
-        if commit.committer_seconds <= at_seconds {
-            let member: Member = facet_git_tree::deserialize(&commit.tree, objects)
-                .map_err(|source| Error::Entity { oid, source })?;
-            return Ok(Some(member));
-        }
-        cursor = commit.parents.first().copied();
-    }
-    Ok(None)
+pub(crate) fn member_current(objects: &dyn Find, tip: ObjectId) -> Result<Member> {
+    let commit = expect_commit(objects, tip)?;
+    facet_git_tree::deserialize(&commit.tree, objects)
+        .map_err(|source| Error::Entity { oid: tip, source })
 }

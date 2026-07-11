@@ -8,7 +8,9 @@ use crate::keys::Keypair;
 /// The inputs for one fixture commit; see [`write_commit`].
 ///
 /// Author and committer are fixed fixture identities — only the timestamp
-/// varies, because timestamps are what revocation-boundary logic keys on.
+/// varies, which keeps fixture object ids deterministic and lets tests
+/// stage commits that *claim* earlier authorship (the gate must ignore
+/// such claims: admission is judged at acceptance time).
 ///
 /// # Examples
 ///

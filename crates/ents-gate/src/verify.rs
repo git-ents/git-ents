@@ -58,9 +58,10 @@ pub struct Update {
 /// in force (`gate.epoch`):
 ///
 /// 1. `gate.tip-signed` — the new tip carries a `gpgsig` SSHSIG that
-///    verifies against the key of an enrolled member whose entity, *as
-///    recorded at the signature's own timestamp* in the member ref's
-///    history, is active (`model.member-revocation`) and whose
+///    verifies against the key of an enrolled member whose entity,
+///    *currently in force* at the member ref's tip in this same
+///    snapshot, is active (`model.member-revocation`: acceptance-time
+///    semantics — no commit-supplied timestamp participates) and whose
 ///    provenance authorizes this refname (`model.member-provenance`,
 ///    `effect.admin-only`).
 /// 2. `gate.refname-binding` — the commit's `Ents-Ref:` trailer names
@@ -174,16 +175,15 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
         return bootstrap(objects, update, new, &commit, &payload, &sig, old, &cas);
     }
 
-    // Identify the signer: the member whose entity *at the signature's
-    // own timestamp* carries the verifying key. Walking the member ref's
-    // history for that entity is what gives revocation its
-    // before/after boundary (`model.member-revocation`).
-    let at = commit.committer_seconds;
+    // Identify the signer: the member whose entity *currently in
+    // force* — the member ref's tip in this same snapshot — carries the
+    // verifying key (`model.member-revocation`). No commit-supplied
+    // timestamp participates: a backdated committer date cannot reach
+    // back past a revocation.
     let mut signer: Option<(MemberId, Member)> = None;
     for enrolled in &members {
-        if let Some(member) = policy::member_at(objects, enrolled.tip, at)?
-            && signature::verifies(&member.key, &payload, &sig)
-        {
+        let member = policy::member_current(objects, enrolled.tip)?;
+        if signature::verifies(&member.key, &payload, &sig) {
             signer = Some((enrolled.id.clone(), member));
             break;
         }
@@ -196,22 +196,23 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
     let Some((id, member)) = signer else {
         return refuse(
             Requirement::TipSigned,
-            "the tip's signature does not verify against any member key enrolled and in force \
-             at the commit's timestamp"
-                .into(),
+            "the tip's signature does not verify against any member key currently enrolled".into(),
             false,
         );
     };
 
-    // A revoked key is explicitly rejected for signatures made after
-    // revocation (`model.member-revocation`); because the entity above
-    // was resolved at the signature's timestamp, a signature made while
-    // the key was valid stays verifiable even if the member is revoked
-    // by the time the gate runs.
+    // A revoked key authorizes no new pushes, full stop
+    // (`model.member-revocation`): the judgment uses the member entity
+    // currently in force, so a claimed pre-revocation committer
+    // timestamp changes nothing. Refs the key placed before the
+    // revocation landed stay valid — acceptance is never re-judged.
     if member.state == MemberState::Revoked {
         return refuse(
             Requirement::TipSigned,
-            format!("member {id}'s key was revoked at the signature's timestamp"),
+            format!(
+                "member {id}'s key is revoked; new pushes are refused regardless of the \
+                 commit's claimed timestamp"
+            ),
             false,
         );
     }
