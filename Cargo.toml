@@ -1,16 +1,18 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/ents-anchor",
-    "crates/ents-effect",
-    "crates/ents-gate",
-    "crates/ents-model",
-    "crates/ents-query",
-    "crates/ents-receive",
-    "crates/ents-sync",
-    "crates/ents-testutil",
-    "crates/git-ents",
-    "crates/gix-ref-store",
+    "crates/kernel/ents-anchor",
+    "crates/kernel/ents-effect",
+    "crates/kernel/ents-gate",
+    "crates/kernel/ents-model",
+    "crates/kernel/ents-query",
+    "crates/kernel/ents-receive",
+    "crates/kernel/ents-sync",
+    "crates/kernel/ents-testutil",
+    "crates/cli/git-ents",
+    "crates/forge/ents-forge",
+    "crates/kiln/ents-kiln",
+    "crates/substrate/gix-ref-store",
 ]
 
 [workspace.package]
@@ -23,15 +25,17 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
-ents-anchor = { path = "crates/ents-anchor" }
-ents-effect = { path = "crates/ents-effect" }
-ents-gate = { path = "crates/ents-gate" }
-ents-model = { path = "crates/ents-model" }
-ents-query = { path = "crates/ents-query" }
-ents-receive = { path = "crates/ents-receive" }
-ents-sync = { path = "crates/ents-sync" }
-ents-testutil = { path = "crates/ents-testutil" }
-gix-ref-store = { path = "crates/gix-ref-store" }
+ents-anchor = { path = "crates/kernel/ents-anchor" }
+ents-effect = { path = "crates/kernel/ents-effect" }
+ents-forge = { path = "crates/forge/ents-forge" }
+ents-gate = { path = "crates/kernel/ents-gate" }
+ents-kiln = { path = "crates/kiln/ents-kiln" }
+ents-model = { path = "crates/kernel/ents-model" }
+ents-query = { path = "crates/kernel/ents-query" }
+ents-receive = { path = "crates/kernel/ents-receive" }
+ents-sync = { path = "crates/kernel/ents-sync" }
+ents-testutil = { path = "crates/kernel/ents-testutil" }
+gix-ref-store = { path = "crates/substrate/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [
     "lang-rust",
     "lang-toml",
@@ -57,6 +61,7 @@ acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2
 acdc-converters-terminal = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2e6f0fa4254a3e9ebd1c3d2f6c7caafde" }
 askama = "0.16"
 axum = "0.8"
+cargo_metadata = "0.23"
 figue = "5.0.0-rc.5"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 facet-pretty = "0.50.0-rc.5"

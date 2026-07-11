@@ -233,6 +233,31 @@ The honesty test for the seams: a third root — say single-node self-hosting on
 
 '''''
 
+== Layering (consequence of the abstractions)
+
+The crate graph is four layers, each depending only on the layer(s) before it: substrate, kernel, package, CLI.
+Dependencies point one way; a lower layer never depends on a higher one, checked mechanically (`layering.rs`, run in CI alongside every other test).
+
+* *Substrate* — `gix-ref-store`: the pluggable `RefStore` seam gitoxide itself does not provide.
+Extends git, not the forge; carries the `gix-` prefix per the Composition section's own rule.
+* *Kernel* — `ents-model`, `ents-anchor`, `ents-gate`, `ents-effect`, `ents-query`, `ents-receive`, `ents-sync`, `ents-testutil`.
+Owns mechanism: typed ref-store access and refs/meta layout primitives, signing and authorship, the entity envelope (typed trees, id assignment), gate execution and composition semantics, effect dispatch, adoption/inbox mechanics, yank, sync/receive plumbing, hooks.
+The kernel is declarative and generic — it defines *how* any entity is stored, verified, and run, never *which* entities exist.
+* *Package* — `ents-forge` (issues, comments, review/release/check types as they land), `ents-kiln` (toolchains).
+Owns types and policy: the domain entity structs, and any package-specific gate or effect definitions.
+A package depends on kernel crates freely, and on other packages never — `ents-forge` and `ents-kiln` do not depend on each other.
+* *CLI* — `git-ents`: the composition root.
+Depends on the kernel directly (for kernel-owned commands: `setup`, `members`, `account`, `effect`, `inbox`, `redact`, `hook`) and on every installed package (for `comment`, from `ents-forge`; `toolchain`, from `ents-kiln`).
+Mounts each package's subcommand grammar through one convention (`crate::package::Package`, in `git-ents`): a package owns its own figue action enum, defined in its own crate, and the CLI's top-level subcommand enum references that type directly — a compile-time pairing, not a runtime plugin registry, because the argument grammar is resolved from a `#[derive(Facet)]` shape at compile time, with nothing to register dynamically.
+
+The one-way rule is absolute, not just directional-on-average: a kernel crate must not depend on a package crate in any form — not a normal dependency, not a dev-dependency, not a build-dependency, not behind a feature flag.
+`ents-testutil` in particular must not know a package's types; a package needing test fixtures beyond the kernel's generic ones adds them inside its own crate, not by teaching `ents-testutil` its vocabulary.
+
+Ref-namespace segments (`refs/meta/issues/*`, `refs/meta/comments/*`, `refs/meta/toolchains/*`, and so on) stay kernel-reserved regardless of which layer owns the entity stored there: every namespace is minted by one function in `ents_model::namespace`, and a package calls that function rather than inventing its own ref layout.
+This is what keeps `meta-ref.granularity` and `meta-ref.namespace` a single, auditable surface even as entity types move between crates — a package can gain or lose ownership of a type without the ref layout itself ever needing to change.
+
+'''''
+
 == Derived, not fundamental
 
 Instances and consequences of the six, listed for orientation:
