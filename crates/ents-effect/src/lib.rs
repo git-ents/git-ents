@@ -1,4 +1,4 @@
-//! Effect execution, results, and toolchains at run time (`docs/spec/effect.sdoc`):
+//! Effect execution, results, and toolchains at run time (`docs/spec/effect.adoc`):
 //! the `Executor` trait, its Docker and Sprite backends, toolchain
 //! materialization, and the run loop that ties them to
 //! [`ents_receive::receive`] as the sole path a result re-enters the
@@ -15,7 +15,7 @@
 //!
 //! # Spec coverage
 //!
-//! From `docs/spec/effect.sdoc`:
+//! From `docs/spec/effect.adoc`:
 //!
 //! - `effect.definition`, `effect.admin-only` — already carried by
 //!   `ents-model`'s [`ents_model::Effect`] and `ents-gate`'s default
