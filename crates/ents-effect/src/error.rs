@@ -172,6 +172,22 @@ pub enum Error {
     /// (`effect.result-taxonomy`); see this type's own doc.
     #[error("the sandbox did not complete a run: {0}")]
     Sandbox(String),
+
+    /// One commit's run stopped a [`crate::run_effect`] batch. Earlier
+    /// commits' outcomes were already durably recorded through `receive`
+    /// before this error, so a caller applying its own retry policy
+    /// (`effect.deployment-property`) knows exactly which commit to resume
+    /// from — and a plain retry of the whole batch re-runs only what is
+    /// still owed, since the work set subtracts recorded results
+    /// (`query.workset`).
+    #[error("run for {oid} stopped the batch: {source}")]
+    Run {
+        /// The commit whose run failed.
+        oid: ObjectId,
+        /// The underlying failure.
+        #[source]
+        source: Box<Error>,
+    },
 }
 
 impl From<ents_receive::Error> for Error {

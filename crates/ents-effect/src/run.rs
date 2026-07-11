@@ -214,11 +214,16 @@ pub fn run_one(
 ///
 /// # Errors
 ///
-/// [`Error::Eval`] if the work set cannot be computed; otherwise anything
-/// [`run_one`] can fail with, for the first commit that fails — later
-/// commits in the set are not attempted once one fails, since a caller
-/// wrapping this in its own retry policy (`effect.deployment-property`)
-/// needs to know exactly which commit stopped the batch.
+/// [`Error::Trigger`] or [`Error::Eval`] if the trigger cannot be parsed
+/// or the work set computed; otherwise [`Error::Run`], carrying the id of
+/// the commit whose run failed with the underlying failure as its source
+/// — later commits in the (oid-sorted) set are not attempted once one
+/// fails. Outcomes for commits that completed before the failure were
+/// already durably recorded through `receive` (each run writes back
+/// immediately), so a caller applying its own retry policy
+/// (`effect.deployment-property`) resumes from the reported commit, and a
+/// plain retry of the whole batch re-runs only what is still owed
+/// (`query.workset`).
 // @relation(effect.local-run, query.workset, scope=function)
 #[expect(
     clippy::too_many_arguments,
@@ -258,29 +263,42 @@ pub fn run_effect(
 
     let mut outcomes = Vec::with_capacity(oids.len());
     for oid in oids {
-        let target = results_ref(&short_oid(oid))?;
-        let outcome = run_one(
-            refs,
-            objects,
-            events,
-            executor,
-            scratch,
-            toolchain_cache,
-            oid,
-            effect,
-            target,
-            author,
-            sign,
-            mode,
-        )?;
-        outcomes.push((oid, outcome));
+        let one = results_ref(&short_oid(oid)).and_then(|target| {
+            run_one(
+                refs,
+                objects,
+                events,
+                executor,
+                scratch,
+                toolchain_cache,
+                oid,
+                effect,
+                target,
+                author,
+                sign,
+                mode,
+            )
+        });
+        match one {
+            Ok(outcome) => outcomes.push((oid, outcome)),
+            Err(source) => {
+                return Err(Error::Run {
+                    oid,
+                    source: Box::new(source),
+                });
+            }
+        }
     }
     Ok(outcomes)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, reason = "unit test")]
+    #![allow(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit test; the panic is an assertion on the error's variant"
+    )]
 
     use ents_model::{Provenance, namespace};
     use ents_receive::{NullEventSink, TxResult};
@@ -298,6 +316,26 @@ mod tests {
                 status: RunStatus::Pass,
                 log: String::new(),
             })
+        }
+    }
+
+    /// Passes `passes` runs, then reports an infrastructure failure on
+    /// every run after them.
+    struct FailsAfter {
+        passes: usize,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl Executor for FailsAfter {
+        fn run(&self, _inputs: &SandboxInputs<'_>) -> Result<RunOutput> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call < self.passes {
+                Ok(RunOutput {
+                    status: RunStatus::Pass,
+                    log: String::new(),
+                })
+            } else {
+                Err(Error::Sandbox("the sandbox never started".to_owned()))
+            }
         }
     }
 
@@ -460,5 +498,84 @@ mod tests {
         let first = *commits.first().expect("advance_ref produced a commit");
         let name = namespace::self_result_ref(&member, "unit", &short_oid(first)).expect("valid");
         assert!(refs.get(name.as_ref()).expect("readable").is_some());
+    }
+
+    #[rstest]
+    // @relation(effect.local-run, effect.deployment-property, scope=function, role=Verifies)
+    fn run_effect_reports_which_commit_stopped_the_batch() {
+        let refs = MemRefStore::default();
+        let objects = ObjectStore::default();
+        let worker = Keypair::from_seed(1);
+        enroll_member(
+            &refs,
+            &objects,
+            "worker",
+            &worker,
+            Provenance::AdminRegistered,
+            100,
+        );
+        advance_ref(&refs, &objects, "refs/heads/main", 2, 200);
+
+        let effect = Effect {
+            trigger: "rev(refs/heads/main)".into(),
+            toolchains: vec![],
+            run: "true".into(),
+        };
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let cache = tempfile::tempdir().expect("tempdir");
+
+        // The first run completes and writes back; the second's sandbox
+        // never starts.
+        let executor = FailsAfter {
+            passes: 1,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let err = run_effect(
+            &refs,
+            &objects,
+            &NullEventSink,
+            &executor,
+            scratch.path(),
+            cache.path(),
+            "unit",
+            &effect,
+            None,
+            |short| Ok(namespace::result_ref("unit", short).expect("valid")),
+            &author(),
+            &|payload| worker.sign(payload),
+            Mode::Advisory,
+        )
+        .expect_err("the second run's infrastructure failure stops the batch");
+
+        // The batch runs the work set in oid-sorted order, so the failing
+        // commit is the second-sorted one — exactly what the error names.
+        let evaluator = Evaluator::new(&refs, &objects);
+        let sorted: Vec<ObjectId> = evaluator
+            .eval(&"rev(refs/heads/main)".parse().expect("valid"))
+            .expect("evaluates")
+            .into_iter()
+            .collect();
+        let Error::Run { oid, source } = err else {
+            panic!("expected Error::Run, got {err:?}");
+        };
+        assert_eq!(Some(&oid), sorted.get(1), "the error names the stopper");
+        assert!(matches!(*source, Error::Sandbox(_)));
+
+        // The completed first run was durably recorded before the failure:
+        // a retry re-runs only what is still owed (query.workset).
+        let first = *sorted.first().expect("two commits");
+        let name = namespace::result_ref("unit", &short_oid(first)).expect("valid");
+        assert!(
+            refs.get(name.as_ref()).expect("readable").is_some(),
+            "the completed run's result must survive the batch failure"
+        );
+        let outstanding = evaluator
+            .outstanding("unit", &"rev(refs/heads/main)".parse().expect("valid"))
+            .expect("evaluates");
+        assert_eq!(
+            outstanding.into_iter().collect::<Vec<_>>(),
+            vec![oid],
+            "only the failed commit is still owed a result"
+        );
     }
 }
