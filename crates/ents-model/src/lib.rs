@@ -72,7 +72,7 @@
 //! assert_eq!(refname.as_bstr(), "refs/meta/member/jdc");
 //!
 //! // The commit that would write it binds itself to that ref via the
-//! // reserved `Ents-Ref:` trailer (`meta-ref.trailers`).
+//! // reserved `Advance-ref:` trailer (`meta-ref.trailers`).
 //! let trailers = Trailers {
 //!     ents_ref: Some(refname),
 //!     schema_version: None,

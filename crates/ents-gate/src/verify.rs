@@ -64,7 +64,7 @@ pub struct Update {
 ///    semantics — no commit-supplied timestamp participates) and whose
 ///    provenance authorizes this refname (`model.member-provenance`,
 ///    `effect.admin-only`).
-/// 2. `gate.refname-binding` — the commit's `Ents-Ref:` trailer names
+/// 2. `gate.refname-binding` — the commit's `Advance-ref:` trailer names
 ///    exactly this ref.
 /// 3. `gate.fast-forward` — the new tip descends from the current tip.
 ///
@@ -229,7 +229,7 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
         let found = trailers
             .ents_ref
             .as_ref()
-            .map_or_else(|| "no Ents-Ref trailer".to_owned(), |n| n.to_string());
+            .map_or_else(|| "no Advance-ref trailer".to_owned(), |n| n.to_string());
         return refuse(
             Requirement::RefnameBinding,
             format!(
@@ -396,7 +396,7 @@ fn bootstrap(
         return Ok(Verdict::Fail(Refusal {
             requirement: Requirement::RefnameBinding,
             refname: update.name.clone(),
-            detail: "the enrollment commit's Ents-Ref trailer does not name this ref".into(),
+            detail: "the enrollment commit's Advance-ref trailer does not name this ref".into(),
             inbox_alternative: false,
         }));
     }

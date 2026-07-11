@@ -129,7 +129,7 @@ mod tests {
     )]
     #[case::neither(b"Subject\n\nJust a body, no trailers.\n", None, None)]
     #[case::case_insensitive_key(
-        b"Subject\n\nents-ref: refs/meta/comments/1\n",
+        b"Subject\n\nadvance-ref: refs/meta/comments/1\n",
         Some("refs/meta/comments/1"),
         None
     )]
