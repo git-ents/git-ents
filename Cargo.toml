@@ -9,6 +9,7 @@ members = [
     "crates/kernel/ents-receive",
     "crates/kernel/ents-sync",
     "crates/kernel/ents-testutil",
+    "crates/cli/ents-web",
     "crates/cli/git-ents",
     "crates/forge/ents-forge",
     "crates/kiln/ents-kiln",
@@ -35,6 +36,7 @@ ents-query = { path = "crates/kernel/ents-query" }
 ents-receive = { path = "crates/kernel/ents-receive" }
 ents-sync = { path = "crates/kernel/ents-sync" }
 ents-testutil = { path = "crates/kernel/ents-testutil" }
+ents-web = { path = "crates/cli/ents-web" }
 gix-ref-store = { path = "crates/substrate/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [
     "lang-rust",

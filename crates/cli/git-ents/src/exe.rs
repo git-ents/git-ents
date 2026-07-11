@@ -52,6 +52,10 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         Top::Inbox { action } => run_inbox(action, out),
         Top::Redact { action } => run_redact(action, out),
         Top::Hook { action } => run_hook(action, out),
+        Top::Serve { port, key } => {
+            let root = LocalRoot::discover(".")?;
+            commands::serve::run(root, port, key, out)
+        }
     }
 }
 

@@ -42,6 +42,7 @@ fn help_names_every_subcommand_family() {
         "inbox",
         "redact",
         "hook",
+        "serve",
     ] {
         assert!(help.contains(name), "--help must mention {name:?}:\n{help}");
     }
@@ -68,4 +69,19 @@ fn nested_help_reaches_a_subcommand() {
     let text = String::from_utf8(output.stdout).expect("utf8");
     assert!(text.contains("list"), "{text}");
     assert!(text.contains("revoke"), "{text}");
+}
+
+/// `git ents serve --help` documents the loopback-only, no-git-transport
+/// contract `roots.local` requires, not just a bare flag list.
+#[test]
+// @relation(roots.local, scope=function, role=Verifies)
+fn serve_help_documents_the_loopback_only_contract() {
+    let output = Command::new(common::bin_path())
+        .args(["serve", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).expect("utf8");
+    assert!(text.contains("loopback"), "{text}");
+    assert!(text.contains("port"), "{text}");
 }

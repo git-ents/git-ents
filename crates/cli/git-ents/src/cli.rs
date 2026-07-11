@@ -112,6 +112,22 @@ pub enum Top {
         #[facet(args::subcommand)]
         action: HookAction,
     },
+    /// Start the local web UI (`roots.local`): reuses this repository's
+    /// existing local composition root (the same loose-ref `RefStore`,
+    /// odb, null `EventSink`, and advisory gate `git ents members`,
+    /// `git ents comment`, and every other porcelain command already use)
+    /// and adds only the `ents-web` HTTP frontend, bound to loopback —
+    /// never git's own smart-HTTP transport, which this command does not
+    /// expose in any form.
+    Serve {
+        /// Port to bind on loopback (`127.0.0.1`); `0` picks any free
+        /// port. Defaults to 4880.
+        #[facet(args::named)]
+        port: Option<u16>,
+        /// Key to sign web edits with; defaults to `user.signingkey`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
 }
 
 /// `git ents members` actions.

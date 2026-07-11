@@ -1,46 +1,38 @@
 [package]
-name = "git-ents"
+name = "ents-web"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "git-ents"
-path = "src/main.rs"
-
 [dependencies]
 ents-anchor = { workspace = true }
-ents-effect = { workspace = true, features = ["docker", "sprite"] }
+ents-effect = { workspace = true }
 ents-forge = { workspace = true }
 ents-gate = { workspace = true }
 ents-kiln = { workspace = true }
 ents-model = { workspace = true }
 ents-query = { workspace = true }
 ents-receive = { workspace = true }
-ents-sync = { workspace = true }
-ents-web = { workspace = true }
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
-facet-pretty = { workspace = true }
-figue = { workspace = true }
+facet-reflect = "0.50.0-rc.5"
+getrandom = { workspace = true }
 gix = { workspace = true }
 gix-hash = { workspace = true }
 gix-object = { workspace = true }
 gix-ref-store = { workspace = true }
-gix-odb = { workspace = true }
-rand_core = { version = "0.6", features = ["getrandom"] }
-ssh-key = { version = "0.6", features = ["ed25519"] }
-tempfile = { workspace = true }
+axum = { workspace = true }
+maud = { workspace = true }
+serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
-cargo_metadata = { workspace = true }
 ents-testutil = { workspace = true }
+http-body-util = "0.1"
 rstest = { workspace = true }
+tempfile = { workspace = true }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [lints]

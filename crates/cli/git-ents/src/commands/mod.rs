@@ -14,6 +14,7 @@ pub mod effect;
 pub mod inbox;
 pub mod members;
 pub mod redact;
+pub mod serve;
 pub mod setup;
 pub mod toolchain;
 
