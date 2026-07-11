@@ -1,0 +1,40 @@
+[package]
+name = "git-ents"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "git-ents"
+path = "src/main.rs"
+
+[dependencies]
+ents-anchor = { workspace = true }
+ents-effect = { workspace = true, features = ["docker", "sprite"] }
+ents-gate = { workspace = true }
+ents-model = { workspace = true }
+ents-query = { workspace = true }
+ents-receive = { workspace = true }
+ents-sync = { workspace = true }
+facet = { workspace = true }
+facet-git-tree = { workspace = true }
+facet-pretty = { workspace = true }
+figue = { workspace = true }
+gix = { workspace = true }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
+gix-ref-store = { workspace = true }
+gix-odb = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
+ssh-key = { version = "0.6", features = ["ed25519"] }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+ents-testutil = { workspace = true }
+rstest = { workspace = true }
+
+[lints]
+workspace = true

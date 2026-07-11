@@ -9,6 +9,7 @@ members = [
     "crates/ents-receive",
     "crates/ents-sync",
     "crates/ents-testutil",
+    "crates/git-ents",
     "crates/gix-ref-store",
 ]
 
@@ -22,6 +23,8 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+ents-anchor = { path = "crates/ents-anchor" }
+ents-effect = { path = "crates/ents-effect" }
 ents-gate = { path = "crates/ents-gate" }
 ents-model = { path = "crates/ents-model" }
 ents-query = { path = "crates/ents-query" }
