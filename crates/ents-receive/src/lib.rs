@@ -1,5 +1,5 @@
 //! `receive`: the one write path every mutation frontend shares
-//! (`docs/spec/receive.sdoc`).
+//! (`docs/spec/receive.adoc`).
 //!
 //! This crate's single responsibility is orchestration above traits that
 //! already exist by the time it lands: gate policy (mandatory hosted,
@@ -11,7 +11,7 @@
 //!
 //! # Spec coverage
 //!
-//! From `docs/spec/receive.sdoc`:
+//! From `docs/spec/receive.adoc`:
 //!
 //! - `receive.unit`, `receive.shared-path` — [`receive`]: the sole
 //!   mutation entry point, identical for every frontend; only the trait

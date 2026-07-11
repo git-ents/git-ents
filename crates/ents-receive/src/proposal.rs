@@ -10,11 +10,12 @@ use gix_hash::ObjectId;
 ///
 /// `old` is the frontier the *proposal* claims — what a `git push` command
 /// line reports as its own base, or what a local UI last read. [`crate::receive`]
-/// never trusts it for admission: [`ents_gate::verify`] re-reads the actual
-/// current tip itself (the same snapshot every other check uses), and a
-/// mismatch between a claimed `old` and the store's real tip surfaces as an
-/// ordinary [`crate::TxResult::Rejected`] once the transaction is attempted,
-/// the same "someone moved this ref first" outcome a real push would see.
+/// never trusts it for admission — [`ents_gate::verify`] re-reads the actual
+/// current tip itself (the same snapshot every other check uses) — nor does
+/// it enforce it: unlike git's `receive-pack`, which refuses a push whose
+/// old-oid is stale, a stale `old` whose `new` still descends from the real
+/// tip applies cleanly, and one that does not is refused by the gate's own
+/// fast-forward check against the re-read tip, never by comparing this field.
 ///
 /// # Examples
 ///
