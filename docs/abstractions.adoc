@@ -39,7 +39,7 @@ History keeps the old encoding as archive.
 Trees stay pure struct representations — no version marker entry.
 
 Ref-level metadata that is not entity content belongs in commit-message trailers, because the commit is already the storage unit.
-Two trailers are reserved: `Schema-Version:` for explicit encoding detection if it is ever needed, and `Ents-Ref:` for refname binding (see 4).
+Two trailers are reserved: `Schema-Version:` for explicit encoding detection if it is ever needed, and `Advance-ref:` for refname binding (see 4).
 Versioning or binding in the tree would pollute both the schema and the merge path.
 
 *Tip invariant:* the tip of a meta-ref is always readable by the binary that owns the entity type; a non-owning binary treats the tree as opaque and degrades to generic display (`git store show`); history is archival.
@@ -67,7 +67,7 @@ Push certificates are demoted to transport concerns; they carry no meta-ref sema
 A commit signature proves authorship; it does not prove placement.
 The difference is recovered explicitly:
 
-* *Refname binding* — an `Ents-Ref:` trailer names the ref the commit was authored for, checked at verification; without it, a signed commit could be replayed as the tip of a different meta-ref.
+* *Refname binding* — an `Advance-ref:` trailer names the ref the commit was authored for, checked at verification; without it, a signed commit could be replayed as the tip of a different meta-ref.
 * *Anti-replay* — meta-refs advance fast-forward-only in the DAG sense (the new tip descends from the old), enforced by atomic CAS on the ref store; the parent hash is the freshness binding, so no nonce is needed.
 
 *Tip invariant:* the tip of a meta-ref is signed by a member authorized for that refname.
@@ -91,7 +91,7 @@ Verification is a pure function over ref-store reads:
 
 [arabic]
 . The new tip is signed by a member authorized for this refname.
-. The `Ents-Ref:` trailer matches the refname.
+. The `Advance-ref:` trailer matches the refname.
 . The new tip descends from the old tip.
 . The update commits via atomic CAS.
 

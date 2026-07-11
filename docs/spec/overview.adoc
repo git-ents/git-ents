@@ -67,7 +67,7 @@ mutated; see `anchor.adoc`.
 
 Every meta-ref mutation is an author-signed commit whose signature
 replicates with the repository and verifies offline in any clone.
-A signature proves authorship, not placement, so an `Ents-Ref:` trailer
+A signature proves authorship, not placement, so an `Advance-ref:` trailer
 binds the commit to the ref it was authored for, and adopting someone
 else's commit onto a canonical ref is always a merge, never a
 cherry-pick, so the author's signature survives intact in ancestry.
@@ -75,7 +75,7 @@ cherry-pick, so the author's signature survives intact in ancestry.
 === 5. Gate
 
 Verification is a pure function over ref-store reads — is the new tip
-signed by a member authorized for this refname, does its `Ents-Ref:`
+signed by a member authorized for this refname, does its `Advance-ref:`
 trailer match, does it descend from the old tip, does the update commit
 via atomic CAS — evaluated identically at three call sites: hosted CAS
 (mandatory, failure aborts the write), local UI verdict (advisory), and
