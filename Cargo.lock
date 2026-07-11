@@ -449,6 +449,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-sync"
+version = "0.0.0"
+dependencies = [
+ "ents-gate",
+ "ents-model",
+ "ents-testutil",
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-ref-store",
+ "proptest",
+ "rstest",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-testutil"
 version = "0.0.0"
 dependencies = [
