@@ -1,19 +1,31 @@
-//! An in-memory [`RefStoreRead`] implementation for fixtures.
+//! An in-memory [`RefStoreRead`] (and [`RefStore`]) implementation for
+//! fixtures.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use gix::refs::{FullName, FullNameRef};
 use gix_hash::ObjectId;
-use gix_ref_store::{RefIter, RefStoreRead, Result};
+use gix_ref_store::{Expected, RefEdit, RefIter, RefStore, RefStoreRead, Result, TxOutcome};
 
 /// An in-memory ref store: a name-to-oid map behind the same
 /// [`RefStoreRead`] trait production code consumes.
 ///
-/// Mutation happens through [`MemRefStore::set`] and
-/// [`MemRefStore::remove`] — deliberately *not* through the `RefStore`
-/// write half, because fixtures seed state directly; the CAS discipline
-/// itself is `gix-ref-store`'s to test.
+/// Fixture *seeding* goes through [`MemRefStore::set`] and
+/// [`MemRefStore::remove`] — deliberately bypassing compare-and-swap,
+/// because setup is not a transaction under test. [`MemRefStore`] also
+/// implements the real [`RefStore`] write half: a straightforward in-memory
+/// CAS transaction over the same map, checked against one consistent
+/// snapshot exactly per [`RefStore::transaction`]'s contract. This exists
+/// so a crate orchestrating *real* writes through the seam under test
+/// (`ents-receive`'s `receive`, and later `ents-sync`) has a fixture that
+/// can be written through `RefStore` itself, not only seeded directly —
+/// the CAS discipline a genuine backend must uphold under concurrent,
+/// racing writers (lock ordering, precondition-read races) stays
+/// `gix-ref-store`'s own [`gix_ref_store::LooseRefStore`] to test, via its
+/// conformance suite; this type's transaction is single-threaded-simple by
+/// construction (one `Mutex`; the whole batch runs under one lock
+/// acquisition).
 ///
 /// # Examples
 ///
@@ -118,5 +130,41 @@ impl RefStoreRead for MemRefStore {
             })
             .collect();
         Ok(RefIter::new(snapshot.into_iter()))
+    }
+}
+
+impl RefStore for MemRefStore {
+    /// Apply `edits` as one atomic compare-and-swap transaction: every
+    /// precondition is checked against the same locked snapshot, and
+    /// either every edit applies or none do, per [`RefStore::transaction`]'s
+    /// contract.
+    fn transaction(&self, edits: &[RefEdit]) -> Result<TxOutcome> {
+        let mut refs = self.locked();
+        for edit in edits {
+            let key = edit.name.as_bstr().to_string();
+            let current = refs.get(&key).copied();
+            let precondition_met = match edit.expected {
+                Expected::Any => true,
+                Expected::MustNotExist => current.is_none(),
+                Expected::MustExistAndMatch(oid) => current == Some(oid),
+            };
+            if !precondition_met {
+                return Ok(TxOutcome::Rejected {
+                    name: edit.name.clone(),
+                });
+            }
+        }
+        for edit in edits {
+            let key = edit.name.as_bstr().to_string();
+            match edit.new {
+                Some(oid) => {
+                    refs.insert(key, oid);
+                }
+                None => {
+                    refs.remove(&key);
+                }
+            }
+        }
+        Ok(TxOutcome::Applied)
     }
 }
