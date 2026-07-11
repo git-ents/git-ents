@@ -28,7 +28,7 @@ pub fn empty_tree(objects: &impl Write) -> ObjectId {
 }
 
 /// Serialize `entity` as its typed tree and land it on `refname` as a
-/// mutation commit carrying the `Ents-Ref:` trailer, signed by `signer`
+/// mutation commit carrying the `Advance-ref:` trailer, signed by `signer`
 /// when one is given. Parents come from `refname`'s current tip. Returns
 /// the new tip.
 ///

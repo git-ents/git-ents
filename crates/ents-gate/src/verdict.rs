@@ -27,7 +27,7 @@ pub enum Requirement {
     /// `gate.tip-signed`: the new tip must be signed by a member
     /// authorized for the refname.
     TipSigned,
-    /// `gate.refname-binding`: the commit's `Ents-Ref:` trailer must
+    /// `gate.refname-binding`: the commit's `Advance-ref:` trailer must
     /// match the refname being updated.
     RefnameBinding,
     /// `gate.fast-forward`: the new tip must descend from the old tip.
