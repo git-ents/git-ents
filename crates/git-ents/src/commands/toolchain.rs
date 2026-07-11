@@ -19,6 +19,23 @@ use crate::error::{Error, Result};
 use crate::mutate::{Identity, outcome_to_result, propose_entity};
 use crate::root::LocalRoot;
 
+/// `git ents toolchain list`: every toolchain name currently defined.
+///
+/// # Errors
+///
+/// Propagates a ref-store or object read failure.
+pub fn list(root: &LocalRoot) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in root.refs.iter_prefix("refs/meta/toolchains/")? {
+        let (name, _) = entry?;
+        let path = name.as_bstr().to_string();
+        if let Some(rest) = path.strip_prefix("refs/meta/toolchains/") {
+            out.push(rest.to_owned());
+        }
+    }
+    Ok(out)
+}
+
 /// `git ents toolchain import`: embed `bin` whole as toolchain `name`.
 ///
 /// # Errors

@@ -9,7 +9,7 @@
 
 use crate::cli::{
     AccountAction, Cli, CommentAction, EffectAction, HookAction, InboxAction, MembersAction,
-    ToolchainAction, Top,
+    RedactAction, ToolchainAction, Top,
 };
 use crate::commands;
 use crate::error::Result;
@@ -50,12 +50,7 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         Top::Toolchain { action } => run_toolchain(action, out),
         Top::Comment { action } => run_comment(action, out),
         Top::Inbox { action } => run_inbox(action, out),
-        Top::Redact { oid, reason, key } => {
-            let root = LocalRoot::discover(".")?;
-            commands::redact::run(&root, &oid, reason, key)?;
-            let _ = writeln!(out, "redacted {oid}");
-            Ok(())
-        }
+        Top::Redact { action } => run_redact(action, out),
         Top::Hook { action } => run_hook(action, out),
     }
 }
@@ -107,6 +102,11 @@ fn run_members(action: MembersAction, out: &mut impl std::io::Write) -> Result<(
 fn run_account(action: AccountAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
+        AccountAction::Show => {
+            let account = commands::account::show(&root)?;
+            let _ = writeln!(out, "member: {}", account.member);
+            let _ = writeln!(out, "login: {}", account.login);
+        }
         AccountAction::Create { member, login, key } => {
             commands::account::create(&root, member, login, key)?;
             let _ = writeln!(out, "account created");
@@ -157,6 +157,11 @@ fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()>
 fn run_toolchain(action: ToolchainAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
+        ToolchainAction::List => {
+            for name in commands::toolchain::list(&root)? {
+                let _ = writeln!(out, "{name}");
+            }
+        }
         ToolchainAction::Import { name, bin, key } => {
             commands::toolchain::import(&root, &name, &bin, key)?;
             let _ = writeln!(out, "imported {name}");
@@ -178,6 +183,11 @@ fn run_toolchain(action: ToolchainAction, out: &mut impl std::io::Write) -> Resu
 fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
+        CommentAction::List => {
+            for (id, comment) in commands::comment::list(&root)? {
+                let _ = writeln!(out, "{id}\t{}", comment.body);
+            }
+        }
         CommentAction::Add {
             path,
             body,
@@ -209,6 +219,22 @@ fn run_inbox(action: InboxAction, out: &mut impl std::io::Write) -> Result<()> {
         InboxAction::Adopt { entry, key } => {
             commands::inbox::adopt(&root, &entry, key)?;
             let _ = writeln!(out, "adopted {entry}");
+        }
+    }
+    Ok(())
+}
+
+fn run_redact(action: RedactAction, out: &mut impl std::io::Write) -> Result<()> {
+    let root = LocalRoot::discover(".")?;
+    match action {
+        RedactAction::List => {
+            for (id, redaction) in commands::redact::list(&root)? {
+                let _ = writeln!(out, "{id}\t{}", redaction.reason);
+            }
+        }
+        RedactAction::Add { oid, reason, key } => {
+            commands::redact::add(&root, &oid, reason, key)?;
+            let _ = writeln!(out, "redacted {oid}");
         }
     }
     Ok(())

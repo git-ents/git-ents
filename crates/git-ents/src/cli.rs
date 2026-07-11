@@ -95,21 +95,11 @@ pub enum Top {
         #[facet(args::subcommand)]
         action: InboxAction,
     },
-    /// Record that `oid` was redacted (`refs/meta/redactions/<id>`),
-    /// refusing any future push that would refill it
-    /// (`receive.redaction-ingest`). Admin-only: the gate's default
-    /// namespace-authorization arm requires admin-registered provenance
-    /// for `refs/meta/redactions/*`.
+    /// Manage redactions recorded at `refs/meta/redactions/<id>`.
     Redact {
-        /// The object id to redact.
-        #[facet(args::positional)]
-        oid: String,
-        /// A human-readable reason recorded alongside the redaction.
-        #[facet(args::named)]
-        reason: String,
-        /// Key to sign with; defaults to `user.signingkey`.
-        #[facet(args::named)]
-        key: Option<PathBuf>,
+        /// The redaction action to run.
+        #[facet(args::subcommand)]
+        action: RedactAction,
     },
     /// Plumbing invoked by git's own hooks on the single-node hosted root
     /// (`git.ents.cloud`) — not part of the porcelain surface a developer
@@ -181,6 +171,8 @@ pub enum MembersAction {
 #[derive(Facet)]
 #[repr(u8)]
 pub enum AccountAction {
+    /// Show this repository's account identity.
+    Show,
     /// Create or update this repository's account identity.
     Create {
         /// The member this account belongs to; defaults to the signer's
@@ -259,6 +251,8 @@ pub enum EffectAction {
 #[derive(Facet)]
 #[repr(u8)]
 pub enum ToolchainAction {
+    /// List the toolchains currently defined.
+    List,
     /// Import a local directory as toolchain `name`, embedding its
     /// contents whole (`ents_effect::Recipe::Embedded`).
     Import {
@@ -292,6 +286,8 @@ pub enum ToolchainAction {
 #[derive(Facet)]
 #[repr(u8)]
 pub enum CommentAction {
+    /// List the comments recorded in this repository.
+    List,
     /// Anchor a comment to a file at a revision.
     Add {
         /// Repository-relative path of the file the comment anchors to.
@@ -339,6 +335,30 @@ pub enum InboxAction {
         entry: String,
         /// Key to sign the adoption merge with; defaults to
         /// `user.signingkey`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
+}
+
+/// `git ents redact` actions.
+#[derive(Facet)]
+#[repr(u8)]
+pub enum RedactAction {
+    /// List the redactions recorded in this repository.
+    List,
+    /// Record that `oid` was redacted (`refs/meta/redactions/<id>`),
+    /// refusing any future push that would refill it
+    /// (`receive.redaction-ingest`). Admin-only: the gate's default
+    /// namespace-authorization arm requires admin-registered provenance
+    /// for `refs/meta/redactions/*`.
+    Add {
+        /// The object id to redact.
+        #[facet(args::positional)]
+        oid: String,
+        /// A human-readable reason recorded alongside the redaction.
+        #[facet(args::named)]
+        reason: String,
+        /// Key to sign with; defaults to `user.signingkey`.
         #[facet(args::named)]
         key: Option<PathBuf>,
     },

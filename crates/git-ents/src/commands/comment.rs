@@ -12,6 +12,27 @@ use crate::error::{Error, Result};
 use crate::mutate::{Identity, outcome_to_result, propose_entity};
 use crate::root::LocalRoot;
 
+/// `git ents comment list`: every comment recorded in this repository.
+///
+/// # Errors
+///
+/// Propagates a ref-store or object read failure.
+pub fn list(root: &LocalRoot) -> Result<Vec<(String, Comment)>> {
+    let mut out = Vec::new();
+    for entry in root.refs.iter_prefix("refs/meta/comments/")? {
+        let (name, tip) = entry?;
+        let path = name.as_bstr().to_string();
+        let Some(id) = path.strip_prefix("refs/meta/comments/") else {
+            continue;
+        };
+        let tree = super::commit_tree(&root.objects, tip)?;
+        if let Ok(comment) = facet_git_tree::deserialize::<Comment>(&tree, &root.objects) {
+            out.push((id.to_owned(), comment));
+        }
+    }
+    Ok(out)
+}
+
 /// `git ents comment add`: anchor `body` to `path` (optionally `lines`) at
 /// `rev`.
 ///

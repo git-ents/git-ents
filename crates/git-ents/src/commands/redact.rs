@@ -3,13 +3,35 @@
 //! (`receive.redaction-ingest`).
 
 use ents_model::{Redaction, namespace};
+use gix_ref_store::RefStoreRead;
 
 use super::{actor, signer};
 use crate::error::{Error, Result};
 use crate::mutate::{Identity, outcome_to_result, propose_entity};
 use crate::root::LocalRoot;
 
-/// Run `git ents redact <oid> --reason ...`.
+/// `git ents redact list`: every redaction recorded in this repository.
+///
+/// # Errors
+///
+/// Propagates a ref-store or object read failure.
+pub fn list(root: &LocalRoot) -> Result<Vec<(String, Redaction)>> {
+    let mut out = Vec::new();
+    for entry in root.refs.iter_prefix("refs/meta/redactions/")? {
+        let (name, tip) = entry?;
+        let path = name.as_bstr().to_string();
+        let Some(id) = path.strip_prefix("refs/meta/redactions/") else {
+            continue;
+        };
+        let tree = super::commit_tree(&root.objects, tip)?;
+        if let Ok(redaction) = facet_git_tree::deserialize::<Redaction>(&tree, &root.objects) {
+            out.push((id.to_owned(), redaction));
+        }
+    }
+    Ok(out)
+}
+
+/// Run `git ents redact add <oid> --reason ...`.
 ///
 /// The record lands at `refs/meta/redactions/<id>`; the gate's default
 /// namespace-authorization arm requires admin-registered provenance for
@@ -21,7 +43,7 @@ use crate::root::LocalRoot;
 ///
 /// [`Error::InvalidArgument`] if `oid` does not parse as an object id;
 /// otherwise see [`crate::mutate::outcome_to_result`].
-pub fn run(
+pub fn add(
     root: &LocalRoot,
     oid: &str,
     reason: String,

@@ -2,11 +2,39 @@
 //! fixed `refs/meta/account` ref (`model.account`).
 
 use ents_model::{Account, MemberId, namespace};
+use gix_ref_store::RefStoreRead;
 
 use super::{actor, signer};
 use crate::error::{Error, Result};
 use crate::mutate::{Identity, outcome_to_result, propose_entity};
 use crate::root::LocalRoot;
+
+/// `git ents account show`: this repository's account identity.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if no account has been created yet
+/// (`git ents account create` first).
+pub fn show(root: &LocalRoot) -> Result<Account> {
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_in_result,
+        reason = "ACCOUNT_REF is a fixed, compile-time-known-valid refname literal"
+    )]
+    let name: gix::refs::FullName = namespace::ACCOUNT_REF
+        .try_into()
+        .expect("fixed, valid refname");
+    let Some(tip) = root.refs.get(name.as_ref())? else {
+        return Err(Error::NotFound {
+            what: "account".to_owned(),
+        });
+    };
+    let tree = super::commit_tree(&root.objects, tip)?;
+    Ok(facet_git_tree::deserialize::<Account>(
+        &tree,
+        &root.objects,
+    )?)
+}
 
 /// Run `git ents account create`.
 ///
