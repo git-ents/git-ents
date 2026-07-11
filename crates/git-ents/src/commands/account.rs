@@ -50,12 +50,12 @@ pub fn create(
     login: String,
     key: Option<std::path::PathBuf>,
 ) -> Result<()> {
-    let signer = signer(root, key)?;
+    let signer = signer(root, key.clone())?;
     let member_id = match member {
         Some(username) => MemberId::new(username),
         None => {
             let (username, _) =
-                super::members::check(root, None)?.ok_or_else(|| Error::NotFound {
+                super::members::check(root, key)?.ok_or_else(|| Error::NotFound {
                     what: "member for the current signing key".to_owned(),
                 })?;
             MemberId::new(username)
