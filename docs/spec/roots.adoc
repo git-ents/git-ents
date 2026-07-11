@@ -31,6 +31,27 @@ watching refs; the queue is the only component this root skips
 (<<effect.local-run>>).
 --
 
+[role="requirement", id="roots.single-node-hosted"]
+.git-ents Single-Node Hosted Root
+--
+The `git-ents` binary's second composition root (the CLI-complete
+milestone deployed at `git.ents.cloud`) MUST wire: a loose-ref `RefStore`,
+a real on-disk object database, an in-memory `EventSink` scoped to one
+hook invocation and reconciled at boot (<<receive.reconstructible>>), a
+Fly.io Sprite `Executor`, and the mandatory gate (<<gate.mandatory-hosted>>).
+Unlike <<roots.local>>, git's own `receive-pack` is the transport and
+performs the actual object unpack and ref update; this root's
+`pre-receive`/`post-receive` hooks call the gate and reconcile obligations
+around that write, never through this crate's own `RefStore::transaction`,
+to avoid a double-write race against `receive-pack`'s internal ref update.
+This is not <<roots.hosted>>: that root replaces the `RefStore` and object
+store themselves with Postgres and Tigris once scale forces `receive-pack`
+out entirely (<<roots.honesty-test>>); this root keeps a real on-disk
+repository and stock git as the one hosted and local serving transport
+until that phase — "stock git wearing the same gate everything else runs,
+not a bespoke protocol."
+--
+
 [role="requirement", id="roots.hosted"]
 .git-ents-server Hosted Root
 --
@@ -49,8 +70,9 @@ Wiring the Postgres `RefStore`, Tigris object store, and durable-queue
 `EventSink` (<<roots.hosted>>) as a new composition root MUST require
 zero modification to any library crate.
 This is the project's honesty test for the seam design: the proof is an
-actual production migration off the single-node hosted root, not a
-synthetic root built to demonstrate the seams.
+actual production migration off the single-node hosted root
+(<<roots.single-node-hosted>>), not a synthetic root built to demonstrate
+the seams.
 --
 
 [role="requirement", id="roots.config-isolation"]

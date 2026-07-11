@@ -180,3 +180,21 @@ closed: revoking every key MUST NOT reopen this self-admitting window.
 Closing "first push owns the repo" beyond this bootstrap admission is a
 hosted-deployment concern, deferred to <<roots.bootstrap>>.
 --
+
+[role="requirement", id="gate.epoch-bootstrap"]
+.Epoch Establishment Has No Assigned Trigger (Deferred)
+--
+<<gate.epoch>> defines what the epoch-setting commit to `refs/meta/config`
+must be, but no composition root or porcelain command is specified to
+produce one.
+A Mandatory-mode root (<<gate.mandatory-hosted>>, <<roots.single-node-hosted>>,
+<<roots.hosted>>) that never receives that commit runs with verification
+permanently off: every `refs/meta/*` push stays archival, indistinguishable
+from pre-epoch history, and the "abort before any ref is updated" guarantee
+never actually engages.
+A root establishing its own epoch as part of first boot — before any
+member exists to author a porcelain command — is the likely shape,
+mirroring this section's own self-admitting first enrollment, but this is
+chosen direction, not yet designed or enforced, the same acknowledged gap
+as <<gate.bootstrap>>.
+--

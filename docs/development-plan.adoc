@@ -152,11 +152,19 @@ the coverage dashboard is a later call.
 | Local root wiring (~50 lines) plus the real cost: subcommand surface
   and the `denyCurrentBranch=updateInstead` worktree edge. Headless — no
   `serve` subcommand yet (arrives Phase 7 with `ents-web`). Doubles as
-  the single-node hosted root: loose refs and a real odb on a Fly volume,
-  served behind git's own `receive-pack` — the same stock-git transport
-  Phase 0 bootstraps, now invoking `receive()` from a hook — with an
-  in-memory `EventSink` and a boot-time reconciliation scan, and the
-  Sprite executor, deployed at `git.ents.cloud`. Milestone: CLI-complete.
+  the single-node hosted root (`roots.single-node-hosted`): loose refs
+  and a real odb on a Fly volume, served behind git's own `receive-pack`
+  — the same stock-git transport Phase 0 bootstraps, now invoking the
+  gate from a hook — with an in-memory `EventSink` and a boot-time
+  reconciliation scan, and the Sprite executor, deployed at
+  `git.ents.cloud`. Milestone: CLI-complete. Two gaps ship unclosed,
+  neither assigned a phase: no porcelain command or root bootstrap sets
+  `refs/meta/config`'s verification epoch, so the hosted root's Mandatory
+  gate stays archival until one is designed (`gate.epoch-bootstrap`); and
+  `meta-ref.tip-invariant`'s generic escape-hatch display for an
+  unrecognized meta-ref, and anchor resolution, have no command anywhere
+  in this binary, despite `ents-model` (phase 2) forward-referencing them
+  to "the `git-ents` binary" by name.
 
 | `ents-web`
 | 7
@@ -211,7 +219,9 @@ the coverage dashboard is a later call.
 * *Phase 6 exit*: the CLI-complete milestone — every porcelain command
   green against the single-node hosted root; the boot-time
   reconciliation scan regenerates obligations correctly after a
-  `kill -9` of the in-memory queue.
+  `kill -9` of the in-memory queue. The two gaps this row's own notes
+  name (`gate.epoch-bootstrap`; `meta-ref.tip-invariant`'s missing
+  reader surface) are known exceptions, not silent ones.
 * *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
   Postgres/Tigris/durable-queue root, now served by `gix-receive` in
   place of git's own `receive-pack`, is wired as a new composition root

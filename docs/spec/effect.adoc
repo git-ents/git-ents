@@ -60,7 +60,8 @@ pair, materializing each of the effect's declared toolchains from
 effect's command inside a sandbox.
 Sandboxed execution MUST sit behind one `Executor` trait with multiple
 backends, selected only at a composition root (<<roots.local>>,
-<<roots.hosted>>), so no execution logic is duplicated per backend.
+<<roots.single-node-hosted>>, <<roots.hosted>>), so no execution logic is
+duplicated per backend.
 Host-direct execution, with no sandbox, MUST require an explicit
 `--unsandboxed` flag and MUST be available only locally, never on canonical
 hosted infrastructure.
