@@ -5,6 +5,7 @@ members = [
     "crates/ents-gate",
     "crates/ents-model",
     "crates/ents-query",
+    "crates/ents-receive",
     "crates/ents-testutil",
     "crates/gix-ref-store",
 ]
@@ -22,6 +23,7 @@ missing_docs = "warn"
 ents-gate = { path = "crates/ents-gate" }
 ents-model = { path = "crates/ents-model" }
 ents-query = { path = "crates/ents-query" }
+ents-receive = { path = "crates/ents-receive" }
 ents-testutil = { path = "crates/ents-testutil" }
 gix-ref-store = { path = "crates/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [

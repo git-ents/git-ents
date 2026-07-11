@@ -431,6 +431,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-receive"
+version = "0.0.0"
+dependencies = [
+ "ents-gate",
+ "ents-model",
+ "ents-query",
+ "ents-testutil",
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "gix-hash",
+ "gix-object",
+ "gix-ref-store",
+ "rstest",
+ "thiserror",
+]
+
+[[package]]
 name = "ents-testutil"
 version = "0.0.0"
 dependencies = [
