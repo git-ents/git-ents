@@ -24,7 +24,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
-use crate::executor::{Executor, RunOutput, RunStatus, SandboxInputs, activate};
+use crate::executor::{
+    Executor, RunOutput, SandboxInputs, activate, parse_exit_marker, wrap_exit_marker,
+};
 
 /// Where the workdir is unpacked inside the Sprite.
 pub const WORKDIR: &str = "/work";
@@ -270,7 +272,18 @@ impl SpriteExecutor {
     }
 }
 
+/// The in-Sprite script for one run: enter the synced workdir, run the
+/// activated command wrapped by [`wrap_exit_marker`]. A `cd` failure (the
+/// workdir sync silently lost) exits before the marker can print, so it
+/// surfaces as infrastructure, not as a recorded `fail` — the same
+/// discrimination the marker gives a dying transport
+/// (`effect.result-taxonomy`).
+fn run_script(activated: &str) -> String {
+    format!("cd {WORKDIR} || exit 70\n{}", wrap_exit_marker(activated))
+}
+
 impl Executor for SpriteExecutor {
+    // @relation(effect.result-taxonomy, scope=function)
     fn run(&self, inputs: &SandboxInputs<'_>) -> Result<RunOutput> {
         ensure_auth()?;
         ensure_sprite(&self.name)?;
@@ -283,10 +296,7 @@ impl Executor for SpriteExecutor {
             sandbox_dirs.push((toolchain_name.clone(), sandbox_dir));
         }
 
-        let script = format!(
-            "cd {WORKDIR} && {} 2>&1",
-            activate(inputs.command, &sandbox_dirs)
-        );
+        let script = run_script(&activate(inputs.command, &sandbox_dirs));
         let output = Command::new("sprite")
             .args(["exec", "-s", &self.name, "--", "sh", "-c", &script])
             .output()
@@ -294,13 +304,18 @@ impl Executor for SpriteExecutor {
                 program: "sprite".to_owned(),
                 detail: e.to_string(),
             })?;
-        let log = String::from_utf8_lossy(&output.stdout).into_owned();
-        let status = if output.status.success() {
-            RunStatus::Pass
-        } else {
-            RunStatus::Fail
-        };
-        Ok(RunOutput { status, log })
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // The marker, not `sprite exec`'s exit status, is the completion
+        // signal: the CLI exits nonzero for its own transport failures too,
+        // which must surface as an infrastructure error, never a recorded
+        // `fail` (`effect.result-taxonomy`).
+        parse_exit_marker(&stdout).ok_or_else(|| {
+            Error::Sandbox(format!(
+                "sprite exec did not complete the command (exit {:?}): {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        })
     }
 }
 
@@ -320,6 +335,17 @@ mod tests {
     // @relation(effect.execution, scope=function, role=Verifies)
     fn sprite_name_sanitizes_to_a_valid_shape(#[case] seed: &str, #[case] expected: &str) {
         assert_eq!(sprite_name(seed), expected);
+    }
+
+    #[rstest]
+    // @relation(effect.result-taxonomy, scope=function, role=Verifies)
+    fn run_script_gates_the_exit_marker_on_a_successful_cd() {
+        let script = run_script("cargo test");
+        // A failed cd exits before the marker can print, so a lost workdir
+        // sync surfaces as infrastructure, never as a recorded fail.
+        assert!(script.starts_with("cd /work || exit 70\n"));
+        assert!(script.contains(crate::executor::EXIT_MARKER));
+        assert!(script.contains("cargo test"));
     }
 
     #[rstest]

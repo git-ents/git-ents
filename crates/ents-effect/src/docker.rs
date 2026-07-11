@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
-use crate::executor::{Executor, RunOutput, RunStatus, SandboxInputs, activate};
+use crate::executor::{
+    Executor, RunOutput, SandboxInputs, activate, parse_exit_marker, wrap_exit_marker,
+};
 
 /// The minimal base image every effect runs in — no toolchain of its own;
 /// everything the command needs comes from the bind-mounted, host-exported
@@ -59,22 +61,23 @@ pub fn ensure_docker() -> Result<()> {
 /// Assemble `docker run`'s argv for one sandboxed run — pure, so the exact
 /// invocation is unit tested without a daemon. The command runs under
 /// `sh -c`, stderr folded into stdout so the captured recording is one
-/// interleaved stream.
+/// interleaved stream, wrapped by [`wrap_exit_marker`] so a completed
+/// command is distinguishable from a docker-side failure (`docker run`
+/// exits 125 when the daemon itself fails — never a result,
+/// `effect.result-taxonomy`).
 ///
 /// # Examples
 ///
 /// ```
 /// use ents_effect::docker::run_args;
+/// use ents_effect::executor::EXIT_MARKER;
 /// use std::path::Path;
 ///
 /// let args = run_args(Path::new("/tmp/s/work"), &[], "cargo test");
-/// assert_eq!(
-///     args,
-///     vec![
-///         "run", "--rm", "-v", "/tmp/s/work:/work", "-w", "/work",
-///         "debian:stable-slim", "sh", "-c", "cargo test 2>&1",
-///     ]
-/// );
+/// assert!(args.contains(&"/tmp/s/work:/work".to_owned()));
+/// assert!(args.contains(&"debian:stable-slim".to_owned()));
+/// let script = args.last().expect("has a script");
+/// assert!(script.contains("cargo test") && script.contains(EXIT_MARKER));
 /// ```
 #[must_use]
 pub fn run_args(workdir: &Path, toolchains: &[(String, PathBuf)], command: &str) -> Vec<String> {
@@ -99,7 +102,7 @@ pub fn run_args(workdir: &Path, toolchains: &[(String, PathBuf)], command: &str)
     args.push(IMAGE.to_owned());
     args.push("sh".to_owned());
     args.push("-c".to_owned());
-    args.push(format!("{} 2>&1", activate(command, &sandbox_dirs)));
+    args.push(wrap_exit_marker(&activate(command, &sandbox_dirs)));
     args
 }
 
@@ -109,6 +112,7 @@ pub fn run_args(workdir: &Path, toolchains: &[(String, PathBuf)], command: &str)
 pub struct DockerExecutor;
 
 impl Executor for DockerExecutor {
+    // @relation(effect.result-taxonomy, scope=function)
     fn run(&self, inputs: &SandboxInputs<'_>) -> Result<RunOutput> {
         ensure_docker()?;
         let args = run_args(inputs.workdir, inputs.toolchains, inputs.command);
@@ -119,13 +123,19 @@ impl Executor for DockerExecutor {
                 program: "docker".to_owned(),
                 detail: e.to_string(),
             })?;
-        let log = String::from_utf8_lossy(&output.stdout).into_owned();
-        let status = if output.status.success() {
-            RunStatus::Pass
-        } else {
-            RunStatus::Fail
-        };
-        Ok(RunOutput { status, log })
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // The marker, not docker's exit status, is the completion signal:
+        // `docker run` exits 125 for the daemon's own failures (unpullable
+        // image, bad mount, daemon dying mid-run), which must surface as an
+        // infrastructure error, never as a recorded `fail`
+        // (`effect.result-taxonomy`).
+        parse_exit_marker(&stdout).ok_or_else(|| {
+            Error::Sandbox(format!(
+                "docker run did not complete the command (exit {:?}): {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        })
     }
 }
 
@@ -144,17 +154,29 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "run",
-                "--rm",
-                "-v",
-                "/tmp/s/work:/work",
-                "-w",
-                "/work",
-                IMAGE,
-                "sh",
-                "-c",
-                "cargo test 2>&1",
+                "run".to_owned(),
+                "--rm".to_owned(),
+                "-v".to_owned(),
+                "/tmp/s/work:/work".to_owned(),
+                "-w".to_owned(),
+                "/work".to_owned(),
+                IMAGE.to_owned(),
+                "sh".to_owned(),
+                "-c".to_owned(),
+                wrap_exit_marker("cargo test"),
             ]
+        );
+    }
+
+    #[rstest]
+    // @relation(effect.result-taxonomy, scope=function, role=Verifies)
+    fn run_args_script_completes_with_the_exit_marker() {
+        let args = run_args(Path::new("/w"), &[], "true");
+        let script = args.last().expect("has a script");
+        assert!(
+            script.contains(crate::executor::EXIT_MARKER),
+            "without the marker, a docker-side failure (exit 125) would be \
+             indistinguishable from the command failing"
         );
     }
 
@@ -165,7 +187,7 @@ mod tests {
         let args = run_args(Path::new("/w"), &toolchains, "cargo test");
         assert!(args.contains(&"/cache/rust/bin:/toolchains/rust/bin:ro".to_owned()));
         let last = args.last().expect("has a command");
-        assert!(last.starts_with("export PATH=/toolchains/rust/bin:$PATH; cargo test"));
+        assert!(last.contains("export PATH=/toolchains/rust/bin:$PATH; cargo test"));
     }
 
     #[rstest]

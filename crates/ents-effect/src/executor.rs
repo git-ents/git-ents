@@ -124,8 +124,85 @@ pub fn activate(command: &str, dirs: &[(String, String)]) -> String {
     format!("export PATH={path}:$PATH; {command}")
 }
 
+/// The sentinel [`wrap_exit_marker`] appends after the wrapped command, so
+/// a CLI-driven backend can tell "the command completed and exited with
+/// this status" apart from "the CLI or its transport failed" — the
+/// distinction `effect.result-taxonomy` requires: a completed command's
+/// exit status is always a result, while an infrastructure failure must
+/// never be recorded as one.
+pub const EXIT_MARKER: &str = "__ENTS_EFFECT_EXIT=";
+
+/// Wrap `command` so its combined output ends with an [`EXIT_MARKER`] line
+/// carrying the command's own exit status, and the wrapping script itself
+/// always exits zero once the command has run to completion.
+///
+/// A backend that shells out to a CLI (`docker run`, `sprite exec`) cannot
+/// trust that CLI's exit status to be the command's: `docker run` exits
+/// 125 for the daemon's own failures, and a transport can die mid-stream
+/// and surface any status at all. With this wrapper, the marker's presence
+/// *is* the completion signal — present means the command ran and the
+/// marker carries its status ([`parse_exit_marker`]); absent means the
+/// sandbox never completed the run, which is [`crate::Error::Sandbox`],
+/// never a recorded result (`effect.result-taxonomy`).
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::executor::{EXIT_MARKER, wrap_exit_marker};
+///
+/// let script = wrap_exit_marker("cargo test");
+/// assert!(script.contains("cargo test"));
+/// assert!(script.contains(EXIT_MARKER));
+/// ```
+// @relation(effect.result-taxonomy, scope=function)
+#[must_use]
+pub fn wrap_exit_marker(command: &str) -> String {
+    format!("{{\n{command}\n}} 2>&1; printf '\\n{EXIT_MARKER}%s\\n' \"$?\"")
+}
+
+/// Read a completed run's status out of `log`, the combined output of a
+/// [`wrap_exit_marker`]-wrapped command: the last [`EXIT_MARKER`] line wins
+/// (a command may echo the marker itself; the wrapper's own line is always
+/// printed after it), and the marker line is stripped from the returned
+/// [`RunOutput::log`].
+///
+/// `None` means the marker never appeared — the sandbox did not complete
+/// the run, and the caller must report [`crate::Error::Sandbox`] rather
+/// than fabricate a `fail` (`effect.result-taxonomy`).
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::executor::{RunStatus, parse_exit_marker};
+///
+/// let done = parse_exit_marker("hello\n__ENTS_EFFECT_EXIT=0\n").expect("completed");
+/// assert_eq!(done.status, RunStatus::Pass);
+/// assert_eq!(done.log, "hello");
+///
+/// // No marker: the run never completed; this is not a result.
+/// assert!(parse_exit_marker("transport died").is_none());
+/// ```
+// @relation(effect.result-taxonomy, scope=function)
+#[must_use]
+pub fn parse_exit_marker(log: &str) -> Option<RunOutput> {
+    let idx = log.rfind(EXIT_MARKER)?;
+    let tail = log.get(idx.saturating_add(EXIT_MARKER.len())..)?;
+    let code: i32 = tail.lines().next()?.trim().parse().ok()?;
+    let cleaned = log.get(..idx).unwrap_or_default().trim_end().to_owned();
+    Some(RunOutput {
+        status: if code == 0 {
+            RunStatus::Pass
+        } else {
+            RunStatus::Fail
+        },
+        log: cleaned,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, reason = "unit test")]
+
     use rstest::rstest;
 
     use super::*;
@@ -147,5 +224,54 @@ mod tests {
     // @relation(effect.execution, scope=function, role=Verifies)
     fn activate_is_identity_with_no_toolchains() {
         assert_eq!(activate("run", &[]), "run");
+    }
+
+    #[rstest]
+    #[case::pass("out\n__ENTS_EFFECT_EXIT=0\n", Some((RunStatus::Pass, "out")))]
+    #[case::fail("out\n__ENTS_EFFECT_EXIT=1\n", Some((RunStatus::Fail, "out")))]
+    #[case::high_exit("__ENTS_EFFECT_EXIT=127\n", Some((RunStatus::Fail, "")))]
+    #[case::no_marker_is_not_a_result("transport died mid-stream", None)]
+    #[case::garbled_marker_is_not_a_result("__ENTS_EFFECT_EXIT=oops\n", None)]
+    #[case::empty("", None)]
+    // @relation(effect.result-taxonomy, scope=function, role=Verifies)
+    fn parse_exit_marker_separates_completion_from_infrastructure(
+        #[case] log: &str,
+        #[case] expected: Option<(RunStatus, &str)>,
+    ) {
+        let parsed = parse_exit_marker(log);
+        match expected {
+            Some((status, cleaned)) => {
+                let run = parsed.expect("marker present means the run completed");
+                assert_eq!(run.status, status);
+                assert_eq!(run.log, cleaned);
+            }
+            None => assert!(parsed.is_none(), "no marker must never become a result"),
+        }
+    }
+
+    #[rstest]
+    // @relation(effect.result-taxonomy, scope=function, role=Verifies)
+    fn parse_exit_marker_takes_the_last_marker_when_the_command_echoes_one() {
+        let log = "echoing __ENTS_EFFECT_EXIT=1 for fun\n__ENTS_EFFECT_EXIT=0\n";
+        let run = parse_exit_marker(log).expect("completed");
+        assert_eq!(run.status, RunStatus::Pass);
+    }
+
+    #[rstest]
+    // @relation(effect.result-taxonomy, scope=function, role=Verifies)
+    fn wrap_then_parse_round_trips_through_a_real_shell() {
+        for (command, expected) in [("true", RunStatus::Pass), ("false", RunStatus::Fail)] {
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(wrap_exit_marker(command))
+                .output()
+                .expect("sh runs");
+            // The wrapper itself exits zero once the command has run to
+            // completion, whatever the command's own status was.
+            assert!(output.status.success());
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let run = parse_exit_marker(&stdout).expect("completed");
+            assert_eq!(run.status, expected, "command {command:?}");
+        }
     }
 }
