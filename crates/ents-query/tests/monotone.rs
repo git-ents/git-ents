@@ -3,8 +3,12 @@
 //! synthetic ref histories — advances, force-pushes, deletions, result
 //! recordings — checked after every transition against an independent
 //! naive oracle. The evaluator's incremental entry set must equal the
-//! oracle's `full(after) − full(before)` for every query, every time;
-//! the work set must equal the entry set minus recorded prefixes.
+//! oracle's `full(after) − full(before)` for every query whose static
+//! footprint the transitioned ref touches, and the empty set otherwise
+//! (`query.footprint`, `query.results`): a `results()` atom's entry set
+//! cannot be moved by an unrelated ref's reachability, only by its own
+//! results refs. The work set must equal the entry set minus recorded
+//! prefixes.
 
 #![expect(
     clippy::expect_used,
@@ -184,6 +188,29 @@ const QUERIES: [&str; 5] = [
     "rev(refs/heads/main) | rev(refs/heads/dev)",
 ];
 
+/// Each of the five queries' static ref-footprint (`query.footprint`),
+/// hand-written independently of `Query::footprint` — this is what the
+/// oracle checks against, not a call into the thing under test.
+///
+/// A `results()` atom's footprint is its own results namespace, nothing
+/// else (`query.results`): a transition outside a query's footprint,
+/// such as deleting and recreating an unrelated branch, is a non-event
+/// for that query's entry set, even though it can change which commits
+/// `oracle`'s shared reachable-universe helper currently sees (a
+/// reconciliation-grade concern the diff below must not leak into
+/// incremental entry).
+fn footprint_touches(query_index: usize, moved: &str) -> bool {
+    let results_of = |effect: &str| moved.starts_with(&format!("refs/meta/results/{effect}/"));
+    match query_index {
+        0 => moved == "refs/heads/main",
+        1 => moved.starts_with("refs/heads/"),
+        2 => moved == "refs/heads/main" || results_of("unit"),
+        3 => results_of("unit") || results_of("integ"),
+        4 => moved == "refs/heads/main" || moved == "refs/heads/dev",
+        _ => unreachable!("five queries"),
+    }
+}
+
 // ---------------------------------------------------------------------
 // The property.
 // ---------------------------------------------------------------------
@@ -191,7 +218,7 @@ const QUERIES: [&str; 5] = [
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
-    // @relation(query.monotone, query.incremental, query.set-ops, query.workset, scope=function, role=Verifies)
+    // @relation(query.monotone, query.incremental, query.set-ops, query.workset, query.footprint, query.results, scope=function, role=Verifies)
     #[test]
     fn entry_sets_equal_the_oracle_diff_over_random_histories(
         ops in proptest::collection::vec(op_strategy(), 1..14)
@@ -265,10 +292,16 @@ proptest! {
                 let full_before = oracle(&objects, &before, index);
                 let full_after = oracle(&objects, &after, index);
 
-                // Incremental entry == full(after) − full(before):
-                // entry-only, no retraction, no full re-evaluation.
+                // Incremental entry == full(after) − full(before), but
+                // only within the query's own footprint; a transition
+                // outside it is a non-event no matter what the raw diff
+                // of two full evaluations would suggest.
                 let expected: std::collections::BTreeSet<ObjectId> =
-                    full_after.difference(&full_before).copied().collect();
+                    if footprint_touches(index, &moved) {
+                        full_after.difference(&full_before).copied().collect()
+                    } else {
+                        std::collections::BTreeSet::new()
+                    };
                 let entered = evaluator
                     .entry_set(query, &transition)
                     .expect("evaluates");
