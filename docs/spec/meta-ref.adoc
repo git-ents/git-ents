@@ -79,7 +79,7 @@ a version-marker entry.
 Ref-level metadata that is not entity content MUST live in the mutation
 commit's trailers, never inside the tree (<<meta-ref.typed-tree>>).
 Two trailers are reserved: `Schema-Version:`, for explicit encoding
-detection if it is ever needed, and `Ents-Ref:`, for binding the commit
+detection if it is ever needed, and `Advance-ref:`, for binding the commit
 to the refname it was authored for.
 --
 

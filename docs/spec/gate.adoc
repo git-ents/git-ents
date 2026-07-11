@@ -21,7 +21,7 @@ whoever ran the server.
 [role="requirement", id="gate.refname-binding"]
 .Refname Binding
 --
-The commit's `Ents-Ref:` trailer MUST match the refname being updated.
+The commit's `Advance-ref:` trailer MUST match the refname being updated.
 Without this check a signed commit could be replayed as the tip of a
 different meta-ref than the one its author signed for.
 --
