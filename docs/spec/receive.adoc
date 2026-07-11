@@ -15,6 +15,15 @@ through which a meta-ref or branch ref is mutated.
 Gate evaluation (<<gate.tip-signed>> through <<gate.atomic-cas>>), effect
 matching, and enqueue MUST live inside `receive`, above its trait
 parameters, never duplicated in a caller.
+This requirement governs origination — proposing new state to a store.
+Replicating refs a trusted remote has already admitted through its own
+`receive` (<<sync.forge-transfer>>) MAY apply them directly: the source's
+gate already judged that state, so re-verification on fetch is an opt-in
+audit rather than an obligation, and the work set stays reconstructible
+by scan regardless (<<receive.reconstructible>>).
+Commits the replicating machinery authors itself — divergence and
+adoption merges (<<gate.same-actor-divergence>>, <<gate.adoption-merge>>)
+— are origination, not replication.
 --
 
 [role="requirement", id="receive.proposal-shape"]
