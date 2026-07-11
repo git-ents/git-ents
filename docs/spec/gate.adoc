@@ -115,6 +115,11 @@ Every advisory call site (<<gate.advisory-local>>, <<sync.pre-flight>>)
 MUST render this reason to the user — for example, "your signing key is
 not authorized for `refs/heads/main`" — so a negative verdict is
 actionable before a push is ever attempted.
+This guarantee is scoped to `refs/meta/*`: the enumerated requirements
+never fire against `refs/heads/*` (<<gate.principled-split>>), whose own
+authorization mechanism is not yet specified
+(<<gate.branch-acl-undefined>>), so the illustrative refname above is
+aspirational until that mechanism exists.
 --
 
 === Adoption
@@ -166,6 +171,25 @@ meta-ref granularity rule guarantees.
 On `refs/heads/*`, pushing commits the pusher did not author is legitimate,
 so branch refs MUST keep transport-level authorization instead of the tip
 invariant.
+--
+
+[role="requirement", id="gate.branch-acl-undefined"]
+.Branch-Ref Transport Authorization Is Unspecified (Deferred)
+--
+<<gate.principled-split>> requires `refs/heads/*` to keep transport-level
+authorization instead of the tip invariant, but no document in this spec
+defines that mechanism: what evidence it consults, where its policy lives,
+or how a verdict is derived from it.
+`receive.proposal-shape`'s connection-level ACL input for `refs/heads/*`
+MUST therefore be threaded through uninterpreted — never substituted for
+the tip invariant on a `refs/meta/*` update, which remains fully specified
+— until a future spec addition defines this policy.
+No advisory call site (<<gate.advisory-local>>, <<sync.pre-flight>>) MAY
+render a `refs/heads/*` verdict in the meantime; the illustrative
+verdict-reason examples in this file and `roots.adoc` describe tip-invariant
+predictions against meta-refs only.
+This direction is chosen but not yet designed, the same acknowledged gap
+as <<gate.bootstrap>>.
 --
 
 === Bootstrap

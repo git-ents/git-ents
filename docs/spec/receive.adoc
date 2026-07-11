@@ -32,6 +32,9 @@ This transport-auth evidence is a connection-level ACL input for
 `refs/heads/*` (<<gate.principled-split>>) only; gate evaluation for
 meta-ref admission MUST ignore it entirely and MUST NOT consult it in
 place of the tip invariant (<<gate.signature-artifact>>).
+No policy for that `refs/heads/*` ACL input is specified yet
+(<<gate.branch-acl-undefined>>); `receive` MUST thread the evidence
+through uninterpreted until one is.
 --
 
 [role="requirement", id="receive.shared-path"]
@@ -132,8 +135,15 @@ single refname glob `refs/meta/redactions/*`, mirroring
 `receive` MUST check every incoming object against the redaction list
 recorded under `refs/meta/redactions/*` at ingest time, so a redacted hole
 cannot be silently refilled by re-pushing the same bytes.
+This binds new admission only: for an object redacted after it was already
+accepted, `receive` refusing future pushes of the same bytes does not by
+itself withhold the bytes already sitting in the object store.
 A redacted object's bytes MUST be withheld from the object store and from
 every generated pack; the oid MUST remain in history as evidence.
+Guaranteeing this for bytes already stored before their redaction is not
+`receive`'s job — it belongs to whichever component actually generates
+outgoing packs, which is not yet specified for every root
+(<<roots.redaction-pack-serving>>).
 A reader resolving a redacted object MUST receive a redaction marker,
 never an error.
 --

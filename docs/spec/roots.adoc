@@ -114,6 +114,11 @@ Nothing was ever blocked locally: every verdict is a prediction of the
 gate, evaluated against policy as of Joey's last fetch
 (<<gate.policy-as-state>>), rendered by the same in-process signing
 this section specifies — never a separate git-serving transport.
+The `refs/heads/main` case is aspirational as stated: it is a
+transport-level check, not the tip invariant (<<gate.principled-split>>),
+and this spec does not yet define that mechanism
+(<<gate.branch-acl-undefined>>), so the local UI has no policy to predict
+against for it today.
 ====
 
 [role="requirement", id="roots.worktree-update"]
@@ -169,6 +174,27 @@ any signed push exists, which leaves "first push owns the repo" open per
 repository (<<gate.bootstrap>>).
 Closing it MUST require a server-level key-to-account registry gating
 repository creation; this direction is chosen but not yet enforced.
+--
+
+[role="requirement", id="roots.redaction-pack-serving"]
+.Outgoing Pack Serving Ignores Redaction (Deferred)
+--
+Every composition root through the single-node hosted root
+(<<roots.local>>, <<roots.hosted>>) serves fetches and clones via stock
+git's own `upload-pack` acting directly on a real on-disk object
+database, which has no knowledge of `refs/meta/redactions/*` and will
+serve a redacted object's bytes to any fetch if they are already
+reachable in that odb.
+`receive`'s ingest-time check (<<receive.redaction-ingest>>) only
+refuses a redacted hole being refilled by a new push; it cannot evict
+bytes already stored before the redaction record existed, nor bytes a
+fetch already served.
+`gix-receive` (<<roots.honesty-test>>) replaces only incoming pack
+ingestion at the scale-out root; nothing in this design wraps outgoing
+pack generation for any root.
+Making pack generation redaction-aware, or otherwise physically evicting
+redacted bytes from an on-disk repository, is chosen direction but not
+yet designed.
 --
 
 [role="requirement", id="roots.embeddable"]

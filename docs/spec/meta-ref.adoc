@@ -41,8 +41,17 @@ into a view rather than depending on a shared, contended one.
 [role="requirement", id="meta-ref.inbox"]
 .Inbox and Self-Run Namespaces
 --
-`refs/meta/inbox/*` MUST hold entities authored by someone not authorized
-for the corresponding canonical ref, awaiting adoption.
+`refs/meta/inbox/<member>/<canonical-suffix>` MUST hold entities authored
+by someone not authorized for the corresponding canonical ref, awaiting
+adoption.
+`<canonical-suffix>` MUST be the corresponding canonical ref's entire path
+below `refs/meta/`, not a bare entity id: `refs/meta/issues/42` routes to
+`refs/meta/inbox/<member>/issues/42`, and a multi-segment canonical ref
+such as `refs/meta/results/<effect>/<short-oid>`
+(<<effect.results-writeback>>) routes to
+`refs/meta/inbox/<member>/results/<effect>/<short-oid>` in full — the
+namespace segment MUST be preserved so two different entity kinds can
+never collide under the same inbox id.
 `refs/meta/results/~<member>/<effect>/<short-oid>` MUST hold results a
 member produced on their own executor rather than a designated worker,
 mirroring the canonical results pattern (<<effect.results-writeback>>)
