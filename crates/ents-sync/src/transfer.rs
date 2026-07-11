@@ -16,15 +16,19 @@
 //! ref, so a rejected canonical push surfaces the inbox alternative instead
 //! (`sync.pre-flight`, `sync.inbox-routing`).
 //!
-//! One known tension, deliberate at this phase: both directions advance the
-//! destination ref through [`RefStore::transaction`] directly, while
-//! `receive.unit` names `receive()` as the sole entry point through which a
-//! ref is mutated. The destination seam here is stand-in plumbing until the
-//! remote side is receive-backed — the hosted hook that calls `receive()`
-//! arrives with the phase-6 single-node root, and the local write path is
-//! already `ents-receive`'s — so until then no redaction ingest or effect
-//! enqueue happens on a transfer destination beyond what the boot-time
-//! reconciliation scan (`receive.reconstructible`) later recovers.
+//! Both directions advance the destination ref through
+//! [`RefStore::transaction`] directly rather than through `receive()`,
+//! which `receive.unit` scopes to *origination*. [`fetch`] is
+//! *replication*: every ref it lands was already admitted by the source's
+//! own `receive`, so re-verification here is an opt-in audit, not an
+//! obligation, and effect obligations for arrived refs are recovered by
+//! the boot-time reconciliation scan (`receive.reconstructible`). The
+//! merges the machinery authors itself are origination and go through the
+//! gate ([`crate::resolve`]). [`push`]'s destination side alone is
+//! stand-in plumbing: pushing *is* origination at the destination, whose
+//! own `receive()` — the hosted hook of the phase-6 single-node root —
+//! does not exist yet; until it does, pre-flight is the judgment a push
+//! destination gets.
 
 use ents_gate::Update;
 use ents_model::MemberId;
