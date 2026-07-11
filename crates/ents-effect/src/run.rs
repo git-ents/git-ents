@@ -100,11 +100,13 @@ fn resolve_toolchains(
 /// `results_ref` is the caller's choice (`effect.self-run`,
 /// `effect.official`): the canonical results ref for a designated worker,
 /// or a self-run mirror for any other member. `scratch` holds the
-/// per-run, never-cached tree checkout (a Docker container is thrown away
-/// per run; a Sprite's `sync_dir` re-syncs it every time
-/// too, so nothing here needs it to survive); `toolchain_cache` holds the
-/// extract-once toolchain cache [`crate::toolchain::materialize`] shares
-/// across runs.
+/// per-run, never-cached tree checkout — the per-commit workdir under it
+/// is wiped and re-checked-out on every run, so a re-run over a persistent
+/// scratch directory never inherits a previous run's artifacts (a Docker
+/// container is thrown away per run; a Sprite's `sync_dir` re-syncs it
+/// every time too, so nothing here needs it to survive).
+/// `toolchain_cache` holds the extract-once toolchain cache
+/// [`crate::toolchain::materialize`] shares across runs.
 ///
 /// # Errors
 ///
@@ -169,7 +171,16 @@ pub fn run_one(
 ) -> Result<Outcome> {
     let toolchains = resolve_toolchains(refs, objects, effect, toolchain_cache)?;
 
+    // A fresh checkout per run: over a persistent scratch directory, a
+    // re-run of the same commit must not inherit the previous run's
+    // artifacts (build output, files the last command left behind).
     let workdir = scratch.join(oid.to_string());
+    if workdir.exists() {
+        std::fs::remove_dir_all(&workdir).map_err(|source| Error::Io {
+            path: workdir.clone(),
+            source,
+        })?;
+    }
     std::fs::create_dir_all(&workdir).map_err(|source| Error::Io {
         path: workdir.clone(),
         source,
@@ -576,6 +587,59 @@ mod tests {
             outstanding.into_iter().collect::<Vec<_>>(),
             vec![oid],
             "only the failed commit is still owed a result"
+        );
+    }
+
+    #[rstest]
+    // @relation(effect.local-run, scope=function, role=Verifies)
+    fn run_one_wipes_a_reused_workdir_before_checkout() {
+        let refs = MemRefStore::default();
+        let objects = ObjectStore::default();
+        let worker = Keypair::from_seed(1);
+        enroll_member(
+            &refs,
+            &objects,
+            "worker",
+            &worker,
+            Provenance::AdminRegistered,
+            100,
+        );
+        let commits = advance_ref(&refs, &objects, "refs/heads/main", 1, 200);
+        let first = *commits.first().expect("advance_ref produced a commit");
+
+        let effect = Effect {
+            trigger: "rev(refs/heads/main)".into(),
+            toolchains: vec![],
+            run: "true".into(),
+        };
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let cache = tempfile::tempdir().expect("tempdir");
+
+        // A previous run over the same persistent scratch left artifacts
+        // in this commit's workdir.
+        let workdir = scratch.path().join(first.to_string());
+        std::fs::create_dir_all(&workdir).expect("mkdir");
+        std::fs::write(workdir.join("stale-artifact.txt"), b"left behind").expect("write");
+
+        run_one(
+            &refs,
+            &objects,
+            &NullEventSink,
+            &AlwaysPass,
+            scratch.path(),
+            cache.path(),
+            first,
+            &effect,
+            namespace::result_ref("unit", &short_oid(first)).expect("valid"),
+            &author(),
+            |p| worker.sign(p),
+            Mode::Advisory,
+        )
+        .expect("runs");
+
+        assert!(
+            !workdir.join("stale-artifact.txt").exists(),
+            "a re-run must not inherit the previous run's artifacts"
         );
     }
 }
