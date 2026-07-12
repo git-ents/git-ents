@@ -275,6 +275,53 @@ async fn repo_header_names_the_served_repo_and_its_head_branch() {
     );
 }
 
+/// `roots.web-agnostic`: the overview (`GET /`) renders the served
+/// repository's `README` as HTML in its main column and a language
+/// breakdown of the `HEAD` tree in its aside -- both read off `state.path`
+/// with `gix`, so the dashboard reflects real repository content, not just
+/// the meta-ref counts.
+#[tokio::test]
+async fn dashboard_renders_the_readme_and_a_languages_card() {
+    let dir = seed_repo(&[
+        ("README.md", "# Welcome\n\nThe project overview.\n"),
+        ("src/main.rs", "fn main() {}\n"),
+        ("src/lib.rs", "pub fn f() {}\n"),
+    ]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(
+        body.contains("class=\"overview\""),
+        "the overview grid renders"
+    );
+    assert!(
+        body.contains("<h1>Welcome</h1>"),
+        "the README renders as HTML, not raw markdown"
+    );
+    assert!(
+        body.contains("lang-bar") && body.contains("Rust"),
+        "the language breakdown names the tree's languages"
+    );
+}
+
 /// `roots.web-session`: a state-changing request with no CSRF token at
 /// all is a bad request (axum's own `Form` rejection); one with the wrong
 /// token is refused by this crate's own check; the session cookie a `GET`

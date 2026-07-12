@@ -113,6 +113,34 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .card-row a.row-link { display: flex; align-items: center; gap: .65rem; text-decoration: none; }
 .card-row:has(.row-link):hover { background: var(--color-code-bg); }
 
+/* Repository overview (`GET /`): the rendered README beside a sticky aside
+ * of a contents rail and a language breakdown (pre-redo:.../style.css's
+ * `.overview`/`.aside`/`.lang`). */
+.overview { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 34px; align-items: start; }
+.aside { position: sticky; top: 78px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.aside .card { margin-bottom: 0; }
+.aside-row { display: flex; align-items: center; gap: .5rem; padding: .55rem 1.1rem; font-size: .82rem; }
+.aside-row + .aside-row { border-top: 1px solid var(--color-border); }
+.aside-row a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
+.aside-row a:hover { color: var(--color-accent); }
+.aside-row .count { margin-left: auto; font-family: var(--font-mono); font-weight: 600; color: var(--color-accent); }
+.lang { padding: .8rem 1.1rem; }
+.lang-bar { display: flex; height: 8px; border-radius: var(--radius-pill); overflow: hidden; background: var(--color-code-bg); }
+.lang-bar span { display: block; height: 100%; }
+.lang-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.lang-legend { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; font-size: .78rem; }
+.lang-legend li { display: flex; align-items: center; gap: .45rem; }
+.lang-legend .pct { margin-left: auto; font-family: var(--font-mono); color: var(--color-text-muted); }
+.blankslate { text-align: center; padding: 3rem 1.5rem; }
+.blankslate h2 { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700; margin-bottom: .5rem; }
+.blankslate p { color: var(--color-text-muted); }
+.blankslate code { font-family: var(--font-mono); background: var(--color-code-bg); padding: .15rem .45rem; border-radius: 5px; font-size: .85rem; }
+
+@media (max-width: 900px) {
+  .overview { grid-template-columns: minmax(0, 1fr); }
+  .aside { position: static; }
+}
+
 /* The generic reflection-driven views (`crate::render`): a definition list
  * for one entity, a table for a list of entities, a plain list for bare
  * name lists (toolchains, inbox). */
