@@ -1,15 +1,15 @@
 /* Hand-rolled stylesheet, ported from the pre-redo web UI
  * (`pre-redo:crates/git-ents-server/src/web/style.css`) and reverified
  * against the markup `crate::pages::layout` and `crate::render` actually
- * emit. Dropped from the pre-redo sheet: syntax-highlight token consumers
- * (`.code .keyword` and friends -- no highlighter is ported, see
- * `crate::pages::files`), diff views (`.diff`, `--diff-add`/`--diff-del`),
- * the clone-URL copy button (`.copy-btn`, `.clone`), live-check output
+ * emit. The `--s-*` syntax-token variables and their `.code .keyword`-family
+ * consumers, and the `--diff-add`/`--diff-del` variables and `.diff`
+ * rules, are ported alongside `crate::pages::files`'s `arborium` highlighter
+ * and `crate::pages::commits`'s unified-diff view. Still dropped: the
+ * clone-URL copy button (`.copy-btn`, `.clone`), live-check output
  * (`.checks-grid`, `.status-*`, `.terminal-*`), and every chrome class for a
  * page family this crate does not have (releases, issues, settings,
- * account-strip sign-in). The `--s-*` syntax tokens are dropped with their
- * only consumers. The pre-redo brand type stack (DM Sans, IBM Plex Mono,
- * Lora, loaded from Google Fonts) is dropped in favor of system font
+ * account-strip sign-in). The pre-redo brand type stack (DM Sans, IBM Plex
+ * Mono, Lora, loaded from Google Fonts) is dropped in favor of system font
  * stacks, so this sheet never depends on a network fetch. Added beyond the
  * pre-redo sheet: `.meta-layout`/`.meta-rail` for the `meta` tab's
  * page-family rail (`crate::pages::META_SECTIONS`) and `.id-chip` for the
@@ -35,6 +35,16 @@
   --shadow-md: 0 4px 16px #0000000f;
   --radius-sm: 10px;
   --radius-pill: 100px;
+  --s-comment: #9c8f74;
+  --s-keyword: #9d0006;
+  --s-func: #427b58;
+  --s-type: #b57614;
+  --s-string: #79740e;
+  --s-const: #8f3f71;
+  --s-op: #7c6f57;
+  --s-prop: #076678;
+  --diff-add: #4e9a0622;
+  --diff-del: #cc241d22;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -50,6 +60,16 @@
     --color-accent-subtle: #d4a03012;
     --shadow-sm: 0 1px 3px #00000040;
     --shadow-md: 0 4px 16px #0000004d;
+    --s-comment: #928374;
+    --s-keyword: #fb4934;
+    --s-func: #8ec07c;
+    --s-type: #fabd2f;
+    --s-string: #b8bb26;
+    --s-const: #d3869b;
+    --s-op: #a89984;
+    --s-prop: #83a598;
+    --diff-add: #b8bb2620;
+    --diff-del: #fb493420;
   }
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -219,6 +239,30 @@ form button:hover { background: var(--color-link-hover); }
 .blob-code { overflow-x: auto; min-width: 0; }
 .blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
+
+/* Syntax-highlight token classes (`crate::pages::files::highlight`, `arborium`'s `HtmlFormat::ClassNames`). */
+.code .keyword, .code .macro, .code .tag { color: var(--s-keyword); }
+.code .function, .code .constructor { color: var(--s-func); }
+.code .type { color: var(--s-type); }
+.code .string { color: var(--s-string); }
+.code .number, .code .constant, .code .label { color: var(--s-const); }
+.code .comment { color: var(--s-comment); font-style: italic; }
+.code .operator, .code .punctuation { color: var(--s-op); }
+.code .property, .code .attribute { color: var(--s-prop); }
+.code .title { color: var(--s-keyword); font-weight: 700; }
+.code .strong { font-weight: 700; }
+.code .emphasis { font-style: italic; }
+.code .link, .code .url, .code .reference { color: var(--s-prop); text-decoration: underline; }
+.code .markup { color: var(--s-func); }
+
+/* Unified diffs (`crate::pages::commits::diff_view`). */
+.diff { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow-x: auto; margin-bottom: 1.5rem; font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; padding: .6rem 0; }
+.diff .ln { display: block; padding: 0 1rem; white-space: pre; }
+.diff .add { background: var(--diff-add); }
+.diff .del { background: var(--diff-del); }
+.diff .hunk { color: var(--s-prop); background: var(--color-code-bg); }
+.diff .meta { color: var(--color-text-muted); }
+.diff .file { color: var(--color-text); font-weight: 600; background: var(--color-code-bg); padding-top: .3rem; padding-bottom: .3rem; }
 
 /* Rendered Markdown/AsciiDoc documents (`crate::markdown`, `crate::asciidoc`). */
 .doc-body { padding: 40px 48px 52px; max-width: 44rem; overflow-wrap: break-word; }

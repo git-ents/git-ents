@@ -604,11 +604,47 @@ async fn files_root_lists_the_repository_root() {
     assert!(body.contains("src"));
 }
 
-/// `GET /files/<path>` on a plain-text blob renders a line-numbered,
-/// escaped `pre.blob-code` source view -- no syntax highlighting, and no
-/// unescaped source.
+/// `GET /files/<path>` on a plain-text blob with no recognized grammar
+/// renders a line-numbered, escaped `pre.blob-code` source view -- no
+/// syntax highlighting, and no unescaped source.
 #[tokio::test]
 async fn files_blob_view_renders_a_plain_text_file() {
+    let dir = seed_repo(&[("notes.txt", "true and 1 < 2\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/notes.txt")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("blob-nums"));
+    assert!(body.contains("<pre class=\"blob-code\"><code>"));
+    assert!(body.contains("1 &lt; 2"));
+}
+
+/// `GET /files/<path>` on a `.rs` blob renders syntax-highlighted source:
+/// `arborium`'s `HtmlFormat::ClassNames` spans, matched by
+/// `crate::assets::OVERRIDES`'s `.code .keyword`-family rules.
+#[tokio::test]
+async fn files_blob_view_syntax_highlights_a_rust_file() {
     let dir = seed_repo(&[("src/main.rs", "fn main() {\n    let ok = 1 < 2;\n}\n")]);
     let state = build_state_at(
         FixtureIdentity {
@@ -636,8 +672,8 @@ async fn files_blob_view_renders_a_plain_text_file() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("blob-nums"));
-    assert!(body.contains("<pre class=\"blob-code\"><code>"));
-    assert!(body.contains("1 &lt; 2"));
+    assert!(body.contains("class=\"code\""));
+    assert!(body.contains("class=\"keyword\""));
 }
 
 /// The `meta` tab restructure (`crate::pages::mod`'s own doc): `GET /meta`

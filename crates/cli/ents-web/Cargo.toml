@@ -9,6 +9,7 @@ license.workspace = true
 acdc-converters-core = { workspace = true }
 acdc-converters-html = { workspace = true }
 acdc-parser = { workspace = true }
+arborium = { workspace = true }
 ents-anchor = { workspace = true }
 ents-effect = { workspace = true }
 ents-forge = { workspace = true }

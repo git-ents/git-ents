@@ -2,11 +2,10 @@
 //! blob viewer over the `HEAD` tree of the repository `git ents serve` is
 //! serving. A `.md` blob renders via [`crate::markdown`], a
 //! `.adoc`/`.asciidoc`/`.asc`/`.adc` blob via [`crate::asciidoc`], and
-//! everything else as an escaped `<pre><code>` block -- no syntax
-//! highlighting is ported (`pre-redo:crates/git-ents-server/src/web/pages.rs`'s
-//! `arborium`-based `highlight` has no equivalent here; see
-//! `crate::assets::OVERRIDES`'s own doc for the rest of what pre-redo
-//! carried that this crate does not).
+//! everything else as a line-numbered source view, syntax-highlighted via
+//! [`arborium`] when its filename maps to a known grammar (ported from
+//! `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `highlight`;
+//! see [`highlight`]'s own doc), escaped plain text otherwise.
 //!
 //! Tree/blob reads go through `gix`'s high-level `Repository`/`Tree`/`Blob`
 //! types (`repo.head_tree()`, `Tree::lookup_entry_by_path`,
@@ -20,10 +19,11 @@
 
 use std::sync::Arc;
 
+use arborium::{Config, Highlighter, HtmlFormat};
 use axum::extract::{Path, State};
 use gix::bstr::ByteSlice as _;
 use gix_object::{Find, Write};
-use maud::{Markup, html};
+use maud::{Markup, PreEscaped, html};
 
 use crate::assets;
 use crate::error::{Error, Result};
@@ -253,13 +253,13 @@ fn is_binary(bytes: &[u8]) -> bool {
 
 /// A single blob's contents: a Markdown/AsciiDoc document rendered as such
 /// via [`crate::markdown`]/[`crate::asciidoc`], a binary-content
-/// placeholder, or a line-numbered, escaped source view of the raw text.
+/// placeholder, or a line-numbered source view of the raw text.
 ///
 /// The source view mirrors `pre-redo:crates/git-ents-server/src/web/pages.rs`'s
 /// `blob_body`: a `.blob` grid pairing a `pre.blob-nums` gutter of
-/// per-line `#L{n}` anchors with the escaped `pre.blob-code` code column
-/// (no syntax highlighting is ported, so the code stays a plain escaped
-/// `<code>` rather than pre-redo's highlighted spans).
+/// per-line `#L{n}` anchors with a `pre.blob-code` code column, highlighted
+/// via [`highlight`] when `name`'s grammar is known and falling back to a
+/// plain escaped `<code>` otherwise.
 ///
 /// # Errors
 ///
@@ -278,6 +278,7 @@ fn blob_view(name: &str, bytes: &[u8]) -> Result<Markup> {
         return Ok(html! { div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } } });
     }
     let lines = text.lines().count().max(1);
+    let highlighted = highlight(name, text);
     Ok(html! {
         div.blob {
             pre.blob-nums {
@@ -286,10 +287,35 @@ fn blob_view(name: &str, bytes: &[u8]) -> Result<Markup> {
                 }
             }
             pre.blob-code {
-                code { (text) }
+                @match highlighted {
+                    Some(html) => code.code { (PreEscaped(html)) },
+                    None => code { (text) },
+                }
             }
         }
     })
+}
+
+/// Highlighted HTML for `source`, or `None` when `name`'s extension names
+/// no grammar [`arborium::detect_language`] recognizes -- [`blob_view`]
+/// then falls back to escaped plain text. Ported from
+/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `highlight`,
+/// its `HtmlFormat::ClassNames` output matched by
+/// `crate::assets::OVERRIDES`'s `.code .keyword`-family rules.
+///
+/// The [`Highlighter`] is built and used entirely within this synchronous
+/// call -- its grammar store is not `Send`, so it must never be held
+/// across an `.await` (this function itself is never `async`, and neither
+/// is any caller between it and the request handler).
+fn highlight(name: &str, source: &str) -> Option<String> {
+    let language = arborium::detect_language(name)?;
+    let config = Config {
+        html_format: HtmlFormat::ClassNames,
+        ..Default::default()
+    };
+    Highlighter::with_config(config)
+        .highlight(language, source)
+        .ok()
 }
 
 #[cfg(test)]
@@ -352,12 +378,22 @@ mod tests {
 
     #[test]
     fn blob_view_escapes_plain_text_into_a_line_numbered_code_block() {
-        let rendered = blob_view("main.rs", b"fn main() { let x = 1 < 2; }")
+        let rendered = blob_view("notes.txt", b"1 < 2 and true")
             .expect("plain text renders")
             .into_string();
         assert!(rendered.contains("blob-nums"));
         assert!(rendered.contains("<pre class=\"blob-code\"><code>"));
         assert!(rendered.contains("1 &lt; 2"));
+    }
+
+    #[test]
+    fn blob_view_highlights_a_recognized_language_with_syntax_token_classes() {
+        let rendered = blob_view("main.rs", b"fn main() { let x = 1; }")
+            .expect("rust renders")
+            .into_string();
+        assert!(rendered.contains("blob-nums"));
+        assert!(rendered.contains("class=\"code\""));
+        assert!(rendered.contains("class=\"keyword\""));
     }
 
     #[test]
