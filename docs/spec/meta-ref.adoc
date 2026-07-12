@@ -28,8 +28,8 @@ authorization (refname-keyed rules gate who may advance it), and history
 --
 A meta-ref MUST hold exactly one independently-authored entity:
 `refs/meta/member/*`, `refs/meta/issues/*`, `refs/meta/comments/*`,
-`refs/meta/effects/*`, and `refs/meta/results/*` each decompose one ref
-per entity.
+`refs/meta/reviews/*`, `refs/meta/effects/*`, and `refs/meta/results/*`
+each decompose one ref per entity.
 Repository-global state with a single writer-of-record MUST instead live
 on one fixed ref, such as `refs/meta/account` or `refs/meta/config`.
 Entities that different actors write concurrently MUST NOT share a ref.

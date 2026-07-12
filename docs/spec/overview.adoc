@@ -157,10 +157,15 @@ implementation.
 | `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`, `ents-forge`,
 `ents-kiln`
 
+| `ents-lens`
+| The editor surface: comments projected over open buffers as a language
+server.
+| `ents-receive`, `ents-model`, `ents-anchor`, `ents-forge`
+
 | `git-ents` (bin)
 | Local composition root.
-| `ents-receive`, `ents-effect`, `ents-web`, `ents-anchor`, `ents-sync`,
-`gix-ref-store`
+| `ents-receive`, `ents-effect`, `ents-web`, `ents-lens`, `ents-anchor`,
+`ents-sync`, `gix-ref-store`
 
 | `git-ents-server` (bin)
 | Hosted composition root.

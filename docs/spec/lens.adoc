@@ -1,0 +1,101 @@
+== The Lens
+
+The editor is the third place a conversation surfaces, after the CLI and
+the web UI, and it earns no third mechanism: the lens is a language server
+that projects the same anchored comments (<<model.comment>>,
+<<anchor.projection>>) into whatever buffer the user is reading, and
+writes new ones through the same signed mutation path every other
+frontend uses.
+"Lens" is meant literally: it is a read-time view over `refs/meta/*`,
+owning no state of its own, so a comment left in an editor, on the web,
+or by an agent at the CLI is one and the same entity everywhere else.
+
+[role="requirement", id="lens.serve"]
+.The Lens Is a Frontend of the Local Root
+--
+`git ents lsp` MUST serve the Language Server Protocol over stdio,
+reusing the local composition root's wiring exactly as `git ents serve`
+does (<<roots.local>>), adding only the LSP frontend.
+It MUST NOT bind a network socket and MUST NOT add any git-serving
+transport.
+The lens crate MUST receive its signing identity by injection from the
+composition root, mirroring <<roots.web-agnostic>>: nothing in the crate
+may assume which editor, if any, is attached.
+--
+
+[role="requirement", id="lens.lenses"]
+.Comments Surface as Code Lenses
+--
+Every comment whose anchor projects onto an open document — including
+replies displayed through their thread root (<<model.comment-thread>>) —
+MUST surface as a code lens at its projected range, derived at request
+time via <<anchor.projection>> and never cached across mutations of the
+comment's ref.
+A lens MUST identify the comment, summarize its body, and offer the
+thread's operations — view, reply, resolve — as LSP commands that call
+the same library operations the CLI exposes (<<lens.parity>>).
+Comments whose state is not `open` (<<model.comment-state>>) MUST be
+omitted unless the client asks for them.
+--
+
+[role="requirement", id="lens.diagnostics"]
+.Diagnostics Mirror the Lenses
+--
+The same projected comments MUST also be published as hint-severity
+diagnostics, so clients that do not render code lenses still show the
+conversation inline.
+These diagnostics carry conversation, not judgment: they MUST NEVER use
+warning or error severity, and they MUST be suppressible by client
+configuration without affecting the lenses.
+--
+
+[role="requirement", id="lens.hover"]
+.Hover Shows the Thread
+--
+Hovering a projected comment's range MUST return the full thread —
+bodies, states, and authorship read from each ref's mutation commit
+chain (<<meta-ref.trailers>>) — rendered as markup, so the complete
+conversation is readable without leaving the buffer.
+--
+
+[role="requirement", id="lens.compose"]
+.Composing Uses the Editor-File Flow
+--
+Creating a comment from the editor MUST work through a file, the way git
+itself takes a commit message: a code action on the selection writes a
+template file under `.git/` naming the anchored path and lines, opens it
+in the editor via `window/showDocument`, and creating the comment happens
+when the user saves a non-empty body — lines starting with `#` ignored,
+an empty body aborting.
+This flow MUST require no client-specific extension: any LSP client that
+can execute a code action and open a file can compose a comment.
+A richer input surface (a popup, a webview) MAY be layered on by clients
+that have one, but it MUST be sugar over the same create operation, never
+a second mechanism.
+--
+
+[role="requirement", id="lens.working-tree"]
+.The Lens Reads and Writes the Working Tree
+--
+Projection targets for open documents MUST be the working tree
+(<<anchor.working-tree>>), with the client's in-memory buffer content
+standing in for on-disk bytes when they differ, re-projected on document
+change so ranges track unsaved edits.
+Comments composed from the editor MUST anchor to the working tree's
+content when it differs from `HEAD`, so a remark about uncommitted code
+anchors to exactly the bytes the author was reading.
+--
+
+[role="requirement", id="lens.parity"]
+.One Mechanism for Editors, Agents, and the Web
+--
+Every operation the lens offers — list projected onto the working tree,
+create, reply, resolve — MUST be the same library call the `git ents
+comment` porcelain exposes, so an agent addressing comments through the
+CLI, a human leaving them through an editor, and the web UI rendering
+them are three callers of one mechanism.
+The CLI listing MUST offer a machine-readable form covering id, state,
+projected location, and body, sufficient for an agent to enumerate and
+resolve every open comment in the working tree without any editor
+attached.
+--
