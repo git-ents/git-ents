@@ -36,3 +36,31 @@ proptest! {
         prop_assert_eq!(back, issue);
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    // @relation(meta-ref.typed-tree, model.comment, scope=function, role=Verifies)
+    #[test]
+    fn comment_round_trips_for_any_fields(
+        body in any::<String>(),
+        state in any::<String>(),
+        context in proptest::option::of(any::<String>()),
+        parent in proptest::option::of(any::<String>()),
+        anchored in any::<bool>(),
+    ) {
+        use ents_forge::comment::Comment;
+        use facet_git_tree::{ObjectStore, RawTree};
+        use gix_object::Write as _;
+
+        let store = ObjectStore::default();
+        let anchor = anchored.then(|| {
+            let tree = gix_object::Tree { entries: vec![] };
+            RawTree::new(store.write(&tree).expect("tree"))
+        });
+        let comment = Comment { body, state, anchor, context, parent };
+        let root = facet_git_tree::serialize_into(&comment, &store).expect("serialize");
+        let back: Comment = facet_git_tree::deserialize(&root, &store).expect("deserialize");
+        prop_assert_eq!(back, comment);
+    }
+}

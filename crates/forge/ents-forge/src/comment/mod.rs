@@ -9,5 +9,7 @@ mod command;
 mod entity;
 
 pub use cli::CommentAction;
-pub use command::{add, list, show};
+pub use command::{
+    ListFilter, Listed, NewComment, add, list, list_projected, reopen, reply, resolve, show, thread,
+};
 pub use entity::Comment;

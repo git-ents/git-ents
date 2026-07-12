@@ -17,17 +17,28 @@
 //!
 //! # Spec coverage
 //!
-//! From `docs/spec/model.sdoc` and `docs/spec/meta-ref.sdoc`:
+//! From `docs/spec/model.adoc` and `docs/spec/meta-ref.adoc`:
 //!
 //! - `model.issue` — [`Issue`].
-//! - `model.comment` — [`comment::Comment`].
+//! - `model.comment`, `model.comment-state`, `model.comment-context`,
+//!   `model.comment-thread` — [`comment::Comment`] and the command layer
+//!   around it ([`comment::add`], [`comment::reply`],
+//!   [`comment::resolve`]/[`comment::reopen`], [`comment::thread`]).
+//! - `meta-ref.migration` — pre-broadening comment trees still read back
+//!   through the legacy fallback, and any mutation rewrites them under
+//!   the current struct on top of the old tip.
 //! - `meta-ref.granularity` — one ref per issue/comment
 //!   (`refs/meta/issues/<id>`, `refs/meta/comments/<id>`); see
 //!   [`comment::add`] for how a comment's id is generated locally rather
 //!   than derived from the entity itself.
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.
-//! - `anchor.definition`, `anchor.projection` — [`comment::add`] and
-//!   [`comment::show`], built directly on `ents_anchor::capture`/`project`.
+//! - `anchor.definition`, `anchor.projection`, `anchor.working-tree` —
+//!   [`comment::add`], [`comment::show`], and [`comment::list_projected`],
+//!   built directly on `ents_anchor::capture`/`capture_worktree` and
+//!   `project`/`project_worktree`.
+//! - `lens.parity` — every operation the CLI, the web UI, or an editor
+//!   lens offers over these entities is one of this crate's library
+//!   functions; frontends only wire stores and render.
 //!
 //! # Examples
 //!
@@ -59,7 +70,10 @@
 //! let anchor_tree = store.write(&gix_object::Tree { entries: vec![] }).expect("tree");
 //! let comment = Comment {
 //!     body: "looks off by one".to_owned(),
-//!     anchor: RawTree::new(anchor_tree),
+//!     state: "open".to_owned(),
+//!     anchor: Some(RawTree::new(anchor_tree)),
+//!     context: Some("issues/42".to_owned()),
+//!     parent: None,
 //! };
 //! let root = facet_git_tree::serialize_into(&comment, &store).expect("serialize");
 //! let back: Comment = facet_git_tree::deserialize(&root, &store).expect("deserialize");

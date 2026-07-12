@@ -124,12 +124,13 @@ pub async fn show<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let (comment, anchor, projection) = comment::show(
+    let (comment, projected) = comment::show(
         state.refs.as_ref(),
         &*state.objects(),
         &state.path,
         &id,
         &query.rev,
+        false,
     )?;
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
@@ -138,9 +139,18 @@ where
         &id,
         html! {
             dl {
-                dt { "path" } dd { (anchor.path) }
-                dt { "lines" } dd { (format!("{:?}", anchor.lines)) }
-                dt { "projection at " (query.rev) } dd { (format!("{projection:?}")) }
+                dt { "state" } dd { (comment.state) }
+                @if let Some(context) = &comment.context {
+                    dt { "context" } dd { (context) }
+                }
+                @if let Some(parent) = &comment.parent {
+                    dt { "parent" } dd { (parent) }
+                }
+                @if let Some((anchor, projection)) = &projected {
+                    dt { "path" } dd { (anchor.path) }
+                    dt { "lines" } dd { (format!("{:?}", anchor.lines)) }
+                    dt { "projection at " (query.rev) } dd { (format!("{projection:?}")) }
+                }
                 dt { "body" } dd { (comment.body) }
             }
         },
@@ -184,15 +194,21 @@ where
     let lines = (!form.lines.trim().is_empty()).then(|| form.lines.trim().to_owned());
 
     let identity = state.identity.as_ref();
+    let new = ents_forge::comment::NewComment {
+        body: form.body,
+        path: Some(form.path),
+        lines,
+        rev: form.rev,
+        worktree: false,
+        context: None,
+        parent: None,
+    };
     let (id, outcome) = comment::add(
         state.refs.as_ref(),
         &*state.objects(),
         state.events.as_ref(),
         &state.path,
-        &form.path,
-        form.body,
-        lines,
-        &form.rev,
+        new,
         &crate::receive_identity!(identity),
         state.mode,
     )?;
@@ -290,8 +306,12 @@ pub(crate) fn for_path<O: Find + Write>(
     };
     let mut out = Vec::new();
     for (id, comment) in rows {
-        let Ok(anchor) =
-            facet_git_tree::deserialize::<Anchor>(&comment.anchor.oid(), &*state.objects())
+        let Some(raw) = &comment.anchor else {
+            // An unanchored comment (context or reply aboutness only) has
+            // no line in any file to land on.
+            continue;
+        };
+        let Ok(anchor) = facet_git_tree::deserialize::<Anchor>(&raw.oid(), &*state.objects())
         else {
             continue;
         };
@@ -350,8 +370,10 @@ pub(crate) fn for_commit<O: Find + Write>(
     };
     let mut out = Vec::new();
     for (id, comment) in rows {
-        let Ok(anchor) =
-            facet_git_tree::deserialize::<Anchor>(&comment.anchor.oid(), &*state.objects())
+        let Some(raw) = &comment.anchor else {
+            continue;
+        };
+        let Ok(anchor) = facet_git_tree::deserialize::<Anchor>(&raw.oid(), &*state.objects())
         else {
             continue;
         };

@@ -187,9 +187,35 @@ fn run_toolchain(action: ToolchainAction, out: &mut impl std::io::Write) -> Resu
 fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
-        CommentAction::List => {
-            for (id, comment) in commands::comment::list(&root)? {
-                let _ = writeln!(out, "{id}\t{}", comment.body);
+        CommentAction::List {
+            worktree,
+            state,
+            open,
+            context,
+            porcelain,
+        } => {
+            let state = match (state, open) {
+                (Some(state), false) => Some(state),
+                (None, true) => Some("open".to_owned()),
+                (None, false) => None,
+                (Some(_), true) => {
+                    return Err(crate::Error::InvalidArgument(
+                        "--open is shorthand for --state open; give one or the other".into(),
+                    ));
+                }
+            };
+            let filter = ents_forge::comment::ListFilter { state, context };
+            let rows = commands::comment::list_projected(&root, worktree, &filter)?;
+            if porcelain {
+                let _ = write!(out, "{}", commands::comment::porcelain(&rows));
+            } else {
+                for row in rows {
+                    let _ = writeln!(
+                        out,
+                        "{}\t{}\t{}",
+                        row.id, row.comment.state, row.comment.body
+                    );
+                }
             }
         }
         CommentAction::Add {
@@ -197,15 +223,49 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
             body,
             lines,
             rev,
+            worktree,
+            context,
+            parent,
             key,
         } => {
-            let id = commands::comment::add(&root, &path, body, lines, &rev, key)?;
+            let new = ents_forge::comment::NewComment {
+                body,
+                path,
+                lines,
+                rev,
+                worktree,
+                context,
+                parent,
+            };
+            let id = commands::comment::add(&root, new, key)?;
             let _ = writeln!(out, "commented {id}");
         }
-        CommentAction::Show { id, rev } => {
-            let (comment, anchor, projection) = commands::comment::show(&root, &id, &rev)?;
-            let _ = writeln!(out, "path: {}", anchor.path);
-            let _ = writeln!(out, "projection: {projection:?}");
+        CommentAction::Reply { id, body, key } => {
+            let reply_id = commands::comment::reply(&root, &id, body, key)?;
+            let _ = writeln!(out, "replied {reply_id}");
+        }
+        CommentAction::Resolve { id, key } => {
+            commands::comment::set_state(&root, &id, true, key)?;
+            let _ = writeln!(out, "resolved {id}");
+        }
+        CommentAction::Reopen { id, key } => {
+            commands::comment::set_state(&root, &id, false, key)?;
+            let _ = writeln!(out, "reopened {id}");
+        }
+        CommentAction::Show { id, rev, worktree } => {
+            let (comment, projected) = commands::comment::show(&root, &id, &rev, worktree)?;
+            let _ = writeln!(out, "state: {}", comment.state);
+            if let Some(context) = &comment.context {
+                let _ = writeln!(out, "context: {context}");
+            }
+            if let Some(parent) = &comment.parent {
+                let _ = writeln!(out, "parent: {parent}");
+            }
+            if let Some((anchor, projection)) = projected {
+                let _ = writeln!(out, "path: {}", anchor.path);
+                let target = if worktree { "worktree" } else { rev.as_str() };
+                let _ = writeln!(out, "projection at {target}: {projection:?}");
+            }
             let _ = writeln!(out, "body: {}", comment.body);
         }
     }
