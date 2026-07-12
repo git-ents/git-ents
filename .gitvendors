@@ -5,4 +5,6 @@
 	pattern = icons/file-directory-fill-16.svg:crates/cli/ents-web/src/assets/icons/file-directory-fill.svg
 	pattern = icons/file-16.svg:crates/cli/ents-web/src/assets/icons/file.svg
 	pattern = icons/chevron-right-16.svg:crates/cli/ents-web/src/assets/icons/chevron-right.svg
+	pattern = icons/search-16.svg:crates/cli/ents-web/src/assets/icons/search.svg
+	pattern = icons/git-branch-16.svg:crates/cli/ents-web/src/assets/icons/git-branch.svg
 	pattern = LICENSE:crates/cli/ents-web/src/assets/icons/LICENSE

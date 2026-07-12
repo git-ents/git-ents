@@ -2,3 +2,5 @@ crates/cli/ents-web/src/assets/icons/LICENSE vendor=octicons
 crates/cli/ents-web/src/assets/icons/chevron-right.svg vendor=octicons
 crates/cli/ents-web/src/assets/icons/file-directory-fill.svg vendor=octicons
 crates/cli/ents-web/src/assets/icons/file.svg vendor=octicons
+crates/cli/ents-web/src/assets/icons/git-branch.svg vendor=octicons
+crates/cli/ents-web/src/assets/icons/search.svg vendor=octicons

@@ -52,6 +52,7 @@ where
         .unwrap_or_else(|| html! { p { "no account created yet" } });
 
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Account,
         "account",
         html! {

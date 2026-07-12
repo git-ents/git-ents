@@ -28,6 +28,7 @@ where
 {
     let rows = read_all(&state)?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Effects,
         "effects",
         crate::render::list_table(&rows, "name", |id| format!("/effects/{id}")),
@@ -57,6 +58,7 @@ where
         Err(error) => format!("does not parse: {error}"),
     };
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Effects,
         &name,
         html! {

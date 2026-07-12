@@ -21,12 +21,14 @@ pub mod members;
 pub mod redactions;
 pub mod toolchains;
 
+use gix::bstr::ByteSlice as _;
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind};
 use maud::{Markup, html};
 
 use crate::error::{Error, Result};
 use crate::session::{CSRF_FIELD, Session};
+use crate::state::AppState;
 
 /// The tree of the commit at `oid` -- every page that reads back a typed
 /// entity needs this; mirrors `git_ents::commands::commit_tree` and
@@ -69,11 +71,52 @@ pub(crate) enum Tab {
     Inbox,
 }
 
+/// The served repository's identity for the shell's `.repo-header`
+/// breadcrumb band: its directory name and, when `HEAD` resolves to a
+/// branch, that branch's short name (mirrors
+/// `pre-redo:crates/git-ents-server/src/web/mod.rs`'s `RepoMeta`, trimmed
+/// to the two fields this single-repo crate actually has a data surface
+/// for -- no owner/name split, description, or topics).
+pub(crate) struct RepoHeader {
+    /// The served repository's directory name, shown as the sole
+    /// breadcrumb crumb (this crate serves exactly one repository).
+    pub(crate) name: String,
+    /// The short name of `HEAD`'s branch, or `None` when `HEAD` is
+    /// detached, unborn, or the repository cannot be opened -- the
+    /// `.branch` pill is omitted in that case rather than guessed at.
+    pub(crate) branch: Option<String>,
+}
+
+impl RepoHeader {
+    /// Read the served repository's name and current branch off `state`
+    /// once, so [`layout`]'s call sites stay one-liners and the
+    /// `gix::open`/`HEAD` logic lives in exactly this one place (the same
+    /// `gix::open(&state.path)` pattern [`crate::pages::files`] browses the
+    /// `HEAD` tree with). Never panics: an unopenable repository or a
+    /// detached/unborn `HEAD` degrades to no branch pill.
+    pub(crate) fn from_state<O>(state: &AppState<O>) -> Self {
+        let name = std::fs::canonicalize(&state.path)
+            .ok()
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repository".to_owned());
+        let branch = gix::open(&state.path).ok().and_then(|repo| {
+            repo.head_name()
+                .ok()
+                .flatten()
+                .map(|full| full.shorten().to_str_lossy().into_owned())
+        });
+        Self { name, branch }
+    }
+}
+
 /// Wrap `title` and `body` in the one page shell every route renders
-/// through -- the pre-redo header bar and tab nav
-/// (`pre-redo:crates/git-ents-server/src/web/style.css`'s `.site-nav`/
-/// `.tabs` rules), `active` naming which tab is current.
-pub(crate) fn layout(active: Tab, title: &str, body: Markup) -> Markup {
+/// through -- the pre-redo header bar, repo-header breadcrumb band, and tab
+/// nav (`pre-redo:crates/git-ents-server/src/web/style.css`'s `.site-nav`/
+/// `.nav-search`/`.repo-header`/`.tabs` rules), `active` naming which tab
+/// is current and `repo` the served repository the band names.
+pub(crate) fn layout(repo: &RepoHeader, active: Tab, title: &str, body: Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
         html lang="en" {
@@ -91,6 +134,21 @@ pub(crate) fn layout(active: Tab, title: &str, body: Markup) -> Markup {
                 nav.site-nav {
                     div.nav-inner {
                         a.nav-logo href="/" { span.nav-mark { "✳" } "git-ents" }
+                        div.nav-search {
+                            (crate::assets::icon_search())
+                            input type="search" placeholder="Jump to file or symbol" aria-label="Search" disabled title="Not available yet";
+                        }
+                    }
+                }
+                div.repo-header {
+                    div.repo-headline {
+                        div.repo-path {
+                            (crate::assets::icon_folder())
+                            span.here { (repo.name) }
+                            @if let Some(branch) = &repo.branch {
+                                span.branch { (crate::assets::icon_branch()) (branch) }
+                            }
+                        }
                     }
                 }
                 nav.tabs {

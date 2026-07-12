@@ -28,6 +28,7 @@ where
     let toolchains = state.refs.iter_prefix("refs/meta/toolchains/")?.count();
 
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Dashboard,
         "dashboard",
         html! {

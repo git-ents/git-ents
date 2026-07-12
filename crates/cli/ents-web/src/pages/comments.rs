@@ -34,6 +34,7 @@ where
 {
     let rows = comment::list(state.refs.as_ref(), &*state.objects())?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Comments,
         "comments",
         html! {
@@ -84,6 +85,7 @@ where
         &query.rev,
     )?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Comments,
         &id,
         html! {

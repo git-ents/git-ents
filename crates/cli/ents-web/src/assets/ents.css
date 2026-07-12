@@ -71,6 +71,23 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .nav-logo { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-weight: 700; font-size: 1.02rem; color: var(--color-text); letter-spacing: -.01em; text-decoration: none; white-space: nowrap; transition: color .15s; }
 .nav-mark { color: var(--color-accent); font-size: 1.1rem; }
 .nav-logo:hover { color: var(--color-accent); }
+.nav-search { flex: 1; max-width: 24rem; margin: 0 auto; position: relative; display: flex; align-items: center; }
+.nav-search .icon { position: absolute; left: .65rem; color: var(--color-text-muted); pointer-events: none; }
+.nav-search input { width: 100%; font-family: var(--font-sans); font-size: .82rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem .42rem 2rem; transition: border-color .15s; }
+.nav-search input:focus { border-color: var(--color-accent); }
+.nav-search:has(input:disabled) { opacity: .55; }
+.nav-search:has(input:disabled) input { opacity: 1; }
+
+/* Repo-header band: the served repository's name breadcrumb and HEAD-branch
+ * pill, between the site nav and the tab strip (the Gitea-style repo header,
+ * trimmed to this single-repo crate's name + branch). */
+.repo-header { max-width: var(--max-width); margin: 0 auto; padding: 1.25rem 1.5rem .85rem; display: flex; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap; }
+.repo-headline { flex: 1; min-width: 0; }
+.repo-path { font-family: var(--font-mono); font-size: 1.18rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; word-break: break-all; }
+.repo-path .icon { color: var(--color-accent); }
+.repo-path .here { color: var(--color-accent); font-weight: 600; }
+.branch { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: .1rem .6rem; display: inline-flex; align-items: center; gap: .3rem; }
+.branch .icon { width: 13px; height: 13px; color: var(--color-accent); }
 
 .tabs { display: flex; gap: .15rem; max-width: var(--max-width); margin: 0 auto; padding: 0 1.5rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; }
 .tab { display: inline-flex; align-items: center; gap: .4rem; padding: 10px 14px; font-size: .88rem; color: var(--color-text-muted); text-decoration: none; white-space: nowrap; position: relative; transition: color .15s; }
@@ -143,8 +160,14 @@ form button:hover { background: var(--color-link-hover); }
 .crumbs .sep { color: var(--color-text-muted); opacity: .55; }
 .crumbs .here { color: var(--color-text-muted); }
 
-.blob { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: auto; margin-bottom: 1.5rem; }
-.blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 1.25rem; white-space: pre; overflow-x: auto; }
+.blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
+.blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
+.blob pre.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1ch; padding-right: 1ch; user-select: none; -webkit-user-select: none; }
+.blob-nums a { display: block; color: inherit; text-decoration: none; }
+.blob-nums a:hover { color: var(--color-accent); }
+.blob-nums a:target { color: var(--color-accent); font-weight: 700; }
+.blob-code { overflow-x: auto; min-width: 0; }
+.blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
 
 /* Rendered Markdown/AsciiDoc documents (`crate::markdown`, `crate::asciidoc`). */
@@ -174,6 +197,7 @@ form button:hover { background: var(--color-link-hover); }
   html { font-size: 16px; }
   .content { padding: 1.5rem 1.25rem 2.5rem; }
   .nav-inner { gap: .75rem; padding: 0 1.25rem; }
+  .repo-header { padding: 1rem 1.25rem .75rem; }
   .tabs { padding: 0 1.25rem; }
   .page-title { font-size: 1.3rem; }
   .doc-body { padding: 1.75rem 1.5rem 2rem; }

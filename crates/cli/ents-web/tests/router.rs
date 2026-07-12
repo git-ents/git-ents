@@ -208,6 +208,71 @@ async fn dashboard_renders_in_process_with_no_socket_bound() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("members"));
     assert!(body.contains("toolchains"));
+    // The shell chrome renders on every page: the disabled search stub in
+    // the top nav and the repo-header breadcrumb band above the tabs.
+    assert!(body.contains("nav-search"));
+    assert!(body.contains("Jump to file or symbol"));
+    assert!(body.contains("repo-header"));
+}
+
+/// `roots.web-agnostic`: the shell's `.repo-header` band names the served
+/// repository (its directory name) and, when `HEAD` resolves to a branch,
+/// renders that branch in the `.branch` pill -- both read once off
+/// `AppState.path`, so every page's chrome reflects the actual repository
+/// being served rather than a placeholder.
+#[tokio::test]
+async fn repo_header_names_the_served_repo_and_its_head_branch() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    // `git init` picks the default branch name (which varies by host git
+    // config); rename it so the pill's text is deterministic to assert.
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["branch", "-m", "trunk"])
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git branch -m failed");
+    let repo_name = dir
+        .path()
+        .file_name()
+        .expect("tempdir has a name")
+        .to_string_lossy()
+        .into_owned();
+
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("repo-header"));
+    assert!(
+        body.contains(&repo_name),
+        "the served repo's directory name {repo_name:?} must appear as the breadcrumb crumb"
+    );
+    assert!(
+        body.contains("class=\"branch\""),
+        "a resolvable HEAD must render the branch pill"
+    );
+    assert!(
+        body.contains("trunk"),
+        "the pill carries the short branch name"
+    );
 }
 
 /// `roots.web-session`: a state-changing request with no CSRF token at
@@ -492,8 +557,9 @@ async fn files_root_lists_the_repository_root() {
     assert!(body.contains("src"));
 }
 
-/// `GET /files/<path>` on a plain-text blob renders an escaped
-/// `<pre><code>` block -- no syntax highlighting, and no unescaped source.
+/// `GET /files/<path>` on a plain-text blob renders a line-numbered,
+/// escaped `pre.blob-code` source view -- no syntax highlighting, and no
+/// unescaped source.
 #[tokio::test]
 async fn files_blob_view_renders_a_plain_text_file() {
     let dir = seed_repo(&[("src/main.rs", "fn main() {\n    let ok = 1 < 2;\n}\n")]);
@@ -522,7 +588,8 @@ async fn files_blob_view_renders_a_plain_text_file() {
         .expect("body")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("<pre><code>"));
+    assert!(body.contains("blob-nums"));
+    assert!(body.contains("<pre class=\"blob-code\"><code>"));
     assert!(body.contains("1 &lt; 2"));
 }
 

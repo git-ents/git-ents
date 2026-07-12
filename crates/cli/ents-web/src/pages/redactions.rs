@@ -23,6 +23,7 @@ where
 {
     let rows = read_all(&state)?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Redactions,
         "redactions",
         crate::render::list_table(&rows, "id", |id| format!("/redactions/{id}")),
@@ -48,6 +49,7 @@ where
             what: format!("redaction {id}"),
         })?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Redactions,
         &id,
         crate::render::view(&redaction),

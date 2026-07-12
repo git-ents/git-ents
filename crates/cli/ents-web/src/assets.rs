@@ -9,7 +9,9 @@
 //! The icon functions below are vendored Octicons (`.gitvendors`, MIT; see
 //! `assets/icons/LICENSE`), re-homed here from
 //! `pre-redo:crates/git-ents-server/src/web/icons/` for
-//! [`crate::pages::files`]'s directory listing and breadcrumbs -- the same
+//! [`crate::pages::files`]'s directory listing and breadcrumbs and for the
+//! shell chrome [`crate::pages::layout`] draws (the `nav.site-nav` search
+//! stub and the `.repo-header` branch pill) -- the same
 //! `include_str!`-and-tag pattern
 //! `pre-redo:crates/git-ents-server/src/web/icons.rs` used.
 
@@ -51,4 +53,6 @@ icons! {
     icon_folder => "file-directory-fill",
     icon_file => "file",
     icon_chevron => "chevron-right",
+    icon_search => "search",
+    icon_branch => "git-branch",
 }

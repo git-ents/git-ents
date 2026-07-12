@@ -78,6 +78,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
         // repository had no `HEAD` yet.
         Err(_) if path.is_empty() => {
             return Ok(super::layout(
+                &super::RepoHeader::from_state(state),
                 super::Tab::Files,
                 "files",
                 html! {
@@ -96,6 +97,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
     if path.is_empty() {
         let entries = tree_entries(&head_tree)?;
         return Ok(super::layout(
+            &super::RepoHeader::from_state(state),
             super::Tab::Files,
             "files",
             html! {
@@ -120,6 +122,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
             .map_err(|source| Error::Repo(source.to_string()))?;
         let entries = tree_entries(&subtree)?;
         Ok(super::layout(
+            &super::RepoHeader::from_state(state),
             super::Tab::Files,
             path,
             html! {
@@ -135,6 +138,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
             .map_err(|source| Error::Repo(source.to_string()))?;
         let name = path.rsplit('/').next().unwrap_or(path);
         Ok(super::layout(
+            &super::RepoHeader::from_state(state),
             super::Tab::Files,
             path,
             html! {
@@ -245,7 +249,13 @@ fn is_binary(bytes: &[u8]) -> bool {
 
 /// A single blob's contents: a Markdown/AsciiDoc document rendered as such
 /// via [`crate::markdown`]/[`crate::asciidoc`], a binary-content
-/// placeholder, or an escaped `<pre><code>` block of the raw text.
+/// placeholder, or a line-numbered, escaped source view of the raw text.
+///
+/// The source view mirrors `pre-redo:crates/git-ents-server/src/web/pages.rs`'s
+/// `blob_body`: a `.blob` grid pairing a `pre.blob-nums` gutter of
+/// per-line `#L{n}` anchors with the escaped `pre.blob-code` code column
+/// (no syntax highlighting is ported, so the code stays a plain escaped
+/// `<code>` rather than pre-redo's highlighted spans).
 ///
 /// # Errors
 ///
@@ -263,9 +273,17 @@ fn blob_view(name: &str, bytes: &[u8]) -> Result<Markup> {
     if crate::asciidoc::is_asciidoc(name) {
         return Ok(html! { div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } } });
     }
+    let lines = text.lines().count().max(1);
     Ok(html! {
         div.blob {
-            pre { code { (text) } }
+            pre.blob-nums {
+                @for n in 1..=lines {
+                    a id={ "L" (n) } href={ "#L" (n) } { (n) }
+                }
+            }
+            pre.blob-code {
+                code { (text) }
+            }
         }
     })
 }
@@ -329,11 +347,12 @@ mod tests {
     }
 
     #[test]
-    fn blob_view_escapes_plain_text_into_a_pre_code_block() {
+    fn blob_view_escapes_plain_text_into_a_line_numbered_code_block() {
         let rendered = blob_view("main.rs", b"fn main() { let x = 1 < 2; }")
             .expect("plain text renders")
             .into_string();
-        assert!(rendered.contains("<pre><code>"));
+        assert!(rendered.contains("blob-nums"));
+        assert!(rendered.contains("<pre class=\"blob-code\"><code>"));
         assert!(rendered.contains("1 &lt; 2"));
     }
 

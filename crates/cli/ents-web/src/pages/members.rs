@@ -24,6 +24,7 @@ where
 {
     let rows = read_all(&state)?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Members,
         "members",
         crate::render::list_table(&rows, "username", |id| format!("/members/{id}")),
@@ -49,6 +50,7 @@ where
             what: format!("member {username}"),
         })?;
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Members,
         &username,
         crate::render::view(&member),

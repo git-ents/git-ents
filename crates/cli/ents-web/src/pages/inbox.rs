@@ -30,6 +30,7 @@ where
         }
     }
     Ok(super::layout(
+        &super::RepoHeader::from_state(&state),
         super::Tab::Inbox,
         "inbox",
         crate::render::string_list(&rows, |_| "/inbox".to_owned()),
