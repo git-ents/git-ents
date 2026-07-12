@@ -216,7 +216,10 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
 }
 
 /// Breadcrumb navigation from the repository's files root down through
-/// `path`, `chevron-right` icons separating segments.
+/// `path`, `chevron-right` icons separating segments, plus a trailing
+/// link into `crate::pages::commits`'s `GET /commits` history -- the file
+/// browser's one entry point into commit history, since history is a view
+/// of the code, not a tab of its own (`crate::pages::mod`'s own doc).
 fn crumbs(path: &str) -> Markup {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut acc = String::new();
@@ -240,6 +243,7 @@ fn crumbs(path: &str) -> Markup {
                     None => span.here { (label) },
                 }
             }
+            a.crumbs-history href="/commits" { "history" }
         }
     }
 }

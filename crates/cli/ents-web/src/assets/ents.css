@@ -229,6 +229,13 @@ form button:hover { background: var(--color-link-hover); }
 .crumbs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .crumbs .sep { color: var(--color-text-muted); opacity: .55; }
 .crumbs .here { color: var(--color-text-muted); }
+.crumbs-history { margin-left: auto; font-size: .82rem; color: var(--color-text-muted); }
+
+/* Commit history and view (`crate::pages::commits`). */
+.commit-subject { font-weight: 600; font-size: 1.05rem; margin-bottom: .3rem; }
+.commit-msg { font-family: var(--font-mono); font-size: .9rem; white-space: pre-wrap; word-break: break-word; margin-bottom: .3rem; }
+.commit-meta { color: var(--color-text-muted); font-size: .85rem; margin-top: .2rem; }
+.commit-meta a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 
 .blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
 .blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }

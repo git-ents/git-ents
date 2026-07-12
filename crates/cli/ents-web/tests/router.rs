@@ -115,6 +115,23 @@ fn seed_repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
+/// The full hex object id of `dir`'s current `HEAD` commit, read via `git
+/// rev-parse` -- what `crate::pages::commits`'s tests below build
+/// `/commit/{oid}` request paths from.
+fn head_oid(dir: &std::path::Path) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "git rev-parse HEAD failed");
+    String::from_utf8(output.stdout)
+        .expect("utf8 oid")
+        .trim()
+        .to_owned()
+}
+
 /// `roots.local`: this crate's route table never exposes git's own
 /// smart-HTTP transport -- a request that would name it (`info/refs` with
 /// a `service` query, exactly the URL stock `git clone`/`git fetch` sends
@@ -776,4 +793,97 @@ async fn files_blob_view_renders_markdown_and_asciidoc_as_documents() {
         .to_bytes();
     let md_body = String::from_utf8(md_body.to_vec()).expect("utf8 html");
     assert!(md_body.contains("<h1>Doc Title</h1>"));
+}
+
+/// `GET /commits` lists the repository's commit history: the seeded
+/// commit's own short id appears, linking into `/commit/{oid}`.
+#[tokio::test]
+async fn commits_list_shows_a_fixture_commit() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/commits")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains(&format!("/commit/{oid}")));
+    assert!(body.contains("seed"), "the seeded commit's subject renders");
+}
+
+/// `GET /commit/{oid}` shows the commit's subject, its author, and a
+/// colorized diff line for the file it introduced.
+#[tokio::test]
+async fn commit_show_renders_the_subject_and_a_diff_line() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get(format!("/commit/{oid}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("seed"), "the commit's subject renders");
+    assert!(
+        body.contains("class=\"ln add\""),
+        "the root commit's diff renders its added lines"
+    );
+}
+
+/// `GET /commit/{oid}` on a malformed id is a 404, never a panic or 500.
+#[tokio::test]
+async fn commit_show_on_an_invalid_oid_is_not_found_not_a_crash() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/commit/zzz")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

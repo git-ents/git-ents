@@ -48,6 +48,8 @@ where
         )
         .route("/effects", get(pages::effects::list::<O>))
         .route("/effects/{name}", get(pages::effects::show::<O>))
+        .route("/commits", get(pages::commits::list::<O>))
+        .route("/commit/{oid}", get(pages::commits::show::<O>))
         .route("/files", get(pages::files::root::<O>))
         .route("/files/{*path}", get(pages::files::show::<O>))
         .route("/meta", get(pages::meta::show::<O>))

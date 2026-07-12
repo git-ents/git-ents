@@ -13,10 +13,13 @@
 //! [`redactions`], and [`inbox`] additionally share one `meta` tab and
 //! [`META_SECTIONS`] rail rather than each carrying its own top-level tab
 //! (see [`Tab`]'s own doc); [`meta`] is that group's `GET /meta` landing
-//! page.
+//! page. [`commits`] is a view of the code, not a tab of its own -- both
+//! its routes render with [`Tab::Files`] active, reached from
+//! [`files`]'s own "history" link.
 
 pub mod account;
 pub mod comments;
+pub mod commits;
 pub mod dashboard;
 pub mod effects;
 pub mod files;
@@ -296,4 +299,53 @@ pub(crate) fn require_csrf(session: &Session, submitted: &str) -> Result<()> {
     } else {
         Err(Error::BadCsrf)
     }
+}
+
+/// A unix timestamp rendered as a relative "time ago" label, measured
+/// against the current time -- hand-rolled from epoch seconds rather than
+/// pulling in a date-formatting dependency, mirroring
+/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `ago`/
+/// `ago_seconds`. Shared by [`super::dashboard`]'s freshness strip and
+/// [`super::commits`]'s list/show pages, the only places this crate names
+/// a commit's age.
+pub(crate) fn ago(then_seconds: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    let secs = now.saturating_sub(then_seconds).max(0);
+    let mins = secs.checked_div(60).unwrap_or(0);
+    let hours = mins.checked_div(60).unwrap_or(0);
+    let days = hours.checked_div(24).unwrap_or(0);
+    if mins == 0 {
+        "just now".to_owned()
+    } else if hours == 0 {
+        ago_plural(mins, "minute")
+    } else if days == 0 {
+        ago_plural(hours, "hour")
+    } else if days < 30 {
+        ago_plural(days, "day")
+    } else if days < 365 {
+        ago_plural(days.checked_div(30).unwrap_or(0), "month")
+    } else {
+        ago_plural(days.checked_div(365).unwrap_or(0), "year")
+    }
+}
+
+/// Format `n` whole `unit`s with an "ago" suffix, pluralizing as needed --
+/// [`ago`]'s own helper.
+fn ago_plural(n: i64, unit: &str) -> String {
+    if n == 1 {
+        format!("1 {unit} ago")
+    } else {
+        format!("{n} {unit}s ago")
+    }
+}
+
+/// A commit id shortened to seven hex characters for display -- mirrors
+/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `short_oid`.
+/// Falls back to the full id on the (practically unreachable) case that a
+/// 7-character prefix is invalid for `oid`'s hash kind.
+pub(crate) fn short_oid(oid: &ObjectId) -> String {
+    gix_hash::Prefix::new(oid, 7).map_or_else(|_| oid.to_string(), |prefix| prefix.to_string())
 }
