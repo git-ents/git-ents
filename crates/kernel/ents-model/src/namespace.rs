@@ -9,8 +9,9 @@
 //!
 //! Spec coverage: `meta-ref.namespace`, `meta-ref.granularity`,
 //! `meta-ref.inbox`, plus the `refs/meta/toolchains/*`
-//! (`model.toolchain`) and `refs/meta/redactions/*` (`model.redaction`)
-//! namespaces.
+//! (`model.toolchain`), `refs/meta/redactions/*` (`model.redaction`),
+//! `refs/meta/reviews/*` (`model.review`), and `refs/meta/pins/*`
+//! (`model.review-pin`) namespaces.
 
 use gix::refs::{FullName, FullNameRef};
 
@@ -58,6 +59,37 @@ pub fn issue_ref(id: &str) -> Result<FullName> {
 // @relation(meta-ref.granularity, scope=function)
 pub fn comment_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/comments/{id}"))
+}
+
+/// The ref holding the review named `id` — `refs/meta/reviews/<id>`
+/// (`meta-ref.granularity`, `model.review`).
+// @relation(meta-ref.granularity, model.review, scope=function)
+pub fn review_ref(id: &str) -> Result<FullName> {
+    build(format!("refs/meta/reviews/{id}"))
+}
+
+/// The retention pin for the review named `id` —
+/// `refs/meta/pins/reviews/<id>` (`model.review-pin`): the entity's own
+/// canonical suffix (`reviews/<id>`) prefixed with `pins/`, the same way
+/// `meta-ref.inbox` prefixes one, so two entity kinds can never collide
+/// under the same pin id.
+///
+/// A pin ref's commits carry the empty tree, never an entity — the sole
+/// exception to `meta-ref.namespace`'s tree-is-the-entity shape; the
+/// commits exist purely to keep the reviewed commit and its ancestry
+/// reachable.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::namespace;
+///
+/// let name = namespace::review_pin_ref("7").expect("valid id");
+/// assert_eq!(name.as_bstr(), "refs/meta/pins/reviews/7");
+/// ```
+// @relation(model.review-pin, meta-ref.namespace, scope=function)
+pub fn review_pin_ref(id: &str) -> Result<FullName> {
+    build(format!("refs/meta/pins/reviews/{id}"))
 }
 
 /// The ref holding the effect named `name` — `refs/meta/effects/<name>`
@@ -205,6 +237,13 @@ pub enum Namespace {
     Issue,
     /// `refs/meta/comments/*`.
     Comment,
+    /// `refs/meta/reviews/*`.
+    Review,
+    /// `refs/meta/pins/*` — retention pins (`model.review-pin`,
+    /// [`review_pin_ref`]): empty-tree commits anchoring other content's
+    /// reachability, the sole exception to `meta-ref.namespace`'s
+    /// tree-is-the-entity shape.
+    Pin,
     /// `refs/meta/effects/*`.
     Effect,
     /// `refs/meta/results/*` — canonical results only; a member's self-run
@@ -254,7 +293,7 @@ pub enum Namespace {
 /// let outside: gix::refs::FullName = "refs/heads/main".try_into().expect("valid");
 /// assert_eq!(namespace::classify(outside.as_ref()), None);
 ///
-/// let novel: gix::refs::FullName = "refs/meta/reviews/7".try_into().expect("valid");
+/// let novel: gix::refs::FullName = "refs/meta/widgets/7".try_into().expect("valid");
 /// assert_eq!(namespace::classify(novel.as_ref()), Some(Namespace::Unknown));
 /// ```
 // @relation(meta-ref.namespace, meta-ref.granularity, model.extensibility, scope=function)
@@ -274,6 +313,8 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "member" => Some(Namespace::Member),
         "issues" => Some(Namespace::Issue),
         "comments" => Some(Namespace::Comment),
+        "reviews" => Some(Namespace::Review),
+        "pins" => Some(Namespace::Pin),
         "effects" => Some(Namespace::Effect),
         "results" => Some(Namespace::Result),
         "self" => Some(Namespace::SelfRun),
@@ -330,6 +371,8 @@ mod tests {
     #[case::member("refs/meta/member/jdc", Some(Namespace::Member))]
     #[case::issue("refs/meta/issues/42", Some(Namespace::Issue))]
     #[case::comment("refs/meta/comments/abc", Some(Namespace::Comment))]
+    #[case::review("refs/meta/reviews/7", Some(Namespace::Review))]
+    #[case::pin("refs/meta/pins/reviews/7", Some(Namespace::Pin))]
     #[case::effect("refs/meta/effects/unit", Some(Namespace::Effect))]
     #[case::result("refs/meta/results/unit/abc123", Some(Namespace::Result))]
     #[case::self_run("refs/meta/self/jdc/unit/abc123", Some(Namespace::SelfRun))]
@@ -340,7 +383,7 @@ mod tests {
     #[case::config("refs/meta/config", Some(Namespace::Config))]
     #[case::outside_meta("refs/heads/main", None)]
     #[case::unrecognized("refs/meta/index/abc", Some(Namespace::Unknown))]
-    #[case::novel_namespace("refs/meta/reviews/7", Some(Namespace::Unknown))]
+    #[case::novel_namespace("refs/meta/widgets/7", Some(Namespace::Unknown))]
     // @relation(meta-ref.namespace, meta-ref.granularity, scope=function, role=Verifies)
     fn classify_matches_the_namespace_table(
         #[case] refname: &str,
@@ -402,6 +445,8 @@ mod tests {
             member_ref(&id).expect("valid"),
             issue_ref("42").expect("valid"),
             comment_ref("abc").expect("valid"),
+            review_ref("7").expect("valid"),
+            review_pin_ref("7").expect("valid"),
             effect_ref("unit").expect("valid"),
             result_ref("unit", "abc123").expect("valid"),
             self_result_ref(&id, "unit", "abc123").expect("valid"),
