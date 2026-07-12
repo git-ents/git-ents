@@ -237,6 +237,7 @@ pub(crate) fn layout(
                 meta name="color-scheme" content="light dark";
                 title { "git ents: " (title) }
                 link rel="stylesheet" href="/style.css";
+                script src="/ents.js" defer {}
             }
             body {
                 nav.site-nav {

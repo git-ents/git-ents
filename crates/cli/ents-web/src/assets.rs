@@ -4,7 +4,12 @@
 //! (`pre-redo:crates/git-ents-server/src/web/style.css`), ported rather
 //! than vendored -- including its type stack, which this crate's own
 //! system-font fallback carries rather than the pre-redo Google Fonts load
-//! (see `ents.css`'s own header comment).
+//! (see `ents.css`'s own header comment). `ents.js` is new to this crate
+//! (pre-redo had no client-side script at all): a vanilla,
+//! dependency-free progressive enhancement over `crate::pages::files`'s
+//! raw-source blob view -- click-to-select a line or range and an inline
+//! comment composer -- served alongside `ents.css` the same way, via
+//! `crate::router`'s own `GET /ents.js` route.
 //!
 //! The icon functions below are vendored Octicons (`.gitvendors`, MIT; see
 //! `assets/icons/LICENSE`), re-homed here from
@@ -20,6 +25,10 @@ use std::sync::LazyLock;
 use maud::{Markup, PreEscaped};
 
 pub(crate) const OVERRIDES: &str = include_str!("assets/ents.css");
+
+/// The client-side line-selection/comment-composer script
+/// [`crate::router`]'s `GET /ents.js` serves -- see this module's own doc.
+pub(crate) const SCRIPT: &str = include_str!("assets/ents.js");
 
 /// Adapt a vendored Octicon to this UI: tag it with the `.icon` class the
 /// stylesheet targets and mark it decorative for assistive tech. Every

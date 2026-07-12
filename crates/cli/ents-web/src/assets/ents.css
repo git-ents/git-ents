@@ -19,8 +19,9 @@
  * blob view, which otherwise reuse `.card`/`.doc-body` as-is; and
  * `.blob-header`/`.blob-actions`/`.entry-size` for
  * `crate::pages::files::blob_header`/`dir_listing`'s own metadata, plus
- * `.composer-*` for its server-rendered comment-composer template --
- * pre-redo had no blob header bar and no comment system at all.
+ * `tr.sel`/`.blob-add`/`.composer-*` for `assets/ents.js`'s client-side
+ * line selection and inline comment composer -- pre-redo had neither a
+ * blob header bar nor any client-side script at all.
  */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -321,12 +322,20 @@ form button:hover { background: var(--color-link-hover); }
 .blob tr.blob-comment-row .card { margin: .5rem 1rem; }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
 
-/* Client-side line selection (`assets/ents.js`, wired up next): `.blob-nums
- * a:target` above is the no-JS fallback for a single anchored line; `tr.sel`
- * is the script's own richer selection, spanning a whole clicked/
- * shift-clicked range. */
+/* Client-side line selection (`assets/ents.js`): `.blob-nums a:target` above
+ * is the no-JS fallback for a single anchored line; `tr.sel` is the
+ * script's own richer selection, spanning a whole clicked/shift-clicked
+ * range. */
 .blob tr.sel td { background: var(--color-accent-subtle); }
 .blob tr.sel td.blob-nums { color: var(--color-accent); font-weight: 700; }
+
+/* The gutter's "+" comment affordance (`assets/ents.js`): injected once per
+ * line row, absolutely positioned inside the already-positioned (sticky)
+ * `.blob-nums` cell so it costs no layout of its own and never shifts line
+ * height, hidden until that row is hovered or the button itself is
+ * focused. */
+.blob-add { position: absolute; top: 50%; left: .2rem; transform: translateY(-50%); width: 15px; height: 15px; line-height: 14px; padding: 0; text-align: center; font-size: .78rem; font-weight: 700; color: var(--color-bg); background: var(--color-accent); border: none; border-radius: 4px; opacity: 0; cursor: pointer; transition: opacity .1s; }
+.blob tr:hover .blob-add, .blob-add:focus-visible { opacity: 1; }
 
 /* The inline comment composer (`crate::pages::files::composer_template`,
  * cloned and shown by `assets/ents.js`): mirrors `tr.blob-comment-row

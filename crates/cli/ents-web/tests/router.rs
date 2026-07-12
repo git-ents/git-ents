@@ -1233,6 +1233,43 @@ async fn files_blob_view_carries_data_path_data_rev_and_the_composer_template() 
     assert!(template.contains(&format!(r#"name="rev" value="{oid}""#)));
 }
 
+/// `GET /ents.js` serves the client-side script `crate::pages::layout`
+/// loads with `defer` -- no session required (mirrors `GET /style.css`'s
+/// own stance), a JS content type, and a non-empty body.
+#[tokio::test]
+async fn ents_js_is_served_with_a_javascript_content_type() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/ents.js")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("content-type")
+        .to_str()
+        .expect("ascii")
+        .to_owned();
+    assert!(content_type.contains("javascript"));
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert!(!body.is_empty());
+}
+
 /// The blob header bar (`crate::pages::files::blob_header`) shows a raw
 /// source file's line count, human-formatted size, and detected language,
 /// plus the "comment on this file" no-JS fallback link -- moved here from

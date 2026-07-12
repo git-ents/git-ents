@@ -65,6 +65,7 @@ where
         .route("/comments/{id}", get(pages::comments::show::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
+        .route("/ents.js", get(script))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             session_middleware::<O>,
@@ -125,6 +126,17 @@ async fn style() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         assets::OVERRIDES,
+    )
+}
+
+/// `GET /ents.js`: the progressive-enhancement script
+/// [`pages::layout`]'s `head` loads with `defer` (`crate::assets::SCRIPT`)
+/// -- see [`crate::assets`]'s own doc for what it does. Served the same
+/// way, and under the same no-session-gating rule, as [`style`].
+async fn script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        assets::SCRIPT,
     )
 }
 
