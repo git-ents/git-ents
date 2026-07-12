@@ -90,10 +90,17 @@ pub async fn show<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let body = match toolchain::view(state.refs.as_ref(), &*state.objects(), &name) {
+    // One `state.objects()` lock, reused for both `view` and `log`: a
+    // `match` scrutinee's own temporaries live for the whole match (arms
+    // included), so a second `state.objects()` inside the `Ok` arm below
+    // would try to lock this non-reentrant `Mutex` while the scrutinee's
+    // own guard is still held, self-deadlocking forever rather than
+    // erroring (see `crate::pages::members::read_all`'s identical
+    // rationale).
+    let objects = state.objects();
+    let body = match toolchain::view(state.refs.as_ref(), &*objects, &name) {
         Ok((toolchain, recipe)) => {
-            let log =
-                toolchain::log(state.refs.as_ref(), &*state.objects(), &name).unwrap_or_default();
+            let log = toolchain::log(state.refs.as_ref(), &*objects, &name).unwrap_or_default();
             html! {
                 dl {
                     dt { "name" } dd { (toolchain.name) }

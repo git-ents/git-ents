@@ -83,10 +83,16 @@ fn read_all<O: Find>(
         let Some(username) = path.strip_prefix("refs/meta/member/") else {
             continue;
         };
-        let member = super::commit_tree(&*state.objects(), tip)
+        // One `state.objects()` lock per iteration, reused for both reads:
+        // `state.objects()` a second time *within the same statement*
+        // would try to lock this non-reentrant `Mutex` while the first
+        // guard is still alive (a `let`'s temporaries live to its own
+        // `;`), self-deadlocking forever rather than erroring.
+        let objects = state.objects();
+        let member = super::commit_tree(&*objects, tip)
             .map_err(|error| error.to_string())
             .and_then(|tree| {
-                facet_git_tree::deserialize::<Member>(&tree, &*state.objects())
+                facet_git_tree::deserialize::<Member>(&tree, &*objects)
                     .map_err(|error| error.to_string())
             });
         out.push((username.to_owned(), member));

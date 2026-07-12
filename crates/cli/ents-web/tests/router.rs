@@ -12,10 +12,10 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use ents_kiln::Toolchain;
-use ents_model::{Account, MemberId};
+use ents_model::{Account, Effect, MemberId, Provenance, Redaction};
 use ents_receive::{Mode, NullEventSink};
 use ents_testutil::{
-    CommitSpec, Keypair, MemRefStore, ObjectStore, write_commit, write_meta_entity,
+    CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
 };
 use ents_web::identity::SigningIdentity;
 use ents_web::state::AppState;
@@ -1453,4 +1453,90 @@ async fn toolchain_show_on_a_legacy_entry_renders_a_marker_not_a_500() {
         body.contains("is not a blob"),
         "the underlying facet-git-tree error renders verbatim: {body}"
     );
+}
+
+/// A real, readable entity (not merely an empty ref store) exercised on
+/// every list/show page pair `read_all`'s `state.objects()` double-lock
+/// regression could hit: each page must complete rather than hang forever
+/// (a non-reentrant `Mutex` self-deadlock, previously reachable whenever a
+/// row's tree actually read back cleanly -- see the fix commit's own
+/// message). `#[tokio::test]`'s single-threaded runtime means a real
+/// deadlock here hangs the whole test binary rather than merely failing
+/// it, so this is worth pinning down explicitly rather than trusting the
+/// list/show pages' other tests to happen to seed data.
+#[tokio::test]
+async fn members_effects_redactions_and_toolchains_list_and_show_a_real_entity_without_hanging() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    enroll_member(
+        &refs,
+        &objects,
+        "jdc",
+        &Keypair::from_seed(1),
+        Provenance::AdminRegistered,
+        100,
+    );
+    let effect_name: gix::refs::FullName = "refs/meta/effects/ci".try_into().expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        effect_name,
+        &Effect {
+            trigger: "rev(refs/heads/main)".to_owned(),
+            toolchains: vec![],
+            run: "true".to_owned(),
+        },
+        None,
+        100,
+    );
+    let redaction_name: gix::refs::FullName = "refs/meta/redactions/1".try_into().expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        redaction_name,
+        &Redaction::new(gix_hash::ObjectId::null(gix_hash::Kind::Sha1), "leaked"),
+        None,
+        100,
+    );
+    let toolchain_name: gix::refs::FullName =
+        "refs/meta/toolchains/good".try_into().expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        toolchain_name,
+        &Toolchain {
+            name: "good".to_owned(),
+            recipe: "embedded 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n".to_owned(),
+        },
+        None,
+        100,
+    );
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(2),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    for path in [
+        "/members",
+        "/members/jdc",
+        "/effects",
+        "/effects/ci",
+        "/redactions",
+        "/redactions/1",
+        "/toolchains",
+        "/toolchains/good",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("in-process call");
+        assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    }
 }

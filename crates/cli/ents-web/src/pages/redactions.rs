@@ -80,10 +80,15 @@ fn read_all<O: Find>(
         let Some(id) = path.strip_prefix("refs/meta/redactions/") else {
             continue;
         };
-        let redaction = super::commit_tree(&*state.objects(), tip)
+        // One `state.objects()` lock per iteration, reused for both reads
+        // -- see `crate::pages::members::read_all`'s identical comment for
+        // why a second `state.objects()` within the same statement would
+        // self-deadlock on this non-reentrant `Mutex`.
+        let objects = state.objects();
+        let redaction = super::commit_tree(&*objects, tip)
             .map_err(|error| error.to_string())
             .and_then(|tree| {
-                facet_git_tree::deserialize::<Redaction>(&tree, &*state.objects())
+                facet_git_tree::deserialize::<Redaction>(&tree, &*objects)
                     .map_err(|error| error.to_string())
             });
         out.push((id.to_owned(), redaction));
