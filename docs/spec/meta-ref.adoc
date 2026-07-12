@@ -21,6 +21,9 @@ ref is simultaneously the unit of storage (the commit's tree),
 synchronization (fetching or pushing the ref moves exactly that entity),
 authorization (refname-keyed rules gate who may advance it), and history
 (its commit chain is the audit trail).
+Retention pins under `refs/meta/pins/*` (<<model.review-pin>>) are the
+sole exception: a pin's commits anchor other content's reachability and
+carry the empty tree, never an entity.
 --
 
 [role="requirement", id="meta-ref.granularity"]

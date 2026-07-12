@@ -223,7 +223,11 @@ the coverage dashboard is a later call.
   `model.comment-thread`, `model.review`): the Comment struct's migration
   (`meta-ref.migration` — old trees must stay readable), working-tree
   capture and projection in `ents-anchor` (`anchor.working-tree`), the
-  Review entity, and porcelain — `comment reply/resolve/reopen`,
+  Review entity plus its retention pin ref (`model.review-pin` —
+  `refs/meta/pins/reviews/<id>`, an empty-tree signed commit whose
+  parents include the reviewed commit; verify the gate's tip-signed and
+  fast-forward checks accept the merge-shaped pin advance), and
+  porcelain — `comment reply/resolve/reopen`,
   `comment list --worktree` with a machine-readable form (`lens.parity`),
   `issue` and `review` actions.
 

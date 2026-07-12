@@ -162,19 +162,44 @@ typed-tree change, not a platform request (<<model.extensibility>>).
 .Review Is a Verdict Plus a Context
 --
 A Review entity MUST be a typed tree under its own ref in
-`refs/meta/reviews/*`, one ref per review (<<meta-ref.granularity>>),
+`refs/meta/reviews/<id>`, one ref per review (<<meta-ref.granularity>>),
 written, gated, synced, and audited exactly like a comment.
-A Review MUST carry the reviewed commit's id as a plain data field —
-best-effort reachability, the same stance <<anchor.immutable>> takes for
-an anchor's commit — a verdict, and a body; `approve` and
-`request-changes` are conventions, not an enum, because custom verdicts
-are schema, not platform features (<<model.extensibility>>).
+Every review MUST occupy exactly two refs: the entity ref above, and a
+retention pin at `refs/meta/pins/reviews/<id>` anchoring the reviewed
+content itself (<<model.review-pin>>).
+A Review MUST carry the id of the most recently reviewed commit as a
+plain data field, a verdict, and a body; reading the field MUST NOT
+require the pin ref — the pin anchors, the entity describes.
+`approve` and `request-changes` are conventions, not an enum, because
+custom verdicts are schema, not platform features
+(<<model.extensibility>>).
 A review's discussion MUST be Comment entities naming the review as
 their context (<<model.comment-context>>), anchored into the reviewed
 code where they concern specific lines (<<anchor.definition>>); the
 review itself MUST NOT store a list of its comments.
 Reviewer and timestamp MUST come from the mutation commit chain
 (<<meta-ref.trailers>>).
+--
+
+[role="requirement", id="model.review-pin"]
+.The Review Pin Anchors the Reviewed Content
+--
+A review's pin ref, `refs/meta/pins/reviews/<id>` — the entity's own
+canonical suffix prefixed the same way <<meta-ref.inbox>> prefixes one —
+MUST keep the reviewed content reachable: its tip is a signed commit
+authored by the reviewer whose parents include the reviewed commit, so
+that commit and its ancestry survive force-push, branch deletion, and gc
+for as long as the review exists.
+This is the commit-level counterpart of <<anchor.retention>>, which can
+embed blobs but has no reachability edge for commits — a gitlink is not
+one.
+Re-reviewing after the target moves MUST advance the pin fast-forward
+with a new signed commit whose parents are the previous pin tip and the
+newly reviewed commit, so every reviewed round stays retained and the
+pin's own history is the audit trail of exactly what was reviewed, when.
+A pin commit carries no entity: its tree MUST be the empty tree, the
+sole deliberate exception to <<meta-ref.namespace>>'s
+tree-is-the-entity shape.
 --
 
 === Effect
