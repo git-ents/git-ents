@@ -305,15 +305,28 @@ form button:hover { background: var(--color-link-hover); }
  * two line rows. */
 .blob { overflow-x: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem; }
 .blob table { border-collapse: collapse; width: 100%; font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; }
+/* Breathing room above the first row and below the last, without a
+ * margin/padding on the table itself -- that would leave a gap in the
+ * sticky gutter's own continuous background column. */
+.blob tr:first-child td { padding-top: .45rem; }
+.blob tr:last-child td { padding-bottom: .45rem; }
 .blob td.blob-nums { position: sticky; left: 0; text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding: 0 1ch; user-select: none; -webkit-user-select: none; white-space: nowrap; vertical-align: top; }
-.blob-nums a { display: block; color: inherit; text-decoration: none; }
+.blob-nums a { display: block; color: inherit; text-decoration: none; padding: 0 .4ch; border-radius: 4px; outline: none; cursor: pointer; }
 .blob-nums a:hover { color: var(--color-accent); }
 .blob-nums a:target { color: var(--color-accent); font-weight: 700; }
+.blob-nums a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .blob td.blob-code { padding: 0 1.25rem; white-space: pre; color: var(--color-text); vertical-align: top; }
 .blob-code code { font-family: inherit; }
 .blob tr.blob-comment-row td { padding: 0; background: var(--color-surface); }
 .blob tr.blob-comment-row .card { margin: .5rem 1rem; }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
+
+/* Client-side line selection (`assets/ents.js`, wired up next): `.blob-nums
+ * a:target` above is the no-JS fallback for a single anchored line; `tr.sel`
+ * is the script's own richer selection, spanning a whole clicked/
+ * shift-clicked range. */
+.blob tr.sel td { background: var(--color-accent-subtle); }
+.blob tr.sel td.blob-nums { color: var(--color-accent); font-weight: 700; }
 
 /* The inline comment composer (`crate::pages::files::composer_template`,
  * cloned and shown by `assets/ents.js`): mirrors `tr.blob-comment-row
