@@ -213,6 +213,49 @@ the coverage dashboard is a later call.
   date. Reuses the Sprite executor and sessions/CSRF from `git-ents`;
   salvage the store code and gix-receive framing from the scale-out work
   at `pre-redo`.
+
+| `ents-forge` conversations
+| 9
+| Medium
+| fable
+| Comments become the universal conversational primitive (`model.comment`
+  broadened, `model.comment-state`, `model.comment-context`,
+  `model.comment-thread`, `model.review`): the Comment struct's migration
+  (`meta-ref.migration` — old trees must stay readable), working-tree
+  capture and projection in `ents-anchor` (`anchor.working-tree`), the
+  Review entity, and porcelain — `comment reply/resolve/reopen`,
+  `comment list --worktree` with a machine-readable form (`lens.parity`),
+  `issue` and `review` actions.
+
+| `ents-lens`
+| 9
+| High
+| opus
+| The LSP frontend (`lens.adoc`, all rules): `git ents lsp` reusing the
+  local root's wiring the way `serve` does, code lenses + hint
+  diagnostics + hover derived per-request from anchor projection onto
+  the working tree, and the editor-file compose flow. No network, no
+  state of its own.
+
+| `ents-zed` (extension)
+| 9
+| Low
+| sonnet
+| Zed extension at `editors/zed`, outside the workspace (wasm target):
+  registers the `ents-lsp` language server running `git ents lsp`.
+  Verify current Zed LSP capability coverage against the real
+  `zed_extension_api` — `lens.diagnostics` exists precisely so a client
+  without code-lens rendering still shows the conversation.
+
+| `ents-web` conversations
+| 9
+| Medium
+| opus
+| Issues index and detail with threads as context queries
+  (`model.comment-context`), review creation and verdict display on
+  commit pages (`model.review`), reply/resolve on the existing comment
+  views. Reuses the registry-driven meta rail and session/CSRF machinery
+  already in place.
 |===
 
 == Phase gates
@@ -252,6 +295,15 @@ the coverage dashboard is a later call.
   with zero library-crate modification; `gix-receive` round-trips a push
   from stock git, and a diff of library-crate contents between phase
   entry and phase exit MUST be empty.
+* *Phase 9 exit*: the comment loop — a comment composed through the
+  lens's editor-file flow against a dirty working tree
+  (`lens.compose`, `anchor.working-tree`) is listed open by the
+  machine-readable `git ents comment list --worktree` form
+  (`lens.parity`), resolved through the CLI (`model.comment-state`),
+  and gone from the lens's next publish; an issue and a review each
+  round-trip CLI ↔ web with their threads rendered as context queries
+  (`model.comment-context`, `model.review`); pre-migration comment refs
+  written by phase-7 code still read back (`meta-ref.migration`).
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
