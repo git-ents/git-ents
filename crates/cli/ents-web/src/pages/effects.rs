@@ -27,9 +27,10 @@ where
     O: Find + Write + Send + 'static,
 {
     let rows = read_all(&state)?;
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Effects,
+        &super::identity_label(&state),
+        "/effects",
         "effects",
         crate::render::list_table(&rows, "name", |id| format!("/effects/{id}")),
     ))
@@ -57,9 +58,10 @@ where
         Ok(_) => "parses".to_owned(),
         Err(error) => format!("does not parse: {error}"),
     };
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Effects,
+        &super::identity_label(&state),
+        "/effects",
         &name,
         html! {
             (crate::render::view(&effect))

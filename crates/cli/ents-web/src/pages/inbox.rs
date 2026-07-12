@@ -29,9 +29,10 @@ where
             rows.push(rest.to_owned());
         }
     }
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Inbox,
+        &super::identity_label(&state),
+        "/inbox",
         "inbox",
         crate::render::string_list(&rows, |_| "/inbox".to_owned()),
     ))

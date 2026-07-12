@@ -640,6 +640,52 @@ async fn files_blob_view_renders_a_plain_text_file() {
     assert!(body.contains("1 &lt; 2"));
 }
 
+/// The `meta` tab restructure (`crate::pages::mod`'s own doc): `GET /meta`
+/// is reachable as the tab's index page, and `GET /members` -- one of the
+/// five page families that group now shares -- renders with the
+/// `META_SECTIONS` rail visible and the `meta` tab (not a per-family tab)
+/// highlighted.
+#[tokio::test]
+async fn meta_index_and_a_meta_group_page_render_with_the_rail() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let meta_response = router
+        .clone()
+        .oneshot(Request::get("/meta").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(meta_response.status(), StatusCode::OK);
+
+    let members_response = router
+        .oneshot(
+            Request::get("/members")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(members_response.status(), StatusCode::OK);
+    let body = members_response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(
+        body.contains("class=\"meta-rail\""),
+        "a meta-group page renders the section rail"
+    );
+    assert!(
+        body.contains("class=\"tab active\""),
+        "the meta tab itself highlights, not a per-family tab"
+    );
+}
+
 /// `GET /files/<path>` renders a `.md` blob as Markdown and a `.adoc` blob
 /// as AsciiDoc -- both a real rendered heading, not the raw source markup.
 #[tokio::test]

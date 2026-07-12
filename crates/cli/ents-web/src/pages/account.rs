@@ -53,6 +53,7 @@ where
 
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
+        &super::identity_label(&state),
         super::Tab::Account,
         "account",
         html! {

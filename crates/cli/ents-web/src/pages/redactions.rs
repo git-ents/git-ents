@@ -22,9 +22,10 @@ where
     O: Find + Write + Send + 'static,
 {
     let rows = read_all(&state)?;
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Redactions,
+        &super::identity_label(&state),
+        "/redactions",
         "redactions",
         crate::render::list_table(&rows, "id", |id| format!("/redactions/{id}")),
     ))
@@ -48,9 +49,10 @@ where
         .ok_or_else(|| Error::NotFound {
             what: format!("redaction {id}"),
         })?;
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Redactions,
+        &super::identity_label(&state),
+        "/redactions",
         &id,
         crate::render::view(&redaction),
     ))

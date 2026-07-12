@@ -28,9 +28,10 @@ where
     O: Find + Write + Send + 'static,
 {
     let names = toolchain::list(state.refs.as_ref())?;
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Toolchains,
+        &super::identity_label(&state),
+        "/toolchains",
         "toolchains",
         crate::render::string_list(&names, |name| format!("/toolchains/{name}")),
     ))
@@ -52,9 +53,10 @@ where
 {
     let (toolchain, recipe) = toolchain::view(state.refs.as_ref(), &*state.objects(), &name)?;
     let log = toolchain::log(state.refs.as_ref(), &*state.objects(), &name)?;
-    Ok(super::layout(
+    Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Toolchains,
+        &super::identity_label(&state),
+        "/toolchains",
         &name,
         html! {
             dl {

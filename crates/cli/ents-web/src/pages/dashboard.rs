@@ -48,7 +48,8 @@ where
 
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
-        super::Tab::Dashboard,
+        &super::identity_label(&state),
+        super::Tab::Overview,
         "overview",
         html! {
             div.overview {

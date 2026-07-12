@@ -79,6 +79,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
         Err(_) if path.is_empty() => {
             return Ok(super::layout(
                 &super::RepoHeader::from_state(state),
+                &super::identity_label(state),
                 super::Tab::Files,
                 "files",
                 html! {
@@ -98,6 +99,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
         let entries = tree_entries(&head_tree)?;
         return Ok(super::layout(
             &super::RepoHeader::from_state(state),
+            &super::identity_label(state),
             super::Tab::Files,
             "files",
             html! {
@@ -123,6 +125,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
         let entries = tree_entries(&subtree)?;
         Ok(super::layout(
             &super::RepoHeader::from_state(state),
+            &super::identity_label(state),
             super::Tab::Files,
             path,
             html! {
@@ -139,6 +142,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
         let name = path.rsplit('/').next().unwrap_or(path);
         Ok(super::layout(
             &super::RepoHeader::from_state(state),
+            &super::identity_label(state),
             super::Tab::Files,
             path,
             html! {
