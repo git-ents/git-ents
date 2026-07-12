@@ -132,6 +132,106 @@ fn head_oid(dir: &std::path::Path) -> String {
         .to_owned()
 }
 
+/// Commit a further change to a file already tracked in `dir` -- what the
+/// comment tests below use to move `HEAD` past a comment's own anchor
+/// commit, so its projection has something to react to.
+fn commit_change(dir: &std::path::Path, path: &str, contents: &str, message: &str) {
+    std::fs::write(dir.join(path), contents).expect("write fixture file");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "-m",
+        message,
+    ]);
+}
+
+/// Establish a session against `router` via a `GET` to `path`, returning
+/// its cookie header and CSRF token -- the same extraction
+/// `csrf_is_required_and_checked_on_every_state_changing_request` performs
+/// inline, factored out here since every comment test below needs one.
+async fn session_cookie_and_csrf(
+    router: &axum::Router,
+    state: &AppState<ObjectStore>,
+    path: &str,
+) -> (String, String) {
+    let response = router
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("a fresh GET always mints a session cookie")
+        .to_str()
+        .expect("ascii")
+        .to_owned();
+    let session_id = cookie
+        .split(';')
+        .next()
+        .expect("at least one segment")
+        .split_once('=')
+        .expect("name=value")
+        .1
+        .to_owned();
+    let csrf = state
+        .sessions
+        .get(&session_id)
+        .expect("the session this cookie names is held in this server's own memory")
+        .csrf;
+    (cookie, csrf)
+}
+
+/// `POST /comments`, anchoring `body` to `path` (`lines`, `<start>:<end>`)
+/// at `rev` -- what the comment tests below seed a real comment through,
+/// exercising the actual signed-write path (`ents_forge::comment::add`)
+/// rather than poking the ref store directly. Asserts the write succeeded
+/// (a redirect to the new comment's own page).
+async fn seed_comment(
+    router: &axum::Router,
+    state: &AppState<ObjectStore>,
+    path: &str,
+    body: &str,
+    lines: &str,
+    rev: &str,
+) {
+    let (cookie, csrf) = session_cookie_and_csrf(router, state, "/comments").await;
+    let form = format!(
+        "path={path}&body={}&lines={lines}&rev={rev}&csrf={csrf}",
+        body.replace(' ', "+")
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/comments")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "comment write did not succeed: {:?}",
+        response.status()
+    );
+}
+
 /// `roots.local`: this crate's route table never exposes git's own
 /// smart-HTTP transport -- a request that would name it (`info/refs` with
 /// a `service` query, exactly the URL stock `git clone`/`git fetch` sends
@@ -862,6 +962,174 @@ async fn files_blob_view_renders_markdown_and_asciidoc_as_documents() {
         .to_bytes();
     let md_body = String::from_utf8(md_body.to_vec()).expect("utf8 html");
     assert!(md_body.contains("<h1>Doc Title</h1>"));
+}
+
+/// `GET /files/<path>` on a blob with no comments carries no comment-card
+/// markup at all -- not even an empty section (`crate::pages::comments::comments_section`'s
+/// own no-drop-but-no-empty-section contract).
+#[tokio::test]
+async fn files_blob_view_with_no_comments_has_no_comment_card_markup() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(!body.contains("file-comments"));
+    assert!(!body.contains("comment-meta"));
+}
+
+/// A blob view shows every comment anchored to it: author, body (rendered
+/// as AsciiDoc), and its projected line range linking into the blob's own
+/// `#L<n>` gutter.
+#[tokio::test]
+async fn files_blob_view_shows_a_seeded_comments_body_and_author() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "commenter",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    seed_comment(
+        &router,
+        &state,
+        "src/main.rs",
+        "worth a look here",
+        "2:2",
+        "HEAD",
+    )
+    .await;
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("id=\"file-comments\""));
+    assert!(body.contains("worth a look here"));
+    assert!(body.contains("commenter"));
+    assert!(body.contains("href=\"#L2\""));
+    assert!(!body.contains("class=\"outdated\""));
+}
+
+/// A comment whose anchored lines were since edited still renders (never
+/// dropped), flagged with the muted `outdated` marker instead of a line
+/// link (`ents_anchor::Projection::Outdated`).
+#[tokio::test]
+async fn files_blob_view_marks_an_outdated_comment() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "commenter",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    seed_comment(
+        &router,
+        &state,
+        "src/main.rs",
+        "line two looks off",
+        "2:2",
+        "HEAD",
+    )
+    .await;
+    // Edit exactly the anchored line, so the projection can no longer map
+    // it -- `ents_anchor::project`'s own `Outdated` case.
+    commit_change(
+        dir.path(),
+        "src/main.rs",
+        "line 1\nsomething else entirely\nline 3\n",
+        "edit line two",
+    );
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(
+        body.contains("line two looks off"),
+        "comment is never dropped"
+    );
+    assert!(body.contains("class=\"outdated\""));
+}
+
+/// `GET /comments?file=<path>&lines=<range>` pre-fills the add-comment
+/// form's `path`/`lines` fields -- the entry point `crate::pages::files`'s
+/// own "comment on this file" link uses.
+#[tokio::test]
+async fn comments_list_prefills_the_add_form_from_query_params() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/comments?file=src/main.rs&lines=1-2")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains(r#"name="path" value="src/main.rs""#));
+    assert!(body.contains(r#"name="lines" value="1-2""#));
 }
 
 /// `GET /commits` lists the repository's commit history: the seeded

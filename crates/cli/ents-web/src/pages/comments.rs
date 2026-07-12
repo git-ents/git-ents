@@ -5,22 +5,44 @@
 //! kind of domain-specific view `ents-forge`'s own `comment::show`
 //! already returns structured data for, rather than a bare reflected
 //! field list.
+//!
+//! [`for_path`]/[`comments_section`] are this module's second entry
+//! point: `crate::pages::files`'s blob view calls them to render the
+//! comments anchored to the file it is showing, rather than duplicating
+//! this module's own read-project-render pattern.
 
 use std::sync::Arc;
 
 use axum::Form;
 use axum::extract::{Path, Query as PathQuery, State};
 use axum::response::{IntoResponse, Redirect};
+use ents_anchor::{Anchor, LineRange, Projection};
 use ents_forge::comment;
 use gix_object::{Find, Write};
-use maud::html;
+use maud::{Markup, html};
 use serde::Deserialize;
 
 use crate::error::Result;
 use crate::session::Session;
 use crate::state::AppState;
 
-/// `GET /comments`.
+/// The query parameters `GET /comments` accepts: `file`/`lines` prefill
+/// the add-comment form (e.g. a link from `crate::pages::files`'s "comment
+/// on this file"), rather than changing what the page lists. Both default
+/// to empty, which [`add_form`] renders as an unfilled field -- an absent
+/// or nonsensical `lines` value (it is never parsed here, only echoed
+/// back into the form) is exactly as inert as an absent one.
+#[derive(Debug, Deserialize, Default)]
+pub struct ListQuery {
+    /// Pre-fills the add form's `path` field.
+    #[serde(default)]
+    file: String,
+    /// Pre-fills the add form's `lines` field.
+    #[serde(default)]
+    lines: String,
+}
+
+/// `GET /comments?file=<path>&lines=<range>`.
 ///
 /// # Errors
 ///
@@ -28,6 +50,7 @@ use crate::state::AppState;
 pub async fn list<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
+    PathQuery(query): PathQuery<ListQuery>,
 ) -> Result<maud::Markup>
 where
     O: Find + Write + Send + 'static,
@@ -45,7 +68,7 @@ where
                 }
             }
             h2 { "add a comment" }
-            (add_form("HEAD", &session))
+            (add_form("HEAD", &session, &query.file, &query.lines))
         },
     ))
 }
@@ -154,15 +177,155 @@ where
     Ok(Redirect::to(&format!("/comments/{id}")))
 }
 
-fn add_form(default_rev: &str, session: &Session) -> maud::Markup {
+/// The add-comment form, its `path`/`lines` fields pre-filled from
+/// [`ListQuery`] when `list` was reached with `?file=`/`?lines=` (e.g.
+/// `crate::pages::files`'s "comment on this file" link) -- maud escapes
+/// both into the `value` attribute the same as any other interpolation,
+/// so neither can break out of the form markup, and an empty prefill
+/// renders exactly as the unfilled field always did.
+fn add_form(
+    default_rev: &str,
+    session: &Session,
+    prefill_path: &str,
+    prefill_lines: &str,
+) -> maud::Markup {
     html! {
         form method="post" action="/comments" {
             (super::csrf_input(session))
-            label { "path" input type="text" name="path"; }
+            label { "path" input type="text" name="path" value=(prefill_path); }
             label { "rev" input type="text" name="rev" value=(default_rev); }
-            label { "lines" input type="text" name="lines"; }
+            label { "lines" input type="text" name="lines" value=(prefill_lines); }
             label { "body" textarea name="body" {} }
             button type="submit" { "comment" }
+        }
+    }
+}
+
+/// One comment as `crate::pages::files`'s blob view shows it: who wrote it
+/// and when ([`super::ago`]), where its anchor lands on the displayed
+/// file (a line-range link into the blob's own `#L<n>` gutter, or the
+/// muted `outdated` marker when [`ents_anchor::project`] can no longer map
+/// the anchored lines), and its body rendered as AsciiDoc
+/// ([`crate::asciidoc`], this crate's default prose treatment for text
+/// with no filename of its own to infer a MIME type from). Mirrors
+/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `FileComment`,
+/// salvaged per this crate's PORT-and-reverify policy: author/timestamp
+/// there came from `git_comment::provenance`'s shell-out, here from
+/// [`super::commit_authorship`] reading the comment ref's own tip commit
+/// through `gix_object::Find`.
+pub(crate) struct FileComment {
+    /// The comment ref's own tip commit's author display name
+    /// (`model.comment`: a comment stores no author field of its own).
+    pub(crate) author: String,
+    /// [`super::ago`] renders this against the current time.
+    pub(crate) seconds: i64,
+    /// The anchored range as it lands on the displayed file at `HEAD`, or
+    /// `None` for a whole-file anchor or an outdated projection.
+    pub(crate) lines: Option<LineRange>,
+    /// Set when [`ents_anchor::project`] reports
+    /// [`Projection::Outdated`]: the anchored lines themselves were
+    /// edited, so no line link is shown, only the marker -- the comment
+    /// itself is never dropped from the page.
+    pub(crate) outdated: bool,
+    /// The body, rendered as AsciiDoc ([`crate::asciidoc::to_html`]),
+    /// falling back to escaped plain text on a render failure -- a file
+    /// view degrades, it never 500s over one unparsable comment.
+    pub(crate) body: Markup,
+}
+
+/// Every comment whose anchor projects onto `path` at `HEAD` in `repo` --
+/// [`crate::pages::files`]'s own read of this domain, built on the same
+/// [`comment::list`] read [`list`] itself uses and the same
+/// [`ents_anchor::project`] call [`show`] itself uses, rather than a third
+/// way to read a comment. Best effort throughout: a comment whose anchor
+/// or body fails to read, parse, or project is skipped from this file's
+/// own view only -- it still shows up on `GET /comments` and its own `GET
+/// /comments/{id}` page -- and a projection landing anywhere other than
+/// `path` (moved elsewhere, or deleted) is likewise not this file's
+/// comment to show. A projection that still lands at `path` but comes
+/// back [`Projection::Outdated`] is the one case this function keeps and
+/// flags (`outdated: true`) rather than skips: the anchored lines
+/// changed, not the comment's relevance to this file.
+pub(crate) fn for_path<O: Find + Write>(
+    state: &AppState<O>,
+    repo: &gix::Repository,
+    path: &str,
+) -> Vec<FileComment> {
+    let Ok(rows) = comment::list(state.refs.as_ref(), &*state.objects()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (id, comment) in rows {
+        let Ok(anchor) =
+            facet_git_tree::deserialize::<Anchor>(&comment.anchor.oid(), &*state.objects())
+        else {
+            continue;
+        };
+        let Ok(projection) = ents_anchor::project(repo, &anchor, "HEAD") else {
+            continue;
+        };
+        let (landed, lines, outdated) = match projection {
+            Projection::Current => (anchor.path.clone(), anchor.lines, false),
+            Projection::Relocated { path, lines } => (path, lines, false),
+            Projection::Outdated { path } => (path, None, true),
+            Projection::Deleted => continue,
+        };
+        if landed != path {
+            continue;
+        }
+        let Ok(ref_name) = ents_model::namespace::comment_ref(&id) else {
+            continue;
+        };
+        let Some(tip) = state.refs.get(ref_name.as_ref()).ok().flatten() else {
+            continue;
+        };
+        let Ok((author, seconds)) = super::commit_authorship(&*state.objects(), tip) else {
+            continue;
+        };
+        let body = crate::asciidoc::to_html(&comment.body)
+            .unwrap_or_else(|_| html! { p { (comment.body) } });
+        out.push(FileComment {
+            author,
+            seconds,
+            lines,
+            outdated,
+            body,
+        });
+    }
+    out
+}
+
+/// The comment cards under a blob view, one [`FileComment`] per
+/// [`maud`]-rendered `.card`, mounted at `#file-comments` so
+/// `crate::pages::files`'s own "N comments" link can jump straight to
+/// them. Renders nothing at all -- not even an empty container -- when
+/// `comments` is empty, so a file with no comments carries no extra
+/// markup (`crate::pages::files`'s own blob view calls this
+/// unconditionally rather than checking first).
+pub(crate) fn comments_section(comments: &[FileComment]) -> Markup {
+    if comments.is_empty() {
+        return html! {};
+    }
+    html! {
+        div id="file-comments" {
+            @for comment in comments {
+                div.card {
+                    div.comment-meta {
+                        span.author { (comment.author) }
+                        span { (super::ago(comment.seconds)) }
+                        @if let Some(range) = comment.lines {
+                            a href={ "#L" (range.start) } {
+                                @if range.start == range.end { "line " (range.start) }
+                                @else { "lines " (range.start) "-" (range.end) }
+                            }
+                        }
+                        @if comment.outdated {
+                            span.outdated { "outdated" }
+                        }
+                    }
+                    div.doc-body { (comment.body) }
+                }
+            }
         }
     }
 }

@@ -64,6 +64,42 @@ pub(crate) fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId
     Ok(commit.tree())
 }
 
+/// The commit author's display name and commit time (epoch seconds) for
+/// the commit at `oid` -- the meta-ref counterpart to
+/// `crate::pages::commits`'s identical read of an ordinary history
+/// commit, shared by any page that needs to know who mutated a meta-ref
+/// entity and when rather than a stored field (`model.comment`'s own rule
+/// that authorship lives in the commit chain, not the entity: see
+/// `ents_forge::comment::Comment`'s own doc).
+///
+/// A second, independent fetch-and-parse from [`commit_tree`]'s own
+/// (same file, same pattern) rather than a shared parse step: `CommitRef`
+/// borrows from a caller-owned buffer, so factoring the parse out would
+/// need either an owned copy or a callback -- this module's own doc on
+/// [`commit_tree`] already names three such near-identical copies as the
+/// accepted pattern here.
+pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(String, i64)> {
+    let mut buf = Vec::new();
+    let data = objects
+        .try_find(&oid, &mut buf)
+        .map_err(|source| Error::InvalidArgument(source.to_string()))?
+        .ok_or_else(|| Error::NotFound {
+            what: oid.to_string(),
+        })?;
+    if data.kind != Kind::Commit {
+        return Err(Error::NotFound {
+            what: oid.to_string(),
+        });
+    }
+    let commit = CommitRef::from_bytes(data.data, oid.kind())
+        .map_err(|source| Error::InvalidArgument(source.to_string()))?;
+    let author = commit
+        .author()
+        .map_err(|source| Error::InvalidArgument(source.to_string()))?;
+    let seconds = author.time().map(|time| time.seconds).unwrap_or(0);
+    Ok((author.name.to_str_lossy().into_owned(), seconds))
+}
+
 /// The tab-nav page families this crate exposes -- one variant per tab in
 /// [`layout`]'s nav bar, so a handler can name which tab it renders behind
 /// without `layout` re-deriving it from the request path (mirrors

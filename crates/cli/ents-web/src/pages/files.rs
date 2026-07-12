@@ -16,6 +16,13 @@
 //! pages use to read typed meta-ref entities (`facet-git-tree` is for
 //! structured meta-ref data; browsing arbitrary repository content is not
 //! that).
+//!
+//! A blob view also loads and renders the comments anchored to it
+//! (`crate::pages::comments::for_path`/`comments_section`), below the blob
+//! itself, and [`crumbs`] grows a "comment on this file" link (plus a
+//! jump to those cards, once there is at least one) beside its own
+//! trailing "history" link -- a directory listing carries neither, since
+//! a comment anchors to a file, never a tree.
 
 use std::sync::Arc;
 
@@ -61,7 +68,10 @@ where
 /// The shared implementation behind [`root`] and [`show`]: resolve `path`
 /// against `HEAD`'s tree and render whichever of a directory listing or a
 /// blob view it names.
-fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
+fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup>
+where
+    O: Find + Write,
+{
     if !is_safe_path(path) {
         return Err(Error::NotFound {
             what: path.to_owned(),
@@ -83,7 +93,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
                 super::Tab::Files,
                 "files",
                 html! {
-                    (crumbs(path))
+                    (crumbs(path, None))
                     (dir_listing(path, Vec::new()))
                 },
             ));
@@ -103,7 +113,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
             super::Tab::Files,
             "files",
             html! {
-                (crumbs(path))
+                (crumbs(path, None))
                 (dir_listing(path, entries))
             },
         ));
@@ -129,7 +139,7 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
             super::Tab::Files,
             path,
             html! {
-                (crumbs(path))
+                (crumbs(path, None))
                 (dir_listing(path, entries))
             },
         ))
@@ -140,14 +150,16 @@ fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup> {
             .try_into_blob()
             .map_err(|source| Error::Repo(source.to_string()))?;
         let name = path.rsplit('/').next().unwrap_or(path);
+        let comments = super::comments::for_path(state, &repo, path);
         Ok(super::layout(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
             path,
             html! {
-                (crumbs(path))
+                (crumbs(path, Some(comments.len())))
                 (blob_view(name, &blob.data)?)
+                (super::comments::comments_section(&comments))
             },
         ))
     } else {
@@ -216,11 +228,17 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
 }
 
 /// Breadcrumb navigation from the repository's files root down through
-/// `path`, `chevron-right` icons separating segments, plus a trailing
-/// link into `crate::pages::commits`'s `GET /commits` history -- the file
+/// `path`, `chevron-right` icons separating segments, plus trailing links
+/// into `crate::pages::commits`'s `GET /commits` history (the file
 /// browser's one entry point into commit history, since history is a view
-/// of the code, not a tab of its own (`crate::pages::mod`'s own doc).
-fn crumbs(path: &str) -> Markup {
+/// of the code, not a tab of its own -- `crate::pages::mod`'s own doc) and,
+/// on a blob view (`comments` is `Some`), `crate::pages::comments`'s own
+/// add form for this file ("comment on this file") plus a jump straight to
+/// [`super::comments::comments_section`]'s cards when there is at least
+/// one comment already anchored here.
+/// `comments` is `None` on a directory listing, where neither link makes
+/// sense.
+fn crumbs(path: &str, comments: Option<usize>) -> Markup {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut acc = String::new();
     let mut trail: Vec<(String, Option<String>)> =
@@ -244,6 +262,14 @@ fn crumbs(path: &str) -> Markup {
                 }
             }
             a.crumbs-history href="/commits" { "history" }
+            @if let Some(count) = comments {
+                a.crumbs-history href={ "/comments?file=" (path) } { "comment on this file" }
+                @if count > 0 {
+                    a.crumbs-history href="#file-comments" {
+                        (count) @if count == 1 { " comment" } @else { " comments" }
+                    }
+                }
+            }
         }
     }
 }

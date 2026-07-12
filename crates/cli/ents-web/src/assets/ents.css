@@ -14,7 +14,9 @@
  * pre-redo sheet: `.meta-layout`/`.meta-rail` for the `meta` tab's
  * page-family rail (`crate::pages::META_SECTIONS`) and `.id-chip` for the
  * header's signing-identity link, both new to this crate's own four-tab
- * restructure.
+ * restructure; and `.comment-meta`/`.outdated` for the file-anchored
+ * comment cards `crate::pages::comments::comments_section` renders below a
+ * blob view, which otherwise reuse `.card`/`.doc-body` as-is.
  */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -249,6 +251,14 @@ form button:hover { background: var(--color-link-hover); }
 .blob-code { overflow-x: auto; min-width: 0; }
 .blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
+
+/* File-anchored comment cards (`crate::pages::comments::comments_section`),
+ * below a blob view in `crate::pages::files` -- each comment is its own
+ * `.card`, its body reusing `.doc-body`'s prose styling (a comment body
+ * renders as AsciiDoc, same as a rendered document blob). */
+.comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .7rem 1.1rem; font-size: .82rem; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
+.comment-meta .author { color: var(--color-text); font-weight: 600; }
+.outdated { color: var(--color-text-muted); font-style: italic; }
 
 /* Syntax-highlight token classes (`crate::pages::files::highlight`, `arborium`'s `HtmlFormat::ClassNames`). */
 .code .keyword, .code .macro, .code .tag { color: var(--s-keyword); }
