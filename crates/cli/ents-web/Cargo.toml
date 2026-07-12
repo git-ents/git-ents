@@ -6,6 +6,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+acdc-converters-core = { workspace = true }
+acdc-converters-html = { workspace = true }
+acdc-parser = { workspace = true }
 ents-anchor = { workspace = true }
 ents-effect = { workspace = true }
 ents-forge = { workspace = true }
@@ -24,6 +27,7 @@ gix-object = { workspace = true }
 gix-ref-store = { workspace = true }
 axum = { workspace = true }
 maud = { workspace = true }
+pulldown-cmark = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }

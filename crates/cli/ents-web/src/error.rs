@@ -83,6 +83,12 @@ pub enum Error {
     /// outcome. Boxed; see [`Error::Forge`]'s own doc.
     #[error(transparent)]
     Receive(Box<ents_receive::Error>),
+
+    /// `crate::asciidoc::to_html` could not parse or convert an AsciiDoc
+    /// blob (`acdc` reported no more specific error than "could not
+    /// convert").
+    #[error("could not render asciidoc: {0}")]
+    Asciidoc(String),
 }
 
 impl From<ents_forge::Error> for Error {

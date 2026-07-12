@@ -106,9 +106,11 @@
 //! # });
 //! ```
 
+pub(crate) mod asciidoc;
 pub(crate) mod assets;
 pub mod error;
 pub mod identity;
+pub(crate) mod markdown;
 pub mod pages;
 pub mod render;
 pub mod router;
