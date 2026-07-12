@@ -225,8 +225,8 @@ async fn dashboard_renders_in_process_with_no_socket_bound() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("members"));
     assert!(body.contains("toolchains"));
-    // The shell chrome renders on every page: the disabled search stub in
-    // the top nav and the repo-header breadcrumb band above the tabs.
+    // The shell chrome renders on every page: the nav search form in the
+    // top nav and the repo-header breadcrumb band above the tabs.
     assert!(body.contains("nav-search"));
     assert!(body.contains("Jump to file or symbol"));
     assert!(body.contains("repo-header"));
@@ -955,4 +955,66 @@ async fn commit_show_on_an_invalid_oid_is_not_found_not_a_crash() {
         .await
         .expect("in-process call");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// `GET /search?q=` finds a known fixture file path, linking into its
+/// `/files/...` blob view.
+#[tokio::test]
+async fn search_finds_a_known_fixture_file_path() {
+    let dir = seed_repo(&[("src/needle.rs", "fn main() {}\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/search?q=needle")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("/files/src/needle.rs"));
+}
+
+/// `GET /search` with no query renders a friendly blankslate rather than
+/// an empty or error page.
+#[tokio::test]
+async fn search_with_no_query_renders_a_blankslate() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/search")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("No matches"));
 }

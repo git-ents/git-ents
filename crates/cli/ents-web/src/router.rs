@@ -55,6 +55,7 @@ where
         .route("/meta", get(pages::meta::show::<O>))
         .route("/redactions", get(pages::redactions::list::<O>))
         .route("/redactions/{id}", get(pages::redactions::show::<O>))
+        .route("/search", get(pages::search::show::<O>))
         .route("/toolchains", get(pages::toolchains::list::<O>))
         .route("/toolchains/{name}", get(pages::toolchains::show::<O>))
         .route(

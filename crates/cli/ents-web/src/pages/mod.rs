@@ -15,7 +15,9 @@
 //! (see [`Tab`]'s own doc); [`meta`] is that group's `GET /meta` landing
 //! page. [`commits`] is a view of the code, not a tab of its own -- both
 //! its routes render with [`Tab::Files`] active, reached from
-//! [`files`]'s own "history" link.
+//! [`files`]'s own "history" link. [`search`] renders with no tab active
+//! at all, like [`account`]; it is reached from [`layout`]'s own nav
+//! search form rather than any tab.
 
 pub mod account;
 pub mod comments;
@@ -27,6 +29,7 @@ pub mod inbox;
 pub mod members;
 pub mod meta;
 pub mod redactions;
+pub mod search;
 pub mod toolchains;
 
 use gix::bstr::ByteSlice as _;
@@ -72,7 +75,9 @@ pub(crate) fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId
 /// nine equal tabs did not scale as page families grew. `Account` matches
 /// none of [`layout`]'s tab-strip arms, so it highlights nothing there;
 /// its own link lives in the header's `.id-chip` instead (see [`layout`]'s
-/// own doc).
+/// own doc). `None` is the same "highlights nothing" case for a page that
+/// is not part of any tab's own section at all ([`super::search`]'s
+/// results page).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Overview,
@@ -80,6 +85,7 @@ pub(crate) enum Tab {
     Comments,
     Meta,
     Account,
+    None,
 }
 
 /// One entry in the `meta` tab's registry: a page family reachable from
@@ -200,9 +206,9 @@ pub(crate) fn layout(
                 nav.site-nav {
                     div.nav-inner {
                         a.nav-logo href="/" { span.nav-mark { "✳" } "git-ents" }
-                        div.nav-search {
+                        form.nav-search method="get" action="/search" {
                             (crate::assets::icon_search())
-                            input type="search" placeholder="Jump to file or symbol" aria-label="Search" disabled title="Not available yet";
+                            input type="search" name="q" placeholder="Jump to file or symbol" aria-label="Search";
                         }
                         a.id-chip href="/account" { (identity) }
                     }
