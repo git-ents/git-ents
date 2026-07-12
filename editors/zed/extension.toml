@@ -1,0 +1,38 @@
+id = "ents"
+name = "ents"
+version = "0.1.0"
+schema_version = 1
+authors = ["Joseph D. Carpinelli <joseph.carpinelli@icloud.com>"]
+description = "Projects git-ents anchored comments into Zed as code lenses, diagnostics, and hover, and composes new ones through `git ents lsp`."
+repository = "https://github.com/git-ents/git-ents"
+
+[language_servers.ents-lsp]
+name = "ents"
+languages = [
+  "Rust",
+  "Python",
+  "Go",
+  "C",
+  "C++",
+  "JSON",
+  "JSONC",
+  "YAML",
+  "TypeScript",
+  "TSX",
+  "JavaScript",
+  "Markdown",
+]
+
+[language_servers.ents-lsp.language_ids]
+"Rust" = "rust"
+"Python" = "python"
+"Go" = "go"
+"C" = "c"
+"C++" = "cpp"
+"JSON" = "json"
+"JSONC" = "jsonc"
+"YAML" = "yaml"
+"TypeScript" = "typescript"
+"TSX" = "typescriptreact"
+"JavaScript" = "javascript"
+"Markdown" = "markdown"
