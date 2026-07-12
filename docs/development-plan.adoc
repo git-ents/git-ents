@@ -170,12 +170,24 @@ the coverage dashboard is a later call.
 | 7
 | Medium
 | sonnet
-| Broad surface, low algorithmic depth. Lands `serve` in `git-ents`,
-  turning the single-node hosted root into a hosted web UI with
-  sessions/CSRF (`roots.web-session`). Signing identity is injected by
-  the composition root; the crate assumes nothing about network
+| Broad surface, low algorithmic depth. Lands `serve` in `git-ents`
+  (`roots.local`): the local root's own wiring, plus sessions/CSRF
+  (`roots.web-session`) and signed mutations (`roots.web-signing`)
+  layered on top, the user's own key standing in for whichever identity
+  a composition root injects. Signing identity is injected by the
+  composition root; the crate assumes nothing about network
   reachability, so in-process webview embedding stays a supported
-  deployment (`roots.web-agnostic`).
+  deployment (`roots.web-agnostic`). Gap this phase does not close, not
+  assigned to any later phase either: no composition root actually wires
+  `ents-web` onto a hosted root — not the single-node hosted root this
+  binary already doubles as, deployed at `git.ents.cloud` since Phase 6,
+  and not `git-ents-server` (phase 8, whose own row below merely reuses
+  this phase's sessions/CSRF code, never mounts the web UI).
+  `roots.web-signing`'s server-key indirection is proven only
+  against fixture identities in this crate's own tests; "turning the
+  single-node hosted root into a hosted web UI," which an earlier
+  version of this row asserted as delivered, describes the crate's
+  capability, not a running deployment.
 
 | `gix-receive`
 | 8
@@ -222,6 +234,17 @@ the coverage dashboard is a later call.
   `kill -9` of the in-memory queue. The two gaps this row's own notes
   name (`gate.epoch-bootstrap`; `meta-ref.tip-invariant`'s missing
   reader surface) are known exceptions, not silent ones.
+* *Phase 7 exit*: `git ents serve` (`roots.local`) is loopback-only with
+  no smart-HTTP surface added, drives every state-changing route through
+  a per-session CSRF check (`roots.web-session`), and signs mutations
+  through an identity the composition root injects, never one this
+  crate resolves itself (`roots.web-signing`, `roots.web-agnostic`); the
+  same router is provably reachable with no bound socket, driven
+  in-process via `tower::ServiceExt::oneshot`. This row's own gap is a
+  known exception, not a silent one: no hosted deployment (`git.ents.cloud`
+  or `git-ents-server`) actually mounts this web UI yet, so
+  `roots.web-signing`'s server-key half stays proven only against
+  fixture identities until some later phase's composition root wires it.
 * *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
   Postgres/Tigris/durable-queue root, now served by `gix-receive` in
   place of git's own `receive-pack`, is wired as a new composition root
