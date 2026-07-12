@@ -116,6 +116,10 @@ impl Signer {
 /// else the repository's (or global) `user.signingkey`, else the default
 /// `~/.ssh/id_ed25519`.
 ///
+/// A `user.signingkey` naming the public half (stock git's own SSH-signing
+/// convention, e.g. `~/.ssh/id_ed25519.pub`) resolves to its sibling
+/// private key, since [`Signer::load`] only reads private key files.
+///
 /// # Errors
 ///
 /// [`Error::NoSigningKey`] when none of the three sources resolves to a
@@ -129,7 +133,11 @@ pub fn resolve_key_path(repo: &gix::Repository, explicit: Option<&Path>) -> Resu
         .string("user.signingkey")
         .map(|v| v.to_string())
     {
-        return Ok(PathBuf::from(configured));
+        let path = expand_tilde(&configured);
+        return Ok(match path.to_str().and_then(|s| s.strip_suffix(".pub")) {
+            Some(private) => PathBuf::from(private),
+            None => path,
+        });
     }
     if let Some(home) = home_dir() {
         let default = home.join(".ssh").join("id_ed25519");
@@ -138,6 +146,19 @@ pub fn resolve_key_path(repo: &gix::Repository, explicit: Option<&Path>) -> Resu
         }
     }
     Err(Error::NoSigningKey)
+}
+
+/// Expand a leading `~` (or `~/...`) to the user's home directory, the way
+/// git itself expands `user.signingkey`'s path-typed value. Leaves the
+/// input untouched if it doesn't start with `~` or `$HOME` isn't set.
+fn expand_tilde(configured: &str) -> PathBuf {
+    match configured.strip_prefix('~') {
+        Some(rest) => home_dir().map_or_else(
+            || PathBuf::from(configured),
+            |home| home.join(rest.trim_start_matches('/')),
+        ),
+        None => PathBuf::from(configured),
+    }
 }
 
 /// The current user's home directory, however the platform exposes it —
