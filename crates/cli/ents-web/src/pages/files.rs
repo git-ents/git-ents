@@ -415,7 +415,11 @@ fn source_view(
                                 @if let Some(comment) = comments.get(comment_index) {
                                     tr.blob-comment-row {
                                         td colspan="2" {
-                                            (super::comments::comment_card(comment_index, comment))
+                                            (super::comments::comment_card(
+                                                comment_index,
+                                                comment,
+                                                super::comments::LinkMode::SameFile,
+                                            ))
                                         }
                                     }
                                 }
@@ -443,7 +447,7 @@ fn outdated_comments_section(comments: &[(usize, &super::comments::FileComment)]
     html! {
         h2 { "outdated comments" }
         @for &(index, comment) in comments {
-            (super::comments::comment_card(index, comment))
+            (super::comments::comment_card(index, comment, super::comments::LinkMode::SameFile))
         }
     }
 }
@@ -621,6 +625,7 @@ mod tests {
         FileComment {
             author: "commenter".to_owned(),
             seconds: 0,
+            path: "src/main.rs".to_owned(),
             lines,
             outdated: false,
             body: html! { p { "worth a look" } },

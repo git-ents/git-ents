@@ -1213,6 +1213,40 @@ async fn comments_list_prefills_the_add_form_from_query_params() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains(r#"name="path" value="src/main.rs""#));
     assert!(body.contains(r#"name="lines" value="1-2""#));
+    assert!(
+        body.contains(r#"name="rev" value="HEAD""#),
+        "rev defaults to HEAD when absent, exactly as before"
+    );
+}
+
+/// `GET /comments?rev=<oid>` (the link `crate::pages::commits::show`'s
+/// "comment on this commit" renders) carries the given rev through into
+/// the add form, rather than defaulting to `HEAD`.
+#[tokio::test]
+async fn comments_list_prefills_rev_from_the_query_param() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/comments?rev=deadbeef")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains(r#"name="rev" value="deadbeef""#));
 }
 
 /// `GET /commits` lists the repository's commit history: the seeded
@@ -1285,6 +1319,99 @@ async fn commit_show_renders_the_subject_and_a_diff_line() {
     assert!(
         body.contains("class=\"ln add\""),
         "the root commit's diff renders its added lines"
+    );
+}
+
+/// `GET /commit/{oid}` lists, under a "conversation" heading, every
+/// comment whose anchor was captured against that exact commit -- and
+/// none captured against a different one, even a later commit on the same
+/// branch. The "comment on this commit" link prefills `rev` to the shown
+/// commit's own oid.
+#[tokio::test]
+async fn commit_show_lists_comments_captured_against_that_exact_commit() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let first_oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "commenter",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    seed_comment(
+        &router,
+        &state,
+        "src/main.rs",
+        "left at the first commit",
+        "2:2",
+        &first_oid,
+    )
+    .await;
+
+    commit_change(
+        dir.path(),
+        "src/main.rs",
+        "line 1\nline two\nline 3\n",
+        "second commit",
+    );
+    let second_oid = head_oid(dir.path());
+    assert_ne!(first_oid, second_oid);
+
+    let first_response = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/commit/{first_oid}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = String::from_utf8(
+        first_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf8 html");
+    assert!(first_body.contains("conversation"));
+    assert!(first_body.contains("left at the first commit"));
+    assert!(first_body.contains("commenter"));
+    assert!(
+        first_body.contains("href=\"/files/src/main.rs#L2\""),
+        "the conversation card links path#lines into the file browser: {first_body}"
+    );
+    assert!(
+        first_body.contains(&format!("href=\"/comments?rev={first_oid}\"")),
+        "the comment-on-this-commit link prefills this commit's own oid: {first_body}"
+    );
+
+    let second_response = router
+        .oneshot(
+            Request::get(format!("/commit/{second_oid}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = String::from_utf8(
+        second_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf8 html");
+    assert!(
+        !second_body.contains("left at the first commit"),
+        "a comment captured against the first commit must not appear on the second: {second_body}"
     );
 }
 

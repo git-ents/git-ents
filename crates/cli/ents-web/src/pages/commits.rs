@@ -15,6 +15,15 @@
 //! same textual unified-diff format `git diff` itself produces, which
 //! [`diff_class`] then colorizes line by line -- no new dependency, since
 //! `gix`'s default features already enable `blob-diff`.
+//!
+//! `GET /commit/{oid}` also lists a "conversation": every comment whose
+//! anchor was captured against that exact commit
+//! (`crate::pages::comments::for_commit`), rendered below the diff via the
+//! same [`crate::pages::comments::comment_card`] a blob view uses, each
+//! naming its `path#lines` and linking into `crate::pages::files`'s own
+//! `#L<n>` gutter. A "comment on this commit" link beside the parents list
+//! reaches `crate::pages::comments::list`'s add form with `rev` prefilled
+//! to this commit's own oid.
 
 use std::sync::Arc;
 
@@ -240,6 +249,7 @@ where
     let empty_tree = repo.empty_tree();
     let old_tree_ref = old_tree.as_ref().unwrap_or(&empty_tree);
     let (diff, truncated) = diff_sections(&repo, old_tree_ref, &new_tree);
+    let comments = super::comments::for_commit(&state, object_id);
 
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
@@ -269,12 +279,20 @@ where
                         } @else {
                             " \u{b7} root commit"
                         }
+                        " \u{b7} "
+                        a href={ "/comments?rev=" (object_id) } { "comment on this commit" }
                     }
                 }
             }
             (diff)
             @if truncated {
                 div.card { div.binary { "Diff truncated (over " (MAX_DIFF_BYTES / (1024 * 1024)) " MiB)." } }
+            }
+            @if !comments.is_empty() {
+                h2 { "conversation" }
+                @for (index, comment) in comments.iter().enumerate() {
+                    (super::comments::comment_card(index, comment, super::comments::LinkMode::CrossFile))
+                }
             }
         },
     ))
