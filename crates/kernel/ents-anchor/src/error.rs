@@ -46,6 +46,12 @@ pub enum Error {
     /// [`crate::project_exact`] directly sees it as an ordinary error.
     #[error("the anchor commit {0} no longer exists")]
     AnchorCommitMissing(ObjectId),
+    /// [`crate::capture_worktree`] or [`crate::project_worktree`] was asked
+    /// to read the working tree of a repository that has none (a bare
+    /// repository). Capture or project against a revision instead
+    /// (`anchor.working-tree` applies only where a working tree exists).
+    #[error("the repository has no working tree")]
+    NoWorkingTree,
 }
 
 /// The `Result` alias every `ents-anchor` operation returns.

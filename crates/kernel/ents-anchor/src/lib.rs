@@ -25,6 +25,10 @@
 //!   four-outcome [`Projection`] taxonomy.
 //! - `anchor.fuzzy-fallback` — [`project_from_context`], which [`project`]
 //!   degrades to once the anchored commit has been garbage collected.
+//! - `anchor.working-tree` — [`capture_worktree`] (the on-disk bytes as a
+//!   capture source, `HEAD` recorded as the best-effort commit field) and
+//!   [`project_worktree`] (the on-disk bytes, or a caller-supplied buffer
+//!   standing in for them, as a projection target).
 //!
 //! # Examples
 //!
@@ -98,6 +102,6 @@ mod fixture;
 mod projection;
 mod util;
 
-pub use anchor::{Anchor, LineRange, capture, snippet};
+pub use anchor::{Anchor, LineRange, capture, capture_worktree, snippet};
 pub use error::{Error, Result};
-pub use projection::{Projection, project, project_exact, project_from_context};
+pub use projection::{Projection, project, project_exact, project_from_context, project_worktree};

@@ -201,6 +201,91 @@ pub fn capture(
     })
 }
 
+/// Build the [`Anchor`] for `path` (and optionally `lines`) as it currently
+/// sits in `repo`'s working tree (`anchor.working-tree`): the file's
+/// on-disk bytes are written to the object database as a blob and embedded
+/// exactly as [`capture`] embeds a committed blob (`anchor.retention`), so
+/// an anchor to uncommitted content survives that content being committed,
+/// amended, or discarded.
+///
+/// The anchor's commit field records `HEAD`'s commit — the same
+/// best-effort, never-load-bearing data field it is for a [`capture`]d
+/// anchor (`anchor.immutable`): the anchored blob at `HEAD` is usually a
+/// *different* blob than the one recorded here, and nothing ever diffs
+/// against `HEAD`'s tree to read this anchor back — its content is
+/// embedded.
+///
+/// Fails with [`Error::NoWorkingTree`] on a bare repository, with
+/// [`Error::MissingPath`] when `path` is not a readable file on disk, and
+/// with [`Error::LinesOutOfRange`] when the range does not fit the on-disk
+/// content (`anchor.definition`'s validation, applied to the bytes actually
+/// captured).
+///
+/// # Examples
+///
+/// ```
+/// # let dir = tempfile::tempdir().expect("tempdir");
+/// # std::process::Command::new("git").arg("init").arg("-q").arg(dir.path()).status().unwrap();
+/// # std::fs::write(dir.path().join("file.txt"), "committed\n").unwrap();
+/// # std::process::Command::new("git").arg("-C").arg(dir.path()).args(["add", "-A"]).status().unwrap();
+/// # std::process::Command::new("git").arg("-C").arg(dir.path())
+/// #     .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one"])
+/// #     .status().unwrap();
+/// // Dirty the file after the commit: the anchor captures the *on-disk*
+/// // bytes, not what HEAD holds.
+/// std::fs::write(dir.path().join("file.txt"), "edited, not yet committed\n").unwrap();
+/// let repo = gix::open(dir.path()).expect("open");
+/// let anchor = ents_anchor::capture_worktree(&repo, "file.txt", None).expect("capture");
+/// assert_eq!(ents_anchor::snippet(&anchor).unwrap(), "edited, not yet committed\n");
+/// assert_eq!(anchor.commit(), repo.head_id().expect("head").detach());
+/// ```
+// @relation(anchor.working-tree, anchor.definition, anchor.retention, scope=function)
+pub fn capture_worktree(
+    repo: &gix::Repository,
+    path: &str,
+    lines: Option<LineRange>,
+) -> Result<Anchor> {
+    let workdir = repo.workdir().ok_or(Error::NoWorkingTree)?;
+    // HEAD is recorded as plain data (`anchor.working-tree`); a repository
+    // with no commit yet has no best-effort commit to record, and the
+    // Resolve error names exactly that.
+    let commit_id = resolve_commit(repo, "HEAD")?.id().detach();
+    let file = workdir.join(path);
+    let missing = || Error::MissingPath {
+        commit: commit_id,
+        path: path.to_owned(),
+    };
+    if !file.is_file() {
+        return Err(missing());
+    }
+    let content = std::fs::read(&file).map_err(|_source| missing())?;
+    if let Some(range) = lines {
+        lines_of(&content, path, range)?;
+    }
+    // Written to the odb now (`anchor.working-tree`), so the blob exists
+    // under its own id from the moment of capture — embedding it in the
+    // anchor's stored tree later reproduces this same id by content
+    // addressing (`anchor.retention`).
+    let blob = repo
+        .write_blob(content.as_slice())
+        .map_err(|error| Error::Object(error.to_string()))?
+        .detach();
+    let context = capture_context(&content, lines);
+
+    let mut commit_bytes = [0u8; 20];
+    commit_bytes.copy_from_slice(commit_id.as_slice());
+    let mut blob_bytes = [0u8; 20];
+    blob_bytes.copy_from_slice(blob.as_slice());
+    Ok(Anchor {
+        commit: commit_bytes,
+        path: path.to_owned(),
+        blob: blob_bytes,
+        lines,
+        content,
+        context,
+    })
+}
+
 /// The exact text of `anchor`'s lines — the whole file for a whole-file
 /// anchor — derived at read time from [`Anchor::content`], so it can never
 /// disagree with what was captured and is never itself stored
@@ -342,6 +427,71 @@ mod tests {
         let anchor = capture(&git_repo, "HEAD", "file.txt", None).unwrap();
 
         assert_eq!(anchor.context, numbered(1..=5).into_bytes());
+    }
+
+    /// `anchor.working-tree`: capture reads the *on-disk* bytes (not
+    /// `HEAD`'s blob), writes them to the odb as a blob, and records
+    /// `HEAD`'s commit as the plain-data commit field.
+    // @relation(anchor.working-tree, anchor.retention, scope=function, role=Verifies)
+    #[test]
+    fn capture_worktree_records_dirty_bytes_head_and_an_odb_blob() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let dirty = numbered(1..=10).replace("line 5\n", "line five\n");
+        std::fs::write(dir.path().join("file.txt"), &dirty).unwrap();
+        let git_repo = gix::open(dir.path()).unwrap();
+
+        let anchor = capture_worktree(&git_repo, "file.txt", range(5, 6)).unwrap();
+        assert_eq!(anchor.commit().to_string(), head(dir.path()));
+        assert_eq!(anchor.content, dirty.clone().into_bytes());
+        assert_eq!(snippet(&anchor).unwrap(), "line five\nline 6\n");
+        // The blob exists in the odb from the moment of capture, under the
+        // on-disk bytes' own id — not HEAD's version of the file.
+        assert!(git_repo.has_object(anchor.blob()));
+        let committed = capture(&git_repo, "HEAD", "file.txt", None).unwrap();
+        assert_ne!(anchor.blob(), committed.blob());
+    }
+
+    /// The anchor survives the uncommitted content being committed
+    /// (`anchor.working-tree`): after `git commit`, the same blob sits at
+    /// the anchored path, so projection reports it current.
+    // @relation(anchor.working-tree, scope=function, role=Verifies)
+    #[test]
+    fn capture_worktree_anchor_survives_the_content_being_committed() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=3)).unwrap();
+        commit_all(dir.path(), "one");
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=4)).unwrap();
+        let git_repo = gix::open(dir.path()).unwrap();
+        let anchor = capture_worktree(&git_repo, "file.txt", range(4, 4)).unwrap();
+
+        commit_all(dir.path(), "two");
+        let git_repo = gix::open(dir.path()).unwrap();
+        assert_eq!(
+            crate::project(&git_repo, &anchor, "HEAD").unwrap(),
+            crate::Projection::Current
+        );
+    }
+
+    #[rstest]
+    #[case::missing_path("absent.txt", None)]
+    #[case::oversized_range("file.txt", range(2, 9))]
+    // @relation(anchor.working-tree, anchor.definition, scope=function, role=Verifies)
+    fn capture_worktree_rejects_a_missing_path_and_an_oversized_range(
+        #[case] path: &str,
+        #[case] lines: Option<LineRange>,
+    ) {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=3)).unwrap();
+        commit_all(dir.path(), "one");
+        let git_repo = gix::open(dir.path()).unwrap();
+
+        let error = capture_worktree(&git_repo, path, lines).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::MissingPath { .. } | Error::LinesOutOfRange { .. }
+        ));
     }
 
     // @relation(anchor.immutable, scope=function, role=Verifies)

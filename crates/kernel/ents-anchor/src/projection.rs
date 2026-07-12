@@ -297,6 +297,102 @@ pub fn project_from_context(
     })
 }
 
+/// Project `anchor` onto the working tree (`anchor.working-tree`): diff the
+/// anchored blob — always available, it is embedded (`anchor.retention`) —
+/// against the path's current on-disk bytes, or against `buffer` standing
+/// in for them (`lens.working-tree`'s unsaved-editor-buffer case), and
+/// report the same four outcomes as [`project`].
+///
+/// There is no commit on the target side to diff trees against, so rename
+/// following degrades exactly as [`project_from_context`]'s does
+/// (`anchor.working-tree`): only `anchor.path` itself is consulted, and a
+/// file that moved on disk reports [`Projection::Deleted`] the same as a
+/// removed one. The line mapping itself never degrades: the embedded
+/// content makes the exact blob diff [`project_exact`] uses available even
+/// when the anchor's own commit is long gone.
+///
+/// # Examples
+///
+/// ```
+/// # let dir = tempfile::tempdir().expect("tempdir");
+/// # std::process::Command::new("git").arg("init").arg("-q").arg(dir.path()).status().unwrap();
+/// # std::fs::write(dir.path().join("file.txt"), "a\nb\nc\n").unwrap();
+/// # std::process::Command::new("git").arg("-C").arg(dir.path()).args(["add", "-A"]).status().unwrap();
+/// # std::process::Command::new("git").arg("-C").arg(dir.path())
+/// #     .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one"])
+/// #     .status().unwrap();
+/// use ents_anchor::{LineRange, Projection};
+///
+/// let repo = gix::open(dir.path()).expect("open");
+/// let anchor = ents_anchor::capture(&repo, "HEAD", "file.txt", Some(LineRange { start: 2, end: 2 }))
+///     .expect("capture");
+///
+/// // Dirty the working tree above the anchored line: the anchor relocates,
+/// // no commit involved on the target side.
+/// std::fs::write(dir.path().join("file.txt"), "inserted\na\nb\nc\n").unwrap();
+/// assert_eq!(
+///     ents_anchor::project_worktree(&repo, &anchor, None).expect("project"),
+///     Projection::Relocated {
+///         path: "file.txt".to_owned(),
+///         lines: Some(LineRange { start: 3, end: 3 }),
+///     }
+/// );
+///
+/// // A caller-supplied buffer stands in for the on-disk bytes.
+/// assert_eq!(
+///     ents_anchor::project_worktree(&repo, &anchor, Some(b"a\nb\nc\n")).expect("project"),
+///     Projection::Current
+/// );
+/// ```
+// @relation(anchor.working-tree, scope=function)
+pub fn project_worktree(
+    repo: &gix::Repository,
+    anchor: &Anchor,
+    buffer: Option<&[u8]>,
+) -> Result<Projection> {
+    let outdated = || {
+        Ok(Projection::Outdated {
+            path: anchor.path.clone(),
+        })
+    };
+    let owned;
+    let bytes: &[u8] = match buffer {
+        Some(bytes) => bytes,
+        None => {
+            let workdir = repo.workdir().ok_or(Error::NoWorkingTree)?;
+            let file = workdir.join(&anchor.path);
+            let Ok(metadata) = std::fs::metadata(&file) else {
+                return Ok(Projection::Deleted);
+            };
+            if !metadata.is_file() {
+                // The entry is no longer a regular file — the same
+                // taxonomy row `project_exact` reports for a mode change.
+                return outdated();
+            }
+            owned = std::fs::read(&file).map_err(|error| Error::Object(error.to_string()))?;
+            &owned
+        }
+    };
+    if bytes == anchor.content.as_slice() {
+        // Byte equality is blob-id equality: the exact anchored blob still
+        // sits at the anchored path.
+        return Ok(Projection::Current);
+    }
+    let Some(range) = anchor.lines else {
+        return Ok(Projection::Relocated {
+            path: anchor.path.clone(),
+            lines: None,
+        });
+    };
+    match map_range(&anchor.content, bytes, range) {
+        Some(lines) => Ok(Projection::Relocated {
+            path: anchor.path.clone(),
+            lines: Some(lines),
+        }),
+        None => outdated(),
+    }
+}
+
 /// Map the 1-based inclusive `range` from `old`'s lines to `new`'s by
 /// walking the diff's hunks in order: a hunk entirely above the range
 /// shifts it by the hunk's growth, a hunk entirely below is ignored, and any
@@ -658,6 +754,147 @@ mod tests {
         assert_eq!(
             project_from_context(&git_repo, &anchor, "HEAD").unwrap(),
             Projection::Deleted
+        );
+    }
+
+    /// One *uncommitted* working-tree edit per taxonomy row of
+    /// [`project_worktree_reports_the_spec_outcomes`] — the same rows the
+    /// commit-target table enumerates, minus rename following, which the
+    /// working tree deliberately degrades (`anchor.working-tree`).
+    #[derive(Debug, Clone, Copy)]
+    enum DirtyMutation {
+        None,
+        PrependTwoLines,
+        EditLineFive,
+        Delete,
+        ReplaceWithDirectory,
+    }
+
+    impl DirtyMutation {
+        fn apply(self, dir: &std::path::Path) {
+            let file = dir.join("file.txt");
+            match self {
+                Self::None => {}
+                Self::PrependTwoLines => {
+                    std::fs::write(&file, format!("added a\nadded b\n{}", numbered(1..=10)))
+                        .unwrap();
+                }
+                Self::EditLineFive => {
+                    let edited = numbered(1..=10).replace("line 5\n", "line five\n");
+                    std::fs::write(&file, edited).unwrap();
+                }
+                Self::Delete => {
+                    std::fs::remove_file(&file).unwrap();
+                }
+                Self::ReplaceWithDirectory => {
+                    std::fs::remove_file(&file).unwrap();
+                    std::fs::create_dir(&file).unwrap();
+                }
+            }
+        }
+    }
+
+    /// `anchor.working-tree`'s projection target: the four
+    /// `anchor.projection` outcomes recovered against a dirty working
+    /// tree, with no commit on the target side.
+    #[rstest]
+    #[case::unchanged_is_current(DirtyMutation::None, range(3, 4), Projection::Current)]
+    #[case::edit_above_shifts(
+        DirtyMutation::PrependTwoLines,
+        range(5, 6),
+        Projection::Relocated { path: "file.txt".to_owned(), lines: range(7, 8) }
+    )]
+    #[case::edit_inside_outdates(
+        DirtyMutation::EditLineFive,
+        range(5, 6),
+        Projection::Outdated { path: "file.txt".to_owned() }
+    )]
+    #[case::deletion_is_deleted(DirtyMutation::Delete, range(3, 4), Projection::Deleted)]
+    #[case::not_a_regular_file_outdates(
+        DirtyMutation::ReplaceWithDirectory,
+        range(3, 4),
+        Projection::Outdated { path: "file.txt".to_owned() }
+    )]
+    #[case::whole_file_survives_an_edit(
+        DirtyMutation::EditLineFive,
+        None,
+        Projection::Relocated { path: "file.txt".to_owned(), lines: None }
+    )]
+    // @relation(anchor.working-tree, scope=function, role=Verifies)
+    fn project_worktree_reports_the_spec_outcomes(
+        #[case] mutation: DirtyMutation,
+        #[case] lines: Option<LineRange>,
+        #[case] expected: Projection,
+    ) {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let git_repo = gix::open(dir.path()).unwrap();
+        let anchor = capture(&git_repo, "HEAD", "file.txt", lines).unwrap();
+
+        // Dirty the working tree only: nothing is committed, so only the
+        // on-disk bytes can produce these outcomes.
+        mutation.apply(dir.path());
+        assert_eq!(
+            project_worktree(&git_repo, &anchor, None).unwrap(),
+            expected
+        );
+    }
+
+    /// A caller-supplied buffer stands in for the on-disk bytes
+    /// (`anchor.working-tree`): the projection follows the buffer, not the
+    /// file — even when the file is gone entirely.
+    // @relation(anchor.working-tree, scope=function, role=Verifies)
+    #[test]
+    fn project_worktree_prefers_a_caller_supplied_buffer_over_the_disk() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let git_repo = gix::open(dir.path()).unwrap();
+        let anchor = capture(&git_repo, "HEAD", "file.txt", range(5, 6)).unwrap();
+
+        std::fs::remove_file(dir.path().join("file.txt")).unwrap();
+        let buffer = format!("added a\nadded b\n{}", numbered(1..=10));
+        assert_eq!(
+            project_worktree(&git_repo, &anchor, Some(buffer.as_bytes())).unwrap(),
+            Projection::Relocated {
+                path: "file.txt".to_owned(),
+                lines: range(7, 8),
+            }
+        );
+        // Without the buffer, the same call reads the (deleted) disk state.
+        assert_eq!(
+            project_worktree(&git_repo, &anchor, None).unwrap(),
+            Projection::Deleted
+        );
+    }
+
+    /// A working-tree projection also works for an anchor that was itself
+    /// captured from the working tree and whose bytes were never committed
+    /// anywhere: the embedded content is the diff's old side, no commit
+    /// participates (`anchor.working-tree`).
+    // @relation(anchor.working-tree, scope=function, role=Verifies)
+    #[test]
+    fn project_worktree_needs_no_commit_on_either_side() {
+        let dir = repo();
+        std::fs::write(dir.path().join("file.txt"), numbered(1..=10)).unwrap();
+        commit_all(dir.path(), "one");
+        let dirty = numbered(1..=10).replace("line 9\n", "line nine\n");
+        std::fs::write(dir.path().join("file.txt"), &dirty).unwrap();
+        let git_repo = gix::open(dir.path()).unwrap();
+        let anchor = crate::capture_worktree(&git_repo, "file.txt", range(5, 6)).unwrap();
+
+        assert_eq!(
+            project_worktree(&git_repo, &anchor, None).unwrap(),
+            Projection::Current
+        );
+        std::fs::write(dir.path().join("file.txt"), format!("added a\n{dirty}")).unwrap();
+        assert_eq!(
+            project_worktree(&git_repo, &anchor, None).unwrap(),
+            Projection::Relocated {
+                path: "file.txt".to_owned(),
+                lines: range(6, 7),
+            }
         );
     }
 
