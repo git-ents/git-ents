@@ -274,20 +274,32 @@ form button:hover { background: var(--color-link-hover); }
 .commit-meta { color: var(--color-text-muted); font-size: .85rem; margin-top: .2rem; }
 .commit-meta a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 
-.blob { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 1.5rem; }
-.blob pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; margin: 0; padding: 1rem 0; }
-.blob pre.blob-nums { text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding-left: 1ch; padding-right: 1ch; user-select: none; -webkit-user-select: none; }
+/* The line-per-row source view (`crate::pages::files::source_view`): a
+ * `<table>` inside one `overflow-x: auto` wrapper so the whole blob scrolls
+ * together, its `.blob-nums` gutter cell pinned via `position: sticky` so
+ * line numbers stay put while wide code scrolls under them -- the same
+ * frozen-gutter behavior the previous two-`<pre>`-column layout got for
+ * free, now reconstructed for a per-line table so a comment card
+ * (`tr.blob-comment-row`) can interleave as a full-width row between any
+ * two line rows. */
+.blob { overflow-x: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem; }
+.blob table { border-collapse: collapse; width: 100%; font-family: var(--font-mono); font-size: .82rem; line-height: 1.55; }
+.blob td.blob-nums { position: sticky; left: 0; text-align: right; color: var(--color-text-muted); background: var(--color-code-bg); border-right: 1px solid var(--color-border); padding: 0 1ch; user-select: none; -webkit-user-select: none; white-space: nowrap; vertical-align: top; }
 .blob-nums a { display: block; color: inherit; text-decoration: none; }
 .blob-nums a:hover { color: var(--color-accent); }
 .blob-nums a:target { color: var(--color-accent); font-weight: 700; }
-.blob-code { overflow-x: auto; min-width: 0; }
-.blob-code code { display: block; font-family: inherit; padding: 0 1.25rem; white-space: pre; color: var(--color-text); }
+.blob td.blob-code { padding: 0 1.25rem; white-space: pre; color: var(--color-text); vertical-align: top; }
+.blob-code code { font-family: inherit; }
+.blob tr.blob-comment-row td { padding: 0; background: var(--color-surface); }
+.blob tr.blob-comment-row .card { margin: .5rem 1rem; }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
 
-/* File-anchored comment cards (`crate::pages::comments::comments_section`),
- * below a blob view in `crate::pages::files` -- each comment is its own
- * `.card`, its body reusing `.doc-body`'s prose styling (a comment body
- * renders as AsciiDoc, same as a rendered document blob). */
+/* File-anchored comment cards (`crate::pages::comments::comment_card`),
+ * whether interleaved into a blob's own table (`tr.blob-comment-row`,
+ * above) or listed below it (`comments_section`/`outdated_comments_section`)
+ * -- each comment is its own `.card`, its body reusing `.doc-body`'s prose
+ * styling (a comment body renders as AsciiDoc, same as a rendered document
+ * blob). */
 .comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .7rem 1.1rem; font-size: .82rem; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
 .comment-meta .author { color: var(--color-text); font-weight: 600; }
 .outdated { color: var(--color-text-muted); font-style: italic; }

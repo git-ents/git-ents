@@ -6,10 +6,12 @@
 //! already returns structured data for, rather than a bare reflected
 //! field list.
 //!
-//! [`for_path`]/[`comments_section`] are this module's second entry
-//! point: `crate::pages::files`'s blob view calls them to render the
-//! comments anchored to the file it is showing, rather than duplicating
-//! this module's own read-project-render pattern.
+//! [`for_path`]/[`comment_card`]/[`comments_section`] are this module's
+//! second entry point: `crate::pages::files`'s blob view calls them to
+//! render the comments anchored to the file it is showing -- inline,
+//! interleaved at the anchored line, or in a below-the-blob section for
+//! one with no current line to interleave at -- rather than duplicating
+//! this module's own read-project-render pattern or its card markup.
 
 use std::sync::Arc;
 
@@ -202,17 +204,15 @@ fn add_form(
 }
 
 /// One comment as `crate::pages::files`'s blob view shows it: who wrote it
-/// and when ([`super::ago`]), where its anchor lands on the displayed
-/// file (a line-range link into the blob's own `#L<n>` gutter, or the
-/// muted `outdated` marker when [`ents_anchor::project`] can no longer map
-/// the anchored lines), and its body rendered as AsciiDoc
-/// ([`crate::asciidoc`], this crate's default prose treatment for text
-/// with no filename of its own to infer a MIME type from). Mirrors
-/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `FileComment`,
-/// salvaged per this crate's PORT-and-reverify policy: author/timestamp
-/// there came from `git_comment::provenance`'s shell-out, here from
-/// [`super::commit_authorship`] reading the comment ref's own tip commit
-/// through `gix_object::Find`.
+/// and when ([`super::ago`]), where its anchor lands (a line range, when it
+/// has one to interleave at -- [`comment_card`]'s own doc), and its body
+/// rendered as AsciiDoc ([`crate::asciidoc`], this crate's default prose
+/// treatment for text with no filename of its own to infer a MIME type
+/// from). Mirrors `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own
+/// `FileComment`, salvaged per this crate's PORT-and-reverify policy:
+/// author/timestamp there came from `git_comment::provenance`'s shell-out,
+/// here from [`super::commit_authorship`] reading the comment ref's own tip
+/// commit through `gix_object::Find`.
 pub(crate) struct FileComment {
     /// The comment ref's own tip commit's author display name
     /// (`model.comment`: a comment stores no author field of its own).
@@ -220,7 +220,9 @@ pub(crate) struct FileComment {
     /// [`super::ago`] renders this against the current time.
     pub(crate) seconds: i64,
     /// The anchored range as it lands on the displayed file at `HEAD`, or
-    /// `None` for a whole-file anchor or an outdated projection.
+    /// `None` for a whole-file anchor or an outdated projection -- either
+    /// way, nothing for [`crate::pages::files`]'s blob view to interleave
+    /// the card after, so it renders in a below-the-blob section instead.
     pub(crate) lines: Option<LineRange>,
     /// Set when [`ents_anchor::project`] reports
     /// [`Projection::Outdated`]: the anchored lines themselves were
@@ -295,37 +297,48 @@ pub(crate) fn for_path<O: Find + Write>(
     out
 }
 
-/// The comment cards under a blob view, one [`FileComment`] per
-/// [`maud`]-rendered `.card`, mounted at `#file-comments` so
-/// `crate::pages::files`'s own "N comments" link can jump straight to
-/// them. Renders nothing at all -- not even an empty container -- when
-/// `comments` is empty, so a file with no comments carries no extra
-/// markup (`crate::pages::files`'s own blob view calls this
-/// unconditionally rather than checking first).
-pub(crate) fn comments_section(comments: &[FileComment]) -> Markup {
-    if comments.is_empty() {
-        return html! {};
-    }
+/// One comment's card: author, [`super::ago`] time, an in-page `#L<n>`
+/// line-range link (or the muted `outdated` marker), and its body -- the
+/// single rendering every comment-showing spot in `crate::pages::files`
+/// shares ([`comments_section`]'s below-the-blob list, the blob view's own
+/// inline-interleaved rows), so a comment's markup is defined in exactly
+/// one place. `index` names this card's `id="comment-<index>"` anchor,
+/// stable within whichever page rendered it (not a global id):
+/// `crate::pages::files`'s crumbs "N comments" jump link targets
+/// `comment-0`, the first comment in display order, regardless of whether
+/// it landed inline or below the blob.
+pub(crate) fn comment_card(index: usize, comment: &FileComment) -> Markup {
     html! {
-        div id="file-comments" {
-            @for comment in comments {
-                div.card {
-                    div.comment-meta {
-                        span.author { (comment.author) }
-                        span { (super::ago(comment.seconds)) }
-                        @if let Some(range) = comment.lines {
-                            a href={ "#L" (range.start) } {
-                                @if range.start == range.end { "line " (range.start) }
-                                @else { "lines " (range.start) "-" (range.end) }
-                            }
-                        }
-                        @if comment.outdated {
-                            span.outdated { "outdated" }
-                        }
+        div.card id={ "comment-" (index) } {
+            div.comment-meta {
+                span.author { (comment.author) }
+                span { (super::ago(comment.seconds)) }
+                @if let Some(range) = comment.lines {
+                    a href={ "#L" (range.start) } {
+                        @if range.start == range.end { "line " (range.start) }
+                        @else { "lines " (range.start) "-" (range.end) }
                     }
-                    div.doc-body { (comment.body) }
+                }
+                @if comment.outdated {
+                    span.outdated { "outdated" }
                 }
             }
+            div.doc-body { (comment.body) }
+        }
+    }
+}
+
+/// The comment cards under a blob view (a rendered document, a binary
+/// placeholder, or -- for a raw-source view -- the ones with no current
+/// line range to interleave at; see `crate::pages::files::source_view`),
+/// one [`comment_card`] per entry. Renders nothing at all -- not even an
+/// empty container -- when `comments` is empty, so a file with no comments
+/// carries no extra markup (`crate::pages::files`'s own blob view calls
+/// this unconditionally rather than checking first).
+pub(crate) fn comments_section(comments: &[FileComment]) -> Markup {
+    html! {
+        @for (index, comment) in comments.iter().enumerate() {
+            (comment_card(index, comment))
         }
     }
 }

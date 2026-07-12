@@ -896,7 +896,7 @@ async fn files_blob_view_renders_a_plain_text_file() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("blob-nums"));
-    assert!(body.contains("<pre class=\"blob-code\"><code>"));
+    assert!(body.contains("<td class=\"blob-code\"><code>"));
     assert!(body.contains("1 &lt; 2"));
 }
 
@@ -1113,11 +1113,20 @@ async fn files_blob_view_shows_a_seeded_comments_body_and_author() {
         .expect("body")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("id=\"file-comments\""));
+    assert!(body.contains("id=\"comment-0\""));
     assert!(body.contains("worth a look here"));
     assert!(body.contains("commenter"));
     assert!(body.contains("href=\"#L2\""));
     assert!(!body.contains("class=\"outdated\""));
+    // Interleaved directly into the blob, after line 2's row and before
+    // line 3's -- not below the whole table.
+    let line2 = body.find("id=\"L2\"").expect("line 2 renders");
+    let card = body.find("comment-meta").expect("card renders");
+    let line3 = body.find("id=\"L3\"").expect("line 3 renders");
+    assert!(
+        line2 < card && card < line3,
+        "the card must land between line 2 and line 3, in document order"
+    );
 }
 
 /// A comment whose anchored lines were since edited still renders (never

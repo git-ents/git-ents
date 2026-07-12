@@ -18,11 +18,20 @@
 //! that).
 //!
 //! A blob view also loads and renders the comments anchored to it
-//! (`crate::pages::comments::for_path`/`comments_section`), below the blob
-//! itself, and [`crumbs`] grows a "comment on this file" link (plus a
-//! jump to those cards, once there is at least one) beside its own
-//! trailing "history" link -- a directory listing carries neither, since
-//! a comment anchors to a file, never a tree.
+//! (`crate::pages::comments::for_path`), and [`crumbs`] grows a "comment on
+//! this file" link (plus a jump to the first card, once there is at least
+//! one) beside its own trailing "history" link -- a directory listing
+//! carries neither, since a comment anchors to a file, never a tree. A
+//! raw-source view (not a rendered document or a binary placeholder)
+//! interleaves each comment's card directly after the row naming its
+//! anchored range's last line, full width across the blob's line-number
+//! and code columns ([`source_view`]); a comment with no current line
+//! range (a whole-file anchor, or `ents_anchor::Projection::Outdated`) has
+//! nowhere to interleave, and renders in a below-the-blob "outdated
+//! comments" section instead ([`outdated_comments_section`]). Doc-rendered
+//! and binary views keep every comment below the blob, unconditionally
+//! (`crate::pages::comments::comments_section`), since there is no source
+//! line to interleave at.
 
 use std::sync::Arc;
 
@@ -151,6 +160,7 @@ where
             .map_err(|source| Error::Repo(source.to_string()))?;
         let name = path.rsplit('/').next().unwrap_or(path);
         let comments = super::comments::for_path(state, &repo, path);
+        let (body, below) = blob_view(name, &blob.data, &comments)?;
         Ok(super::layout(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
@@ -158,8 +168,8 @@ where
             path,
             html! {
                 (crumbs(path, Some(comments.len())))
-                (blob_view(name, &blob.data)?)
-                (super::comments::comments_section(&comments))
+                (body)
+                (below)
             },
         ))
     } else {
@@ -234,10 +244,11 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
 /// of the code, not a tab of its own -- `crate::pages::mod`'s own doc) and,
 /// on a blob view (`comments` is `Some`), `crate::pages::comments`'s own
 /// add form for this file ("comment on this file") plus a jump straight to
-/// [`super::comments::comments_section`]'s cards when there is at least
-/// one comment already anchored here.
-/// `comments` is `None` on a directory listing, where neither link makes
-/// sense.
+/// the first comment card (`id="comment-0"`, in display order -- see
+/// [`super::comments::comment_card`]'s own doc) when there is at least one
+/// comment already anchored here, wherever it renders (inline or below the
+/// blob). `comments` is `None` on a directory listing, where neither link
+/// makes sense.
 fn crumbs(path: &str, comments: Option<usize>) -> Markup {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut acc = String::new();
@@ -265,7 +276,7 @@ fn crumbs(path: &str, comments: Option<usize>) -> Markup {
             @if let Some(count) = comments {
                 a.crumbs-history href={ "/comments?file=" (path) } { "comment on this file" }
                 @if count > 0 {
-                    a.crumbs-history href="#file-comments" {
+                    a.crumbs-history href="#comment-0" {
                         (count) @if count == 1 { " comment" } @else { " comments" }
                     }
                 }
@@ -281,49 +292,294 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8000).any(|b| *b == 0)
 }
 
-/// A single blob's contents: a Markdown/AsciiDoc document rendered as such
-/// via [`crate::markdown`]/[`crate::asciidoc`], a binary-content
-/// placeholder, or a line-numbered source view of the raw text.
-///
-/// The source view mirrors `pre-redo:crates/git-ents-server/src/web/pages.rs`'s
-/// `blob_body`: a `.blob` grid pairing a `pre.blob-nums` gutter of
-/// per-line `#L{n}` anchors with a `pre.blob-code` code column, highlighted
-/// via [`highlight`] when `name`'s grammar is known and falling back to a
-/// plain escaped `<code>` otherwise.
+/// A single blob's contents, plus whatever comments belong below it: a
+/// Markdown/AsciiDoc document rendered as such via
+/// [`crate::markdown`]/[`crate::asciidoc`] or a binary-content placeholder
+/// -- either way every `comment` renders below, unconditionally
+/// ([`crate::pages::comments::comments_section`]), since there is no
+/// source line to interleave a card at -- or [`source_view`]'s
+/// line-per-row rendering, which interleaves a comment with a current line
+/// range directly into the blob and returns the rest (no current line
+/// range: a whole-file anchor, or `ents_anchor::Projection::Outdated`) as
+/// a separate below-the-blob section ([`outdated_comments_section`]).
 ///
 /// # Errors
 ///
 /// Propagates [`crate::asciidoc::to_html`]'s own [`Error::Asciidoc`].
-fn blob_view(name: &str, bytes: &[u8]) -> Result<Markup> {
+fn blob_view(
+    name: &str,
+    bytes: &[u8],
+    comments: &[super::comments::FileComment],
+) -> Result<(Markup, Markup)> {
     if is_binary(bytes) {
-        return Ok(html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } });
+        return Ok((
+            html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } },
+            super::comments::comments_section(comments),
+        ));
     }
     let Ok(text) = std::str::from_utf8(bytes) else {
-        return Ok(html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } });
+        return Ok((
+            html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } },
+            super::comments::comments_section(comments),
+        ));
     };
     if crate::markdown::is_markdown(name) {
-        return Ok(html! { div.card { div.doc-body { (crate::markdown::to_html(text)) } } });
+        return Ok((
+            html! { div.card { div.doc-body { (crate::markdown::to_html(text)) } } },
+            super::comments::comments_section(comments),
+        ));
     }
     if crate::asciidoc::is_asciidoc(name) {
-        return Ok(html! { div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } } });
+        return Ok((
+            html! { div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } } },
+            super::comments::comments_section(comments),
+        ));
     }
-    let lines = text.lines().count().max(1);
     let highlighted = highlight(name, text);
-    Ok(html! {
+    let below: Vec<(usize, &super::comments::FileComment)> = comments
+        .iter()
+        .enumerate()
+        .filter(|(_, comment)| comment.lines.is_none())
+        .collect();
+    Ok((
+        source_view(text, highlighted, comments),
+        outdated_comments_section(&below),
+    ))
+}
+
+/// The raw-source view: one table row per line (a `<tr>` pairing a
+/// `.blob-nums` line-number cell carrying the row's `#L{n}` anchor with a
+/// `.blob-code` cell, no wrapper beyond those two cells -- lean enough that
+/// thousands of lines stay cheap), highlighted via [`highlight`] when
+/// `highlighted` is `Some` and falling back to plain (still per-line,
+/// still auto-escaped by `maud`'s own interpolation) text otherwise. Each
+/// [`FileComment`](super::comments::FileComment) in `comments` whose
+/// [`ents_anchor::LineRange`] is `Some` renders its card
+/// ([`super::comments::comment_card`]) immediately after the row naming
+/// its range's last line, full width across both columns
+/// (`tr.blob-comment-row`, `colspan="2"`) -- multiple comments ending on
+/// the same line stack in `comments`' own order (`comment::list`'s ref
+/// order). A comment with no current line range is [`blob_view`]'s own
+/// concern, not this function's: it never appears here.
+fn source_view(
+    text: &str,
+    highlighted: Option<String>,
+    comments: &[super::comments::FileComment],
+) -> Markup {
+    let physical_lines: Vec<&str> = text.lines().collect();
+    let line_count = physical_lines.len().max(1);
+
+    let mut code_lines: Vec<Markup> = match &highlighted {
+        Some(html) => split_highlighted_lines(html, line_count)
+            .into_iter()
+            .map(|fragment| html! { (PreEscaped(fragment)) })
+            .collect(),
+        None => physical_lines
+            .iter()
+            .map(|line| html! { (*line) })
+            .collect(),
+    };
+    // Exactly `line_count` rows either way: arborium trims trailing
+    // newlines before highlighting (see `split_highlighted_lines`'s own
+    // doc), so a file ending in blank lines can highlight to fewer
+    // embedded newlines than `text.lines().count()` -- padding (never
+    // truncating in practice, since `split_highlighted_lines` never
+    // returns fewer than one fragment) keeps every gutter number paired
+    // with a code cell, with no per-row fallback indexing needed below.
+    code_lines.resize_with(line_count, Markup::default);
+
+    let mut by_end_line: std::collections::BTreeMap<u64, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (index, comment) in comments.iter().enumerate() {
+        if let Some(range) = comment.lines {
+            by_end_line.entry(range.end).or_default().push(index);
+        }
+    }
+
+    html! {
         div.blob {
-            pre.blob-nums {
-                @for n in 1..=lines {
-                    a id={ "L" (n) } href={ "#L" (n) } { (n) }
-                }
-            }
-            pre.blob-code {
-                @match highlighted {
-                    Some(html) => code.code { (PreEscaped(html)) },
-                    None => code { (text) },
+            table {
+                tbody {
+                    @for (index, code) in code_lines.into_iter().enumerate() {
+                        @let n = index.saturating_add(1);
+                        tr {
+                            td.blob-nums { a id={ "L" (n) } href={ "#L" (n) } { (n) } }
+                            @if highlighted.is_some() {
+                                td.blob-code { code.code { (code) } }
+                            } @else {
+                                td.blob-code { code { (code) } }
+                            }
+                        }
+                        @if let Some(indices) = by_end_line.get(&u64::try_from(n).unwrap_or(u64::MAX)) {
+                            @for &comment_index in indices {
+                                @if let Some(comment) = comments.get(comment_index) {
+                                    tr.blob-comment-row {
+                                        td colspan="2" {
+                                            (super::comments::comment_card(comment_index, comment))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-    })
+    }
+}
+
+/// The below-the-blob section for comments with no current line range to
+/// interleave at (a whole-file anchor, or
+/// `ents_anchor::Projection::Outdated`) -- titled to distinguish it from
+/// the inline cards [`source_view`] interleaves directly into the blob,
+/// since every comment reaching here either predates line-level anchoring
+/// or has literally gone stale. Renders nothing at all when `comments` is
+/// empty (mirrors [`super::comments::comments_section`]'s identical
+/// stance).
+fn outdated_comments_section(comments: &[(usize, &super::comments::FileComment)]) -> Markup {
+    if comments.is_empty() {
+        return html! {};
+    }
+    html! {
+        h2 { "outdated comments" }
+        @for &(index, comment) in comments {
+            (super::comments::comment_card(index, comment))
+        }
+    }
+}
+
+/// Split [`highlight`]'s single HTML string into one HTML fragment per
+/// source line (`line_count` of them, padding with an empty string past
+/// whatever [`tokenize`] actually produced -- arborium trims trailing
+/// newlines from its input before highlighting, so a file ending in
+/// several blank lines can highlight to fewer embedded newlines than
+/// `text.lines().count()`; [`source_view`]'s own row loop indexes
+/// defensively for the same reason).
+///
+/// The hard part: a highlight span **can** cross a newline (a multiline
+/// block comment, a triple-quoted string), so it is not enough to split on
+/// `\n` -- a span open at a line boundary must be closed before the split
+/// and reopened after it, or the two resulting fragments are not
+/// independently well-formed HTML. This walks [`tokenize`]'s token stream
+/// with an explicit stack of open span classes: a `Text` token's embedded
+/// newlines close every open span, end the current line, and reopen them
+/// (in the same order) at the start of the next.
+fn split_highlighted_lines(html: &str, line_count: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::with_capacity(line_count.max(1));
+    let mut current = String::new();
+    let mut open: Vec<&str> = Vec::new();
+
+    for token in tokenize(html) {
+        match token {
+            Token::Open(class) => {
+                current.push_str("<span class=\"");
+                current.push_str(class);
+                current.push_str("\">");
+                open.push(class);
+            }
+            Token::Close => {
+                current.push_str("</span>");
+                open.pop();
+            }
+            Token::Text(text) => {
+                let mut parts = text.split('\n');
+                if let Some(first) = parts.next() {
+                    current.push_str(first);
+                }
+                for rest in parts {
+                    for _ in &open {
+                        current.push_str("</span>");
+                    }
+                    lines.push(std::mem::take(&mut current));
+                    for class in &open {
+                        current.push_str("<span class=\"");
+                        current.push_str(class);
+                        current.push_str("\">");
+                    }
+                    current.push_str(rest);
+                }
+            }
+        }
+    }
+    lines.push(current);
+    lines
+}
+
+/// One tokenized fragment of arborium's `HtmlFormat::ClassNames` output
+/// (`arborium_highlight::render::spans_to_html`'s own doc): an opening
+/// `<span class="...">`, its matching `</span>`, or a run of
+/// already-escaped text between tags. That renderer never emits any tag
+/// but these two, and every text run it emits is already HTML-escaped
+/// (`&lt;`, `&amp;`, ...) -- [`split_highlighted_lines`] never re-escapes
+/// or splits an entity, since [`Token::Text`] is only ever split on
+/// literal `\n` bytes, never re-parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Token<'a> {
+    /// `<span class="{0}">`.
+    Open(&'a str),
+    /// `</span>`.
+    Close,
+    /// Already-escaped text between tags.
+    Text(&'a str),
+}
+
+/// Tokenize `html` into a stream of [`Token`]s -- see [`Token`]'s own doc
+/// for why a simple `<span class="...">`/`</span>` scan is sufficient
+/// (arborium's own HTML renderer emits no other tag, and every text run is
+/// already escaped so it never contains a literal `<`). Malformed input
+/// (which arborium's own renderer never produces) degrades to treating the
+/// unrecognized byte as plain text rather than panicking or looping
+/// forever.
+fn tokenize(html: &str) -> Vec<Token<'_>> {
+    const OPEN_PREFIX: &str = "<span class=\"";
+    const CLOSE_TAG: &str = "</span>";
+
+    let mut tokens = Vec::new();
+    let mut rest = html;
+    while !rest.is_empty() {
+        // `.get(..)`/`.get(n..)` rather than direct indexing throughout:
+        // every offset here comes from `find`/`strip_prefix`, always a
+        // valid char boundary, but this function still never indexes a
+        // `str` directly (`clippy::string_slice`) or performs raw
+        // arithmetic on an offset (`clippy::arithmetic_side_effects`) --
+        // `.get(end..)` then `strip_prefix('"')` finds "just past the
+        // quote" without ever computing `end + 1`.
+        if let Some(after_prefix) = rest.strip_prefix(OPEN_PREFIX)
+            && let Some(end) = after_prefix.find('"')
+            && let Some(class) = after_prefix.get(..end)
+            && let Some(after_quote) = after_prefix.get(end..).and_then(|s| s.strip_prefix('"'))
+            && let Some(after_gt) = after_quote.strip_prefix('>')
+        {
+            tokens.push(Token::Open(class));
+            rest = after_gt;
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix(CLOSE_TAG) {
+            tokens.push(Token::Close);
+            rest = after;
+            continue;
+        }
+        let next_tag = [rest.find(OPEN_PREFIX), rest.find(CLOSE_TAG)]
+            .into_iter()
+            .flatten()
+            .min();
+        match next_tag {
+            Some(0) | None => {
+                // No recognized tag anywhere ahead (or, defensively, right
+                // at the cursor despite the checks above not matching it
+                // -- malformed input arborium never actually produces):
+                // take the rest as one text run rather than looping.
+                tokens.push(Token::Text(rest));
+                rest = "";
+            }
+            Some(idx) => {
+                let text = rest.get(..idx).unwrap_or(rest);
+                rest = rest.get(idx..).unwrap_or_default();
+                tokens.push(Token::Text(text));
+            }
+        }
+    }
+    tokens
 }
 
 /// Highlighted HTML for `source`, or `None` when `name`'s extension names
@@ -352,9 +608,24 @@ fn highlight(name: &str, source: &str) -> Option<String> {
 mod tests {
     #![allow(clippy::expect_used, reason = "unit test")]
 
+    use ents_anchor::LineRange;
     use rstest::rstest;
 
     use super::*;
+    use crate::pages::comments::FileComment;
+
+    /// A minimal [`FileComment`] fixture -- the `body`/`author`/`seconds`
+    /// values never matter to a rendering-position assertion, only
+    /// `lines`.
+    fn comment(lines: Option<LineRange>) -> FileComment {
+        FileComment {
+            author: "commenter".to_owned(),
+            seconds: 0,
+            lines,
+            outdated: false,
+            body: html! { p { "worth a look" } },
+        }
+    }
 
     #[rstest]
     #[case::empty("", true)]
@@ -392,35 +663,32 @@ mod tests {
 
     #[test]
     fn blob_view_renders_markdown_as_a_heading_not_raw_markup() {
-        let rendered = blob_view("readme.md", b"# Title\n")
-            .expect("markdown renders")
-            .into_string();
-        assert!(rendered.contains("<h1>Title</h1>"));
+        let (body, _below) = blob_view("readme.md", b"# Title\n", &[]).expect("markdown renders");
+        assert!(body.into_string().contains("<h1>Title</h1>"));
     }
 
     #[test]
     fn blob_view_renders_asciidoc_as_a_heading_not_raw_markup() {
-        let rendered = blob_view("readme.adoc", b"= Title\n\nBody.\n")
-            .expect("asciidoc renders")
-            .into_string();
-        assert!(rendered.contains("<h1>Title</h1>"));
+        let (body, _below) =
+            blob_view("readme.adoc", b"= Title\n\nBody.\n", &[]).expect("asciidoc renders");
+        assert!(body.into_string().contains("<h1>Title</h1>"));
     }
 
     #[test]
     fn blob_view_escapes_plain_text_into_a_line_numbered_code_block() {
-        let rendered = blob_view("notes.txt", b"1 < 2 and true")
-            .expect("plain text renders")
-            .into_string();
+        let (body, _below) =
+            blob_view("notes.txt", b"1 < 2 and true", &[]).expect("plain text renders");
+        let rendered = body.into_string();
         assert!(rendered.contains("blob-nums"));
-        assert!(rendered.contains("<pre class=\"blob-code\"><code>"));
+        assert!(rendered.contains("<td class=\"blob-code\"><code>"));
         assert!(rendered.contains("1 &lt; 2"));
     }
 
     #[test]
     fn blob_view_highlights_a_recognized_language_with_syntax_token_classes() {
-        let rendered = blob_view("main.rs", b"fn main() { let x = 1; }")
-            .expect("rust renders")
-            .into_string();
+        let (body, _below) =
+            blob_view("main.rs", b"fn main() { let x = 1; }", &[]).expect("rust renders");
+        let rendered = body.into_string();
         assert!(rendered.contains("blob-nums"));
         assert!(rendered.contains("class=\"code\""));
         assert!(rendered.contains("class=\"keyword\""));
@@ -428,15 +696,122 @@ mod tests {
 
     #[test]
     fn blob_view_shows_a_placeholder_for_binary_content() {
-        let rendered = blob_view("data.bin", b"\0\x01\x02binary")
-            .expect("binary placeholder renders")
-            .into_string();
-        assert!(rendered.contains("Binary file"));
+        let (body, _below) =
+            blob_view("data.bin", b"\0\x01\x02binary", &[]).expect("binary placeholder renders");
+        assert!(body.into_string().contains("Binary file"));
+    }
+
+    #[test]
+    fn blob_view_routes_a_doc_comment_below_the_blob_never_inline() {
+        let comments = vec![comment(Some(LineRange { start: 1, end: 1 }))];
+        let (_body, below) =
+            blob_view("readme.md", b"# Title\n", &comments).expect("markdown renders");
+        // A doc view has no source line to interleave at: every comment,
+        // even one with a current line range, renders in the below
+        // section -- `comments_section`'s plain, untitled list, not
+        // `outdated_comments_section`'s titled one.
+        assert!(below.into_string().contains("worth a look"));
+    }
+
+    #[test]
+    fn source_view_interleaves_a_comment_directly_after_its_last_line() {
+        let comments = vec![comment(Some(LineRange { start: 1, end: 2 }))];
+        let rendered = source_view("line 1\nline 2\nline 3\n", None, &comments).into_string();
+        let line2 = rendered.find("id=\"L2\"").expect("line 2 renders");
+        let card = rendered.find("comment-meta").expect("card renders");
+        let line3 = rendered.find("id=\"L3\"").expect("line 3 renders");
+        assert!(
+            line2 < card && card < line3,
+            "the card lands strictly between line 2 and line 3: {rendered}"
+        );
+    }
+
+    #[test]
+    fn source_view_stacks_multiple_comments_ending_on_the_same_line_in_order() {
+        let comments = vec![
+            {
+                let mut c = comment(Some(LineRange { start: 1, end: 1 }));
+                c.body = html! { p { "first" } };
+                c
+            },
+            {
+                let mut c = comment(Some(LineRange { start: 1, end: 1 }));
+                c.body = html! { p { "second" } };
+                c
+            },
+        ];
+        let rendered = source_view("line 1\nline 2\n", None, &comments).into_string();
+        let first = rendered.find("first").expect("first comment renders");
+        let second = rendered.find("second").expect("second comment renders");
+        assert!(first < second, "stacked comments keep ref order");
+    }
+
+    #[test]
+    fn source_view_omits_a_comment_with_no_current_line_range() {
+        let comments = vec![comment(None)];
+        let rendered = source_view("line 1\nline 2\n", None, &comments).into_string();
+        assert!(
+            !rendered.contains("worth a look"),
+            "a comment with no lines has nowhere to interleave -- blob_view routes it below instead"
+        );
     }
 
     #[test]
     fn child_href_nests_under_the_current_directory() {
         assert_eq!(child_href("", "src"), "/files/src");
         assert_eq!(child_href("src", "main.rs"), "/files/src/main.rs");
+    }
+
+    #[test]
+    fn tokenize_splits_spans_and_text_without_touching_entities() {
+        let tokens = tokenize("<span class=\"keyword\">fn</span> 1 &lt; 2");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Open("keyword"),
+                Token::Text("fn"),
+                Token::Close,
+                Token::Text(" 1 &lt; 2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_highlighted_lines_reopens_a_span_that_crosses_a_newline() {
+        // A three-line block comment as one span, per arborium's own
+        // `spans_to_html` shape (see that function's own tests): one
+        // `<span>` whose text contains embedded newlines, followed by an
+        // unrelated keyword span on the line after.
+        let html = "<span class=\"comment\">/*\nfoo\nbar*/</span>\n<span class=\"keyword\">fn</span> main() {}";
+        let lines = split_highlighted_lines(html, 4);
+        assert_eq!(
+            lines,
+            vec![
+                "<span class=\"comment\">/*</span>".to_owned(),
+                "<span class=\"comment\">foo</span>".to_owned(),
+                "<span class=\"comment\">bar*/</span>".to_owned(),
+                "<span class=\"keyword\">fn</span> main() {}".to_owned(),
+            ],
+            "each fragment is independently well-formed and still classed"
+        );
+    }
+
+    #[test]
+    fn split_highlighted_lines_never_re_escapes_or_splits_an_entity() {
+        let html = "<span class=\"operator\">&lt;</span>\nnext";
+        let lines = split_highlighted_lines(html, 2);
+        assert_eq!(
+            lines,
+            vec![
+                "<span class=\"operator\">&lt;</span>".to_owned(),
+                "next".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_highlighted_lines_handles_plain_unhighlighted_text() {
+        let lines = split_highlighted_lines("a\nb\nc", 3);
+        assert_eq!(lines, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
     }
 }
