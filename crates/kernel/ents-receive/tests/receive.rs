@@ -6,6 +6,7 @@
 
 #![expect(
     clippy::expect_used,
+    clippy::indexing_slicing,
     reason = "integration test: fixtures panic on setup failure"
 )]
 
@@ -409,4 +410,138 @@ fn reconcile_matches_incremental_delivery() {
         2,
         "one obligation per commit that entered the trigger's set"
     );
+}
+
+// ---------------------------------------------------------------------
+// model.review-pin: the retention pin's commit shape — empty tree,
+// parents include the retained commit, merge-shaped fast-forward on
+// every advance — admitted by the identical mandatory gate every entity
+// mutation faces.
+// ---------------------------------------------------------------------
+
+/// Read a commit's `(tree, parents)` back out of the store.
+fn commit_shape(objects: &ObjectStore, oid: ObjectId) -> (ObjectId, Vec<ObjectId>) {
+    use gix_object::Find as _;
+
+    let mut buf = Vec::new();
+    let data = objects
+        .try_find(&oid, &mut buf)
+        .expect("readable")
+        .expect("present");
+    assert_eq!(data.kind, Kind::Commit);
+    let commit = gix_object::CommitRef::from_bytes(data.data, oid.kind()).expect("parses");
+    (commit.tree(), commit.parents().collect())
+}
+
+/// A first pin retains the reviewed commit as its only parent and carries
+/// the empty tree; a re-review advances the pin fast-forward with a
+/// merge-shaped commit `(previous pin tip, newly reviewed commit)` — and
+/// the *mandatory* gate admits both shapes (`gate.tip-signed`,
+/// `gate.fast-forward`: descent through any parent).
+// @relation(model.review-pin, meta-ref.namespace, gate.fast-forward, scope=function, role=Verifies)
+#[test]
+fn pin_retains_every_reviewed_round_and_passes_the_mandatory_gate() {
+    let forge = forge();
+    let identity = ents_receive::Identity {
+        actor: gix::actor::Signature {
+            name: "admin".into(),
+            email: "admin@ents.test".into(),
+            time: gix::date::Time {
+                seconds: 300,
+                offset: 0,
+            },
+        },
+        sign: &|payload| forge.admin.sign(payload),
+    };
+    let rounds = chain_commits(&forge.objects, 2, 250);
+    let (first_round, second_round) = (rounds[0], rounds[1]);
+    let pin = namespace::review_pin_ref("7").expect("valid");
+    let empty = ents_testutil::empty_tree(&forge.objects);
+
+    // First review: the pin's tip has the reviewed commit as its only
+    // parent and carries no entity — the empty tree.
+    let outcome = ents_receive::propose_pin(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        pin.clone(),
+        first_round,
+        &identity,
+        "Pin review 7",
+        Mode::Mandatory,
+    )
+    .expect("reaches an outcome");
+    assert_eq!(outcome.result, TxResult::Applied);
+    assert!(outcome.verdicts[0].1.is_pass(), "mandatory gate admits it");
+    let first_tip = forge
+        .refs
+        .get(pin.as_ref())
+        .expect("readable")
+        .expect("set");
+    let (tree, parents) = commit_shape(&forge.objects, first_tip);
+    assert_eq!(tree, empty, "a pin commit carries the empty tree");
+    assert_eq!(parents, vec![first_round]);
+
+    // Re-review after the target moved: merge-shaped fast-forward
+    // (previous pin tip, newly reviewed commit) — every reviewed round
+    // stays retained in the pin's own history.
+    let outcome = ents_receive::propose_pin(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        pin.clone(),
+        second_round,
+        &identity,
+        "Pin review 7 again",
+        Mode::Mandatory,
+    )
+    .expect("reaches an outcome");
+    assert_eq!(outcome.result, TxResult::Applied);
+    assert!(outcome.verdicts[0].1.is_pass());
+    let second_tip = forge
+        .refs
+        .get(pin.as_ref())
+        .expect("readable")
+        .expect("set");
+    let (tree, parents) = commit_shape(&forge.objects, second_tip);
+    assert_eq!(tree, empty);
+    assert_eq!(
+        parents,
+        vec![first_tip, second_round],
+        "previous pin tip first, newly reviewed commit second"
+    );
+}
+
+/// A self-attested member is not authorized for the pin namespace — the
+/// gate's canonical-ref arm applies to `refs/meta/pins/*` unchanged.
+// @relation(model.review-pin, gate.tip-signed, scope=function, role=Verifies)
+#[test]
+fn pin_writes_face_the_same_authorization_as_any_canonical_ref() {
+    let forge = forge();
+    let identity = ents_receive::Identity {
+        actor: gix::actor::Signature {
+            name: "guest".into(),
+            email: "guest@ents.test".into(),
+            time: gix::date::Time {
+                seconds: 300,
+                offset: 0,
+            },
+        },
+        sign: &|payload| forge.guest.sign(payload),
+    };
+    let reviewed = chain_commits(&forge.objects, 1, 250)[0];
+    let pin = namespace::review_pin_ref("7").expect("valid");
+
+    let outcome = ents_receive::propose_pin(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        pin,
+        reviewed,
+        &identity,
+        "Pin review 7",
+        Mode::Mandatory,
+    )
+    .expect("reaches an outcome");
+    assert_eq!(outcome.result, TxResult::Refused);
 }

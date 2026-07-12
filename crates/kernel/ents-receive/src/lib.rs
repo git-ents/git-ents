@@ -96,7 +96,7 @@ mod sink;
 pub use error::{Error, Result};
 pub use outcome::{Mode, Outcome, TxResult};
 pub use proposal::{Proposal, RefTransition, TransportAuth};
-pub use propose::{Identity, propose_delete, propose_entity};
+pub use propose::{Identity, propose_delete, propose_entity, propose_pin};
 pub use receive::receive;
 pub use reconcile::reconcile;
 pub use sink::{EventSink, MemoryEventSink, NullEventSink};

@@ -12,6 +12,11 @@
 //! frontend crate because it is mechanism, not policy: every mutation
 //! frontend across every composition root shares it (`arch.no-object-store-trait`'s
 //! sibling rule — signing and commit-building plumbing is kernel material).
+//!
+//! [`propose_pin`] is the same mechanism for the one commit shape that
+//! carries no entity: a retention pin's empty-tree, merge-shaped commit
+//! (`model.review-pin`), built and signed by the identical
+//! [`signed_commit`] plumbing and admitted through the identical gate.
 
 use ents_model::trailer::Trailers;
 use gix::refs::FullName;
@@ -105,7 +110,124 @@ pub fn propose_entity<T: for<'facet> facet::Facet<'facet>>(
 ) -> Result<Outcome> {
     let tree = facet_git_tree::serialize_into(entity, objects)?;
     let old = refs.get(name.as_ref())?;
+    let parents: Vec<_> = old.into_iter().collect();
+    let tip = signed_commit(objects, &name, tree, parents, identity, subject)?;
 
+    let proposal = Proposal {
+        transitions: vec![RefTransition {
+            name,
+            old,
+            new: Some(tip),
+        }],
+        objects: vec![tip],
+        auth: None,
+    };
+    crate::receive::receive(refs, objects, events, &proposal, mode)
+}
+
+/// Advance the retention pin at `name` to keep `retain` (and its ancestry)
+/// reachable (`model.review-pin`): a signed commit carrying the empty tree
+/// — a pin's commits anchor other content's reachability and carry no
+/// entity, the sole exception to `meta-ref.namespace`'s
+/// tree-is-the-entity shape — whose parents are the pin's current tip (if
+/// any) followed by `retain`, proposed through [`crate::receive`] exactly
+/// like an entity mutation.
+///
+/// A first pin has `retain` as its only parent; every later advance is the
+/// merge-shaped fast-forward `model.review-pin` requires (previous pin
+/// tip, newly retained commit), so every retained round stays in the
+/// pin's own history and the gate's descent check (`gate.fast-forward`,
+/// descent through *any* parent) admits it unchanged.
+///
+/// # Errors
+///
+/// See [`propose_entity`] — identical, minus the serialization failure a
+/// pin cannot have (there is no entity to serialize).
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{Provenance, namespace};
+/// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_pin};
+/// use ents_testutil::{CommitSpec, Keypair, MemRefStore, ObjectStore, empty_tree, enroll_member};
+/// use gix_object::Write as _;
+///
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let admin = Keypair::from_seed(1);
+/// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
+///
+/// // The commit under review — the content the pin keeps reachable.
+/// let tree = empty_tree(&objects);
+/// let reviewed = ents_testutil::write_commit(
+///     &objects,
+///     &CommitSpec { tree, parents: vec![], message: "reviewed work".into(), seconds: 200 },
+///     None,
+/// );
+///
+/// let name = namespace::review_pin_ref("7").expect("valid");
+/// let identity = Identity {
+///     actor: gix::actor::Signature {
+///         name: "admin".into(),
+///         email: "admin@ents.test".into(),
+///         time: gix::date::Time { seconds: 300, offset: 0 },
+///     },
+///     sign: &|payload| admin.sign(payload),
+/// };
+///
+/// let outcome = propose_pin(
+///     &refs, &objects, &NullEventSink, name, reviewed, &identity, "Pin review 7",
+///     Mode::Advisory,
+/// )
+/// .expect("reaches an outcome");
+/// assert_eq!(outcome.result, TxResult::Applied);
+/// ```
+// @relation(model.review-pin, meta-ref.namespace, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one field per pin-mutation shape (refname, retained commit, identity, message, \
+              mode), mirroring propose_entity's identical, identically-justified shape"
+)]
+pub fn propose_pin(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn EventSink,
+    name: FullName,
+    retain: gix_hash::ObjectId,
+    identity: &Identity<'_>,
+    subject: &str,
+    mode: Mode,
+) -> Result<Outcome> {
+    let tree = objects.write(&gix_object::Tree { entries: vec![] })?;
+    let old = refs.get(name.as_ref())?;
+    let parents: Vec<_> = old.into_iter().chain(std::iter::once(retain)).collect();
+    let tip = signed_commit(objects, &name, tree, parents, identity, subject)?;
+
+    let proposal = Proposal {
+        transitions: vec![RefTransition {
+            name,
+            old,
+            new: Some(tip),
+        }],
+        objects: vec![tip],
+        auth: None,
+    };
+    crate::receive::receive(refs, objects, events, &proposal, mode)
+}
+
+/// Build, sign, and write the mutation commit both proposal shapes share:
+/// `tree` under a message whose `Advance-ref:` trailer binds it to `name`
+/// (`meta-ref.trailers`, `gate.refname-binding`), authored and signed by
+/// `identity` — the one place a mutation commit is built, whatever its
+/// tree and parents.
+fn signed_commit(
+    objects: &impl Write,
+    name: &FullName,
+    tree: gix_hash::ObjectId,
+    parents: Vec<gix_hash::ObjectId>,
+    identity: &Identity<'_>,
+    subject: &str,
+) -> Result<gix_hash::ObjectId> {
     let trailers = Trailers {
         ents_ref: Some(name.clone()),
         schema_version: None,
@@ -114,7 +236,7 @@ pub fn propose_entity<T: for<'facet> facet::Facet<'facet>>(
 
     let mut commit = Commit {
         tree,
-        parents: old.into_iter().collect::<Vec<_>>().into(),
+        parents: parents.into(),
         author: identity.actor.clone(),
         committer: identity.actor.clone(),
         encoding: None,
@@ -146,18 +268,7 @@ pub fn propose_entity<T: for<'facet> facet::Facet<'facet>>(
     commit
         .write_to(&mut raw)
         .expect("serializing a commit to a Vec cannot fail");
-    let tip = objects.write_buf(Kind::Commit, &raw)?;
-
-    let proposal = Proposal {
-        transitions: vec![RefTransition {
-            name,
-            old,
-            new: Some(tip),
-        }],
-        objects: vec![tip],
-        auth: None,
-    };
-    crate::receive::receive(refs, objects, events, &proposal, mode)
+    Ok(objects.write_buf(Kind::Commit, &raw)?)
 }
 
 /// Delete the entity at `name` (a `new: None` transition) through
