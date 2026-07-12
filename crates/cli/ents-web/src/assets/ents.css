@@ -209,6 +209,23 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .string-list a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .string-list a:hover { color: var(--color-accent); }
 
+/* A per-entity read failure (an older or unrelated schema's tree shape),
+ * on a list row (`entity-list`/`string-list`) or a show page's own card
+ * (`crate::render::unreadable`) -- graceful degradation, never a 500. */
+.entity-list tr.unreadable td, .string-list .unreadable, .card-row.unreadable span {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+.unreadable-detail {
+  display: block;
+  margin-top: .2rem;
+  color: var(--color-text-muted);
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: .78rem;
+  word-break: break-all;
+}
+
 /* Bare `dl`/`ul`/`form` markup a custom page (toolchains, comments) emits
  * directly, styled the same as the generic views above so a page needs no
  * per-page CSS hook to look consistent. */

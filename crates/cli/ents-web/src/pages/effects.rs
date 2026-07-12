@@ -40,7 +40,12 @@ where
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] if `name` has no effect ref.
+/// [`Error::NotFound`] if `name` has no effect ref at all -- an effect ref
+/// that exists but whose stored tree does not match this build's
+/// [`Effect`] shape degrades to [`crate::render::unreadable`] instead
+/// (`roots.web-agnostic`'s graceful-degradation stance); the trigger-query
+/// parse check is skipped in that case, since there is no [`Effect`] to
+/// check.
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
     Path(name): Path<String>,
@@ -54,23 +59,35 @@ where
         .ok_or_else(|| Error::NotFound {
             what: format!("effect {name}"),
         })?;
-    let query_status = match effect.trigger.parse::<Query>() {
-        Ok(_) => "parses".to_owned(),
-        Err(error) => format!("does not parse: {error}"),
+    let body = match effect {
+        Ok(effect) => {
+            let query_status = match effect.trigger.parse::<Query>() {
+                Ok(_) => "parses".to_owned(),
+                Err(error) => format!("does not parse: {error}"),
+            };
+            html! {
+                (crate::render::view(&effect))
+                p { "trigger query: " (query_status) }
+            }
+        }
+        Err(detail) => crate::render::unreadable(&detail),
     };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/effects",
         &name,
-        html! {
-            (crate::render::view(&effect))
-            p { "trigger query: " (query_status) }
-        },
+        body,
     ))
 }
 
-fn read_all<O: Find>(state: &AppState<O>) -> Result<Vec<(String, Effect)>> {
+/// Every `refs/meta/effects/*` ref, with its tip's tree deserialized as an
+/// [`Effect`] -- `Err(detail)` for a ref this build's `#[derive(Facet)]`
+/// shape could not read back, kept in the listing rather than dropped (see
+/// `crate::pages::members::read_all`'s identical rationale).
+fn read_all<O: Find>(
+    state: &AppState<O>,
+) -> Result<Vec<(String, std::result::Result<Effect, String>)>> {
     let mut out = Vec::new();
     for entry in state.refs.iter_prefix("refs/meta/effects/")? {
         let (name, tip) = entry?;
@@ -78,10 +95,13 @@ fn read_all<O: Find>(state: &AppState<O>) -> Result<Vec<(String, Effect)>> {
         let Some(id) = path.strip_prefix("refs/meta/effects/") else {
             continue;
         };
-        let tree = super::commit_tree(&*state.objects(), tip)?;
-        if let Ok(effect) = facet_git_tree::deserialize::<Effect>(&tree, &*state.objects()) {
-            out.push((id.to_owned(), effect));
-        }
+        let effect = super::commit_tree(&*state.objects(), tip)
+            .map_err(|error| error.to_string())
+            .and_then(|tree| {
+                facet_git_tree::deserialize::<Effect>(&tree, &*state.objects())
+                    .map_err(|error| error.to_string())
+            });
+        out.push((id.to_owned(), effect));
     }
     Ok(out)
 }

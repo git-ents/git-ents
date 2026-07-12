@@ -11,12 +11,17 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use ents_kiln::Toolchain;
 use ents_model::{Account, MemberId};
 use ents_receive::{Mode, NullEventSink};
-use ents_testutil::{Keypair, MemRefStore, ObjectStore};
+use ents_testutil::{
+    CommitSpec, Keypair, MemRefStore, ObjectStore, write_commit, write_meta_entity,
+};
 use ents_web::identity::SigningIdentity;
 use ents_web::state::AppState;
 use gix::bstr::ByteSlice as _;
+use gix_object::tree::{Entry, EntryKind};
+use gix_object::{Kind, Tree, Write as _};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
@@ -77,6 +82,75 @@ fn build_state_at(
         Box::new(identity),
         path,
     ))
+}
+
+/// Like [`build_state`], but `refs`/`objects` are already populated --
+/// what the toolchain-marker tests below use to seed a ref store directly
+/// with plain `gix_object` writes (a wrong-shape tree no `ents-kiln`
+/// helper would ever produce), rather than through a signed write path.
+fn build_state_with(
+    identity: FixtureIdentity,
+    refs: MemRefStore,
+    objects: ObjectStore,
+) -> Arc<AppState<ObjectStore>> {
+    Arc::new(AppState::new(
+        Box::new(refs),
+        objects,
+        Box::new(NullEventSink),
+        Mode::Advisory,
+        Box::new(identity),
+        std::env::temp_dir(),
+    ))
+}
+
+/// Land a `refs/meta/toolchains/<name>` ref pointing at a tree shaped like
+/// the pre-redo `git_toolchain::Bin` schema this repository's own
+/// `refs/meta/toolchains/{rust,sccache,zig}` still carry: a `recipe` entry
+/// that is itself a tree, not the blob today's `ents_kiln::Toolchain::recipe:
+/// String` expects -- `facet_git_tree::deserialize` reads `recipe` as a
+/// scalar (a blob) and fails with `NotABlob` on exactly this shape, the
+/// same failure `git ents serve` hits reading this repository's own real
+/// legacy toolchain refs (piece 1's bug report). Built from plain
+/// `gix_object` writes, not `ents_kiln::toolchain::import` (which only ever
+/// writes today's shape) or `write_meta_entity` (which only ever writes a
+/// value that already round-trips through `facet_git_tree`).
+fn write_legacy_toolchain(refs: &MemRefStore, objects: &ObjectStore, name: &str) {
+    let name_blob = objects
+        .write_buf(Kind::Blob, name.as_bytes())
+        .expect("write");
+    let recipe_tree = objects
+        .write(&Tree {
+            entries: Vec::new(),
+        })
+        .expect("write");
+    let mut entries = vec![
+        Entry {
+            mode: EntryKind::Blob.into(),
+            filename: "name".into(),
+            oid: name_blob,
+        },
+        Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "recipe".into(),
+            oid: recipe_tree,
+        },
+    ];
+    entries.sort();
+    let tree = objects.write(&Tree { entries }).expect("write");
+    let tip = write_commit(
+        objects,
+        &CommitSpec {
+            tree,
+            parents: Vec::new(),
+            message: format!("legacy toolchain {name}"),
+            seconds: 100,
+        },
+        None,
+    );
+    let refname: gix::refs::FullName = format!("refs/meta/toolchains/{name}")
+        .try_into()
+        .expect("valid refname");
+    refs.set(refname.as_ref(), tip);
 }
 
 /// Initialize a real git repository at a fresh tempdir, seed it with
@@ -1285,4 +1359,98 @@ async fn search_with_no_query_renders_a_blankslate() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("No matches"));
+}
+
+/// `GET /toolchains` lists a toolchain written by an older schema (piece
+/// 1's bug: this repository's own `refs/meta/toolchains/{rust,sccache,zig}`
+/// still carry it) as a muted marker row, never a 500 -- and a good
+/// toolchain alongside it still lists and links normally.
+#[tokio::test]
+async fn toolchains_list_marks_a_legacy_entry_but_still_lists_a_good_one() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let name: gix::refs::FullName = "refs/meta/toolchains/good".try_into().expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        name,
+        &Toolchain {
+            name: "good".to_owned(),
+            recipe: "embedded 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n".to_owned(),
+        },
+        None,
+        100,
+    );
+    write_legacy_toolchain(&refs, &objects, "legacy");
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/toolchains")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains(r#"href="/toolchains/good""#));
+    assert!(body.contains(r#"href="/toolchains/legacy""#));
+    assert!(body.contains("unreadable"));
+}
+
+/// `GET /toolchains/{name}` on a legacy-schema entry renders the marker
+/// card (with the underlying error) rather than a 500.
+#[tokio::test]
+async fn toolchain_show_on_a_legacy_entry_renders_a_marker_not_a_500() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    write_legacy_toolchain(&refs, &objects, "legacy");
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/toolchains/legacy")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("unreadable"));
+    assert!(
+        body.contains("is not a blob"),
+        "the underlying facet-git-tree error renders verbatim: {body}"
+    );
 }

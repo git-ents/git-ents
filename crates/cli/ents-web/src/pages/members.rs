@@ -36,7 +36,10 @@ where
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] if `username` has no member ref.
+/// [`Error::NotFound`] if `username` has no member ref at all -- a member
+/// ref that exists but whose stored tree does not match this build's
+/// [`Member`] shape degrades to [`crate::render::unreadable`] instead
+/// (`roots.web-agnostic`'s graceful-degradation stance).
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
     Path(username): Path<String>,
@@ -50,16 +53,29 @@ where
         .ok_or_else(|| Error::NotFound {
             what: format!("member {username}"),
         })?;
+    let body = match member {
+        Ok(member) => crate::render::view(&member),
+        Err(detail) => crate::render::unreadable(&detail),
+    };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/members",
         &username,
-        crate::render::view(&member),
+        body,
     ))
 }
 
-fn read_all<O: Find>(state: &AppState<O>) -> Result<Vec<(String, Member)>> {
+/// Every `refs/meta/member/*` ref, with its tip's tree deserialized as a
+/// [`Member`] -- `Err(detail)` for a ref this build's `#[derive(Facet)]`
+/// shape could not read back, kept in the listing (not dropped) so
+/// [`list`]/[`show`] can render it as a marker rather than silently
+/// omitting it (`roots.web-agnostic`: a reader surfaces a marker, never an
+/// error or a silent gap, for one entity written by a schema this build no
+/// longer speaks).
+fn read_all<O: Find>(
+    state: &AppState<O>,
+) -> Result<Vec<(String, std::result::Result<Member, String>)>> {
     let mut out = Vec::new();
     for entry in state.refs.iter_prefix("refs/meta/member/")? {
         let (name, tip) = entry?;
@@ -67,10 +83,13 @@ fn read_all<O: Find>(state: &AppState<O>) -> Result<Vec<(String, Member)>> {
         let Some(username) = path.strip_prefix("refs/meta/member/") else {
             continue;
         };
-        let tree = super::commit_tree(&*state.objects(), tip)?;
-        if let Ok(member) = facet_git_tree::deserialize::<Member>(&tree, &*state.objects()) {
-            out.push((username.to_owned(), member));
-        }
+        let member = super::commit_tree(&*state.objects(), tip)
+            .map_err(|error| error.to_string())
+            .and_then(|tree| {
+                facet_git_tree::deserialize::<Member>(&tree, &*state.objects())
+                    .map_err(|error| error.to_string())
+            });
+        out.push((username.to_owned(), member));
     }
     Ok(out)
 }

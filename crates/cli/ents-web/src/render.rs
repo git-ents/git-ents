@@ -111,31 +111,51 @@ pub fn view<T: Facet<'static>>(value: &T) -> Markup {
 }
 
 /// A table listing `rows`, one row per `(id, entity)` pair, columns taken
-/// from the entity's own reflected field names -- the generic "list" page
-/// every kernel entity this crate exposes uses.
+/// from the first successfully-read entity's own reflected field names --
+/// the generic "list" page every kernel entity this crate exposes uses.
 ///
 /// `id_header` names the leading column holding each entry's key (a
 /// username, an effect name, a redaction id -- whatever names the ref this
 /// listing was read from, which is never itself a field on the entity).
+///
+/// `entity` is `Err(detail)` for a ref whose stored tree this build's
+/// `#[derive(Facet)]` shape could not read back (written by an older or
+/// unrelated schema): that row still shows its id (linked, exactly like a
+/// readable row, so its own show page -- which renders the same marker,
+/// plus `detail` -- is reachable) and a single muted "unreadable" cell
+/// spanning the rest of the row, rather than being dropped or failing the
+/// whole list. This is this crate's graceful-degradation stance applied
+/// per entity: a reader surfaces a marker, never an error, for one entry
+/// this build can no longer speak the schema of.
 ///
 /// # Examples
 ///
 /// ```
 /// use ents_model::{Member, Provenance};
 ///
-/// let rows = vec![("jdc".to_owned(), Member::new("key-a", Provenance::AdminRegistered))];
-/// let markup = ents_web::render::list_table(&rows, "username", |id| format!("/members/{id}"));
-/// assert!(markup.into_string().contains("jdc"));
+/// let rows = vec![
+///     ("jdc".to_owned(), Ok(Member::new("key-a", Provenance::AdminRegistered))),
+///     ("legacy".to_owned(), Err("object ... is not a blob".to_owned())),
+/// ];
+/// let rendered = ents_web::render::list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
+/// assert!(rendered.contains("jdc"));
+/// assert!(rendered.contains("legacy"));
+/// assert!(rendered.contains("unreadable"));
 /// ```
 #[must_use]
 pub fn list_table<T: Facet<'static>>(
-    rows: &[(String, T)],
+    rows: &[(String, Result<T, String>)],
     id_header: &str,
     href_for: impl Fn(&str) -> String,
 ) -> Markup {
     let field_names: Vec<&'static str> = rows
-        .first()
-        .map(|(_, entity)| fields(entity).into_iter().map(|(name, _)| name).collect())
+        .iter()
+        .find_map(|(_, entity)| {
+            entity
+                .as_ref()
+                .ok()
+                .map(|entity| fields(entity).into_iter().map(|(name, _)| name).collect())
+        })
         .unwrap_or_default();
     html! {
         div.card {
@@ -150,14 +170,51 @@ pub fn list_table<T: Facet<'static>>(
                 }
                 tbody {
                     @for (id, entity) in rows {
-                        tr {
-                            td { a href=(href_for(id)) { (id) } }
-                            @for (_, rendered) in fields(entity) {
-                                td { (rendered) }
-                            }
+                        @match entity {
+                            Ok(entity) => tr {
+                                td { a href=(href_for(id)) { (id) } }
+                                @for (_, rendered) in fields(entity) {
+                                    td { (rendered) }
+                                }
+                            },
+                            Err(_) => tr.unreadable {
+                                td { a href=(href_for(id)) { (id) } }
+                                td colspan=(field_names.len().max(1).to_string()) {
+                                    "unreadable \u{2014} written by an older schema"
+                                }
+                            },
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A muted marker card for one entity this crate could not reflect -- the
+/// `GET /{family}/{id}` show-page counterpart to [`list_table`]'s per-row
+/// marker: the same "unreadable" note, plus `detail` (the underlying
+/// deserialization error) rendered verbatim in muted monospace, so an
+/// operator can diagnose the schema mismatch without leaving the browser.
+/// Never a 500 -- reading an older or unrelated schema's tree degrades to
+/// this card, exactly as [`list_table`] degrades one row of a listing.
+///
+/// # Examples
+///
+/// ```
+/// let rendered = ents_web::render::unreadable("object ... is not a blob").into_string();
+/// assert!(rendered.contains("unreadable"));
+/// assert!(rendered.contains("is not a blob"));
+/// ```
+#[must_use]
+pub fn unreadable(detail: &str) -> Markup {
+    html! {
+        div.card {
+            div.card-row.unreadable {
+                span { "unreadable \u{2014} written by an older schema" }
+            }
+            div.card-row {
+                code.unreadable-detail { (detail) }
             }
         }
     }
@@ -250,14 +307,42 @@ mod tests {
 
     #[rstest]
     // @relation(roots.web-agnostic, scope=function, role=Verifies)
-    fn list_table_derives_its_columns_from_the_first_rows_own_shape() {
+    fn list_table_derives_its_columns_from_the_first_readable_rows_own_shape() {
         let rows = vec![(
             "jdc".to_owned(),
-            Member::new("key", Provenance::AdminRegistered),
+            Ok(Member::new("key", Provenance::AdminRegistered)),
         )];
         let markup = list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
         assert!(markup.contains("username"));
         assert!(markup.contains("key"));
         assert!(markup.contains("jdc"));
+    }
+
+    #[rstest]
+    // @relation(roots.web-agnostic, scope=function, role=Verifies)
+    fn list_table_marks_an_unreadable_row_but_still_lists_a_readable_one() {
+        let rows = vec![
+            (
+                "jdc".to_owned(),
+                Ok(Member::new("key", Provenance::AdminRegistered)),
+            ),
+            (
+                "legacy".to_owned(),
+                Err("object ... is not a blob".to_owned()),
+            ),
+        ];
+        let markup = list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
+        assert!(markup.contains("jdc"));
+        assert!(markup.contains("legacy"));
+        assert!(markup.contains("unreadable"));
+        assert!(markup.contains(r#"href="/members/legacy""#));
+    }
+
+    #[rstest]
+    // @relation(roots.web-agnostic, scope=function, role=Verifies)
+    fn unreadable_card_shows_the_underlying_error() {
+        let markup = unreadable("object deadbeef is not a blob").into_string();
+        assert!(markup.contains("unreadable"));
+        assert!(markup.contains("object deadbeef is not a blob"));
     }
 }
