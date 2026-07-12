@@ -1,20 +1,25 @@
-# fly.toml app configuration file generated for git-ents-server on 2026-06-20T12:17:33-04:00
+# fly.toml app configuration file for git-ents-hosted.
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
+# `git-ents-server` (no `-c` needed, its own separate app) is the legacy
+# pre-redo deployment, left alone. This app is the single-node hosted root
+# (`roots.single-node-hosted`, phase 6), a dedicated app so its shared
+# anycast proxy never round-robins traffic onto legacy's stopped machine.
 
-app = 'git-ents-server'
+app = 'git-ents-hosted'
 primary_region = 'iad'
 
 [build]
-  # crates/git-ents-server doesn't exist yet post-redo; path is stale until it's rebuilt
-  dockerfile = "../crates/git-ents-server/Dockerfile"
+  # The single-node hosted root (`roots.single-node-hosted`, phase 6):
+  # `git-ents` itself, served behind stock git's smart-HTTP transport.
+  dockerfile = "../Dockerfile"
 
 [env]
   PORT = '8080'
 
 [mounts]
-  source = 'odb'
+  source = 'git_ents_hosted'
   destination = '/data'
 
 [http_service]
