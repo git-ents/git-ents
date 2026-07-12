@@ -5,13 +5,6 @@
 //! rather than a plain-text listing. Output is an embedded fragment (no
 //! document frame) styled by [`crate::assets::OVERRIDES`]'s own
 //! `.doc-body` rules.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into crate::pages::files's blob view in the next commit"
-    )
-)]
 
 use maud::{Markup, PreEscaped};
 use pulldown_cmark::{Options, Parser, html};

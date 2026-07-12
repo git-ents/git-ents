@@ -89,6 +89,12 @@ pub enum Error {
     /// convert").
     #[error("could not render asciidoc: {0}")]
     Asciidoc(String),
+
+    /// `crate::pages::files` could not open the served repository or read
+    /// its `HEAD` tree/a tree or blob within it (`gix::open`, a tree
+    /// lookup, or a blob read).
+    #[error("could not read repository: {0}")]
+    Repo(String),
 }
 
 impl From<ents_forge::Error> for Error {

@@ -15,6 +15,7 @@ pub mod account;
 pub mod comments;
 pub mod dashboard;
 pub mod effects;
+pub mod files;
 pub mod inbox;
 pub mod members;
 pub mod redactions;
@@ -59,6 +60,7 @@ pub(crate) fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId
 pub(crate) enum Tab {
     Dashboard,
     Members,
+    Files,
     Account,
     Effects,
     Redactions,
@@ -94,6 +96,7 @@ pub(crate) fn layout(active: Tab, title: &str, body: Markup) -> Markup {
                 nav.tabs {
                     a.tab.active[active == Tab::Dashboard] href="/" { "dashboard" }
                     a.tab.active[active == Tab::Members] href="/members" { "members" }
+                    a.tab.active[active == Tab::Files] href="/files" { "files" }
                     a.tab.active[active == Tab::Account] href="/account" { "account" }
                     a.tab.active[active == Tab::Effects] href="/effects" { "effects" }
                     a.tab.active[active == Tab::Redactions] href="/redactions" { "redactions" }

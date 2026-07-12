@@ -10,13 +10,6 @@
 //! `acdc-converters-core` and `acdc-converters-html` are not on crates.io
 //! yet, so they are pinned as git dependencies on the same revision
 //! `pre-redo:Cargo.toml` pinned (see this crate's own `Cargo.toml`).
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into crate::pages::files's blob view in the next commit"
-    )
-)]
 
 use acdc_converters_core::{Converter, Options as ConvertOptions, inlines_to_string};
 use acdc_converters_html::{Processor, RenderOptions};

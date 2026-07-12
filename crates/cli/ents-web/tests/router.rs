@@ -60,6 +60,61 @@ fn build_state(identity: FixtureIdentity) -> Arc<AppState<ObjectStore>> {
     ))
 }
 
+/// Like [`build_state`], but `path` names a real, on-disk repository
+/// rather than the shared system temp directory -- `crate::pages::files`
+/// opens `state.path` directly with `gix::open`, so its tests need an
+/// actual `HEAD` to browse, not just the in-memory ref/object store every
+/// other test in this file exercises.
+fn build_state_at(
+    identity: FixtureIdentity,
+    path: std::path::PathBuf,
+) -> Arc<AppState<ObjectStore>> {
+    Arc::new(AppState::new(
+        Box::new(MemRefStore::default()),
+        ObjectStore::default(),
+        Box::new(NullEventSink),
+        Mode::Advisory,
+        Box::new(identity),
+        path,
+    ))
+}
+
+/// Initialize a real git repository at a fresh tempdir, seed it with
+/// `files` (path, contents), and commit them on `HEAD` -- what
+/// `crate::pages::files`'s tests below browse.
+fn seed_repo(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    for (name, contents) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir -p");
+        }
+        std::fs::write(&path, contents).expect("write fixture file");
+    }
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    dir
+}
+
 /// `roots.local`: this crate's route table never exposes git's own
 /// smart-HTTP transport -- a request that would name it (`info/refs` with
 /// a `service` query, exactly the URL stock `git clone`/`git fetch` sends
@@ -400,4 +455,129 @@ async fn each_request_is_signed_by_its_own_injected_identity_never_a_shared_one(
         let account: Account = facet_git_tree::deserialize(&tree, &*objects).expect("typed tree");
         assert_eq!(account.member, MemberId::new("jdc"));
     }
+}
+
+/// `GET /files` lists the served repository's root directory: every
+/// top-level entry, directory or file, appears as a link.
+#[tokio::test]
+async fn files_root_lists_the_repository_root() {
+    let dir = seed_repo(&[
+        ("README.adoc", "= Welcome\n\nHello.\n"),
+        ("docs/x.md", "# Doc Title\n\nSome text.\n"),
+        ("src/main.rs", "fn main() {\n    let ok = 1 < 2;\n}\n"),
+    ]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/files").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("README.adoc"));
+    assert!(body.contains("docs"));
+    assert!(body.contains("src"));
+}
+
+/// `GET /files/<path>` on a plain-text blob renders an escaped
+/// `<pre><code>` block -- no syntax highlighting, and no unescaped source.
+#[tokio::test]
+async fn files_blob_view_renders_a_plain_text_file() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {\n    let ok = 1 < 2;\n}\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("<pre><code>"));
+    assert!(body.contains("1 &lt; 2"));
+}
+
+/// `GET /files/<path>` renders a `.md` blob as Markdown and a `.adoc` blob
+/// as AsciiDoc -- both a real rendered heading, not the raw source markup.
+#[tokio::test]
+async fn files_blob_view_renders_markdown_and_asciidoc_as_documents() {
+    let dir = seed_repo(&[
+        ("README.adoc", "= Welcome\n\nHello.\n"),
+        ("docs/x.md", "# Doc Title\n\nSome text.\n"),
+    ]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let adoc_response = router
+        .clone()
+        .oneshot(
+            Request::get("/files/README.adoc")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(adoc_response.status(), StatusCode::OK);
+    let adoc_body = adoc_response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let adoc_body = String::from_utf8(adoc_body.to_vec()).expect("utf8 html");
+    assert!(adoc_body.contains("<h1>Welcome</h1>"));
+    assert!(!adoc_body.contains("= Welcome"));
+
+    let md_response = router
+        .oneshot(
+            Request::get("/files/docs/x.md")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(md_response.status(), StatusCode::OK);
+    let md_body = md_response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let md_body = String::from_utf8(md_body.to_vec()).expect("utf8 html");
+    assert!(md_body.contains("<h1>Doc Title</h1>"));
 }
