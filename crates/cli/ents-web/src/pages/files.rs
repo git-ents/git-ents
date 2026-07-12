@@ -17,21 +17,37 @@
 //! structured meta-ref data; browsing arbitrary repository content is not
 //! that).
 //!
+//! [`crumbs`] renders only the path trail now -- every action that used to
+//! live at its trailing edge (jump into history, jump to the first
+//! comment, add a comment) moved into [`blob_header`]'s own right-aligned
+//! action group, rendered above every blob view regardless of how it
+//! renders (raw source, a rendered document, or a binary placeholder); a
+//! directory listing carries neither the actions nor a header, since a
+//! comment anchors to a file, never a tree.
+//!
 //! A blob view also loads and renders the comments anchored to it
-//! (`crate::pages::comments::for_path`), and [`crumbs`] grows a "comment on
-//! this file" link (plus a jump to the first card, once there is at least
-//! one) beside its own trailing "history" link -- a directory listing
-//! carries neither, since a comment anchors to a file, never a tree. A
-//! raw-source view (not a rendered document or a binary placeholder)
-//! interleaves each comment's card directly after the row naming its
-//! anchored range's last line, full width across the blob's line-number
-//! and code columns ([`source_view`]); a comment with no current line
-//! range (a whole-file anchor, or `ents_anchor::Projection::Outdated`) has
-//! nowhere to interleave, and renders in a below-the-blob "outdated
-//! comments" section instead ([`outdated_comments_section`]). Doc-rendered
-//! and binary views keep every comment below the blob, unconditionally
+//! (`crate::pages::comments::for_path`). A raw-source view (not a
+//! rendered document or a binary placeholder) interleaves each comment's
+//! card directly after the row naming its anchored range's last line,
+//! full width across the blob's line-number and code columns
+//! ([`source_view`]); a comment with no current line range (a whole-file
+//! anchor, or `ents_anchor::Projection::Outdated`) has nowhere to
+//! interleave, and renders in a below-the-blob "outdated comments"
+//! section instead ([`outdated_comments_section`]). Doc-rendered and
+//! binary views keep every comment below the blob, unconditionally
 //! (`crate::pages::comments::comments_section`), since there is no source
 //! line to interleave at.
+//!
+//! A raw-source view additionally carries the client-side hooks
+//! `crate::assets`'s `ents.js` progressively enhances: `div.blob` names its
+//! own `path`/`rev` (`data-path`/`data-rev`, the latter the resolved `HEAD`
+//! commit oid, not the string `"HEAD"`, so a captured selection names the
+//! exact commit being viewed) so a click on a gutter line number can select
+//! a line or a shift-extended range and open an inline comment composer
+//! cloned from a server-rendered `<template id="composer-template">`
+//! ([`composer_template`]) -- with JS disabled the page stays fully usable
+//! via [`blob_header`]'s "comment on this file" link and the plain `#L<n>`
+//! anchors [`crate::pages::comments::comment_card`] already emits.
 
 use std::sync::Arc;
 
@@ -43,6 +59,7 @@ use maud::{Markup, PreEscaped, html};
 
 use crate::assets;
 use crate::error::{Error, Result};
+use crate::session::Session;
 use crate::state::AppState;
 
 /// `GET /files`: the repository root directory listing.
@@ -50,11 +67,14 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// Propagates a `gix::open`/tree-read failure.
-pub async fn root<O>(State(state): State<Arc<AppState<O>>>) -> Result<Markup>
+pub async fn root<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+) -> Result<Markup>
 where
     O: Find + Write + Send + 'static,
 {
-    at(&state, "")
+    at(&state, "", &session)
 }
 
 /// `GET /files/{*path}`: a directory listing or blob view at `path`.
@@ -66,18 +86,21 @@ where
 /// `gix::open`/tree-read failure.
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
     Path(path): Path<String>,
 ) -> Result<Markup>
 where
     O: Find + Write + Send + 'static,
 {
-    at(&state, &path)
+    at(&state, &path, &session)
 }
 
 /// The shared implementation behind [`root`] and [`show`]: resolve `path`
 /// against `HEAD`'s tree and render whichever of a directory listing or a
-/// blob view it names.
-fn at<O>(state: &AppState<O>, path: &str) -> Result<Markup>
+/// blob view it names. `session` is only ever needed on a blob view, to
+/// render [`composer_template`]'s csrf input -- threaded down from the
+/// route handler rather than reached for a second time here.
+fn at<O>(state: &AppState<O>, path: &str, session: &Session) -> Result<Markup>
 where
     O: Find + Write,
 {
@@ -102,7 +125,7 @@ where
                 super::Tab::Files,
                 "files",
                 html! {
-                    (crumbs(path, None))
+                    (crumbs(path))
                     (dir_listing(path, Vec::new()))
                 },
             ));
@@ -122,7 +145,7 @@ where
             super::Tab::Files,
             "files",
             html! {
-                (crumbs(path, None))
+                (crumbs(path))
                 (dir_listing(path, entries))
             },
         ));
@@ -148,7 +171,7 @@ where
             super::Tab::Files,
             path,
             html! {
-                (crumbs(path, None))
+                (crumbs(path))
                 (dir_listing(path, entries))
             },
         ))
@@ -160,14 +183,18 @@ where
             .map_err(|source| Error::Repo(source.to_string()))?;
         let name = path.rsplit('/').next().unwrap_or(path);
         let comments = super::comments::for_path(state, &repo, path);
-        let (body, below) = blob_view(name, &blob.data, &comments)?;
+        let head_oid = repo
+            .head_id()
+            .map_err(|source| Error::Repo(source.to_string()))?
+            .to_string();
+        let (body, below) = blob_view(path, name, &head_oid, session, &blob.data, &comments)?;
         Ok(super::layout(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
             path,
             html! {
-                (crumbs(path, Some(comments.len())))
+                (crumbs(path))
                 (body)
                 (below)
             },
@@ -190,16 +217,25 @@ fn is_safe_path(path: &str) -> bool {
             .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-/// One `(name, is_directory)` pair per direct child of `tree`, in tree
-/// order (not yet sorted -- [`dir_listing`] sorts for display).
-fn tree_entries(tree: &gix::Tree<'_>) -> Result<Vec<(String, bool)>> {
+/// One `(name, is_directory, size)` triple per direct child of `tree`, in
+/// tree order (not yet sorted -- [`dir_listing`] sorts for display). `size`
+/// is a blob entry's byte length, read from its odb header
+/// ([`gix::Repository::find_header`], the same header-only read
+/// `crate::pages::dashboard::languages` weighs its language breakdown
+/// by -- never a full blob read just to size it) and best-effort (`None`
+/// on a header-read failure, same as that function's own stance); always
+/// `None` for a directory entry, which [`dir_listing`] renders with no
+/// size cell at all.
+fn tree_entries(tree: &gix::Tree<'_>) -> Result<Vec<(String, bool, Option<u64>)>> {
     tree.iter()
         .map(|entry| {
             let entry = entry.map_err(|source| Error::Repo(source.to_string()))?;
-            Ok((
-                entry.filename().to_str_lossy().into_owned(),
-                entry.mode().is_tree(),
-            ))
+            let is_dir = entry.mode().is_tree();
+            let size = (!is_dir)
+                .then(|| tree.repo.find_header(entry.oid()).ok())
+                .flatten()
+                .map(|header| header.size());
+            Ok((entry.filename().to_str_lossy().into_owned(), is_dir, size))
         })
         .collect()
 }
@@ -214,9 +250,12 @@ fn child_href(dir: &str, name: &str) -> String {
 }
 
 /// A directory listing at `dir`: entries sorted directories-first then
-/// alphabetically, each an icon and a link one level deeper.
-fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
-    entries.sort_by(|(a_name, a_is_dir), (b_name, b_is_dir)| {
+/// alphabetically, each an icon and a link one level deeper, plus a
+/// right-aligned muted size for a blob entry (`span.entry-size`,
+/// [`human_size`]) -- a directory entry carries no size cell, since a
+/// tree's own byte length is not a meaningful measure of it.
+fn dir_listing(dir: &str, mut entries: Vec<(String, bool, Option<u64>)>) -> Markup {
+    entries.sort_by(|(a_name, a_is_dir, _), (b_name, b_is_dir, _)| {
         b_is_dir.cmp(a_is_dir).then_with(|| a_name.cmp(b_name))
     });
     html! {
@@ -225,11 +264,14 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
             @if entries.is_empty() {
                 div.card-row.muted { "Empty directory." }
             }
-            @for (name, is_dir) in &entries {
+            @for (name, is_dir, size) in &entries {
                 div.card-row.is-dir[*is_dir] {
                     a.row-link href=(child_href(dir, name)) {
                         @if *is_dir { (assets::icon_folder()) } @else { (assets::icon_file()) }
                         (name)
+                    }
+                    @if let Some(size) = size {
+                        span.entry-size { (human_size(*size)) }
                     }
                 }
             }
@@ -238,18 +280,11 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool)>) -> Markup {
 }
 
 /// Breadcrumb navigation from the repository's files root down through
-/// `path`, `chevron-right` icons separating segments, plus trailing links
-/// into `crate::pages::commits`'s `GET /commits` history (the file
-/// browser's one entry point into commit history, since history is a view
-/// of the code, not a tab of its own -- `crate::pages::mod`'s own doc) and,
-/// on a blob view (`comments` is `Some`), `crate::pages::comments`'s own
-/// add form for this file ("comment on this file") plus a jump straight to
-/// the first comment card (`id="comment-0"`, in display order -- see
-/// [`super::comments::comment_card`]'s own doc) when there is at least one
-/// comment already anchored here, wherever it renders (inline or below the
-/// blob). `comments` is `None` on a directory listing, where neither link
-/// makes sense.
-fn crumbs(path: &str, comments: Option<usize>) -> Markup {
+/// `path`, `chevron-right` icons separating segments -- pure navigation,
+/// no trailing actions. The history/comment links that used to trail this
+/// nav on a blob view now live in [`blob_header`]'s own action group
+/// instead (see this module's own top-level doc for why).
+fn crumbs(path: &str) -> Markup {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut acc = String::new();
     let mut trail: Vec<(String, Option<String>)> =
@@ -272,17 +307,28 @@ fn crumbs(path: &str, comments: Option<usize>) -> Markup {
                     None => span.here { (label) },
                 }
             }
-            a.crumbs-history href="/commits" { "history" }
-            @if let Some(count) = comments {
-                a.crumbs-history href={ "/comments?file=" (path) } { "comment on this file" }
-                @if count > 0 {
-                    a.crumbs-history href="#comment-0" {
-                        (count) @if count == 1 { " comment" } @else { " comments" }
-                    }
-                }
-            }
         }
     }
+}
+
+/// Format a byte count the way [`blob_header`] and [`dir_listing`] both
+/// show a file's size: whole bytes under 1 KB, otherwise one decimal place
+/// of KB or MB -- integer-only throughout (`checked_div`/`checked_rem`/
+/// `saturating_mul`, this crate's own arithmetic idiom, e.g.
+/// `crate::pages::dashboard::languages`'s percentage math) rather than a
+/// float division, so there is no rounding-mode or precision question to
+/// answer.
+fn human_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    if bytes < KB {
+        return format!("{bytes} B");
+    }
+    let (scale, unit) = if bytes < MB { (KB, "KB") } else { (MB, "MB") };
+    let whole = bytes.checked_div(scale).unwrap_or(0);
+    let remainder = bytes.checked_rem(scale).unwrap_or(0);
+    let tenths = remainder.saturating_mul(10).checked_div(scale).unwrap_or(0);
+    format!("{whole}.{tenths} {unit}")
 }
 
 /// Whether `bytes` looks like binary content (a NUL byte in the leading
@@ -302,57 +348,206 @@ fn is_binary(bytes: &[u8]) -> bool {
 /// range directly into the blob and returns the rest (no current line
 /// range: a whole-file anchor, or `ents_anchor::Projection::Outdated`) as
 /// a separate below-the-blob section ([`outdated_comments_section`]).
+/// Every case renders a [`blob_header`] first -- above `div.card`/
+/// `div.binary` for a doc-rendered or binary view, as `div.blob`'s own
+/// first child for a raw-source view (see [`source_view`]'s own doc).
 ///
 /// # Errors
 ///
 /// Propagates [`crate::asciidoc::to_html`]'s own [`Error::Asciidoc`].
 fn blob_view(
+    path: &str,
     name: &str,
+    head_oid: &str,
+    session: &Session,
     bytes: &[u8],
     comments: &[super::comments::FileComment],
 ) -> Result<(Markup, Markup)> {
+    let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let comment_count = comments.len();
+    let no_line_count_header = || {
+        blob_header(&BlobHeaderMeta {
+            name,
+            path,
+            size,
+            line_count: None,
+            language: None,
+            comments: comment_count,
+        })
+    };
     if is_binary(bytes) {
         return Ok((
-            html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } },
+            html! {
+                (no_line_count_header())
+                div.binary { "Binary file (" (bytes.len()) " bytes) not shown." }
+            },
             super::comments::comments_section(comments),
         ));
     }
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Ok((
-            html! { div.binary { "Binary file (" (bytes.len()) " bytes) not shown." } },
+            html! {
+                (no_line_count_header())
+                div.binary { "Binary file (" (bytes.len()) " bytes) not shown." }
+            },
             super::comments::comments_section(comments),
         ));
     };
     if crate::markdown::is_markdown(name) {
         return Ok((
-            html! { div.card { div.doc-body { (crate::markdown::to_html(text)) } } },
+            html! {
+                (no_line_count_header())
+                div.card { div.doc-body { (crate::markdown::to_html(text)) } }
+            },
             super::comments::comments_section(comments),
         ));
     }
     if crate::asciidoc::is_asciidoc(name) {
         return Ok((
-            html! { div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } } },
+            html! {
+                (no_line_count_header())
+                div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } }
+            },
             super::comments::comments_section(comments),
         ));
     }
+    let language = arborium::detect_language(name);
     let highlighted = highlight(name, text);
+    let line_count = text.lines().count().max(1);
+    let header = blob_header(&BlobHeaderMeta {
+        name,
+        path,
+        size,
+        line_count: Some(line_count),
+        language,
+        comments: comment_count,
+    });
+    let composer = composer_template(path, head_oid, session);
     let below: Vec<(usize, &super::comments::FileComment)> = comments
         .iter()
         .enumerate()
         .filter(|(_, comment)| comment.lines.is_none())
         .collect();
     Ok((
-        source_view(text, highlighted, comments),
+        source_view(
+            path,
+            head_oid,
+            header,
+            composer,
+            text,
+            highlighted,
+            comments,
+        ),
         outdated_comments_section(&below),
     ))
 }
 
-/// The raw-source view: one table row per line (a `<tr>` pairing a
-/// `.blob-nums` line-number cell carrying the row's `#L{n}` anchor with a
-/// `.blob-code` cell, no wrapper beyond those two cells -- lean enough that
-/// thousands of lines stay cheap), highlighted via [`highlight`] when
-/// `highlighted` is `Some` and falling back to plain (still per-line,
-/// still auto-escaped by `maud`'s own interpolation) text otherwise. Each
+/// The metadata [`blob_header`] shows beside a blob's name -- gathered by
+/// [`blob_view`], one per view kind (see that function's own doc for which
+/// fields each kind fills in).
+struct BlobHeaderMeta<'a> {
+    /// The file's own name (the last path segment), shown as the title.
+    name: &'a str,
+    /// The full repository-relative path -- only used to build the
+    /// "comment on this file" link's `?file=` query.
+    path: &'a str,
+    /// The blob's byte length, always known ([`human_size`]).
+    size: u64,
+    /// The raw-source view's line count; `None` for a doc-rendered or
+    /// binary view, which has no source line to count.
+    line_count: Option<usize>,
+    /// [`arborium::detect_language`]'s own identifier, shown as-is when it
+    /// recognized `name`'s grammar; `None` otherwise, or for a
+    /// doc-rendered/binary view (a rendered document is not "highlighted
+    /// as" a language, and a binary blob was never linted for one at all).
+    language: Option<&'static str>,
+    /// How many comments [`super::comments::for_path`] found for this
+    /// blob -- the "N comments" jump link renders only when this is above
+    /// zero (mirrors [`crumbs`]'s own former stance, now moved here).
+    comments: usize,
+}
+
+/// The header bar above every blob view -- the file's name and metadata on
+/// the left (`span.blob-title`/`span.blob-meta`), the actions that used to
+/// trail [`crumbs`] on the right (`span.blob-actions`): a jump into
+/// `crate::pages::commits`'s `GET /commits` history (the file browser's
+/// one entry point into commit history, since history is a view of the
+/// code, not a tab of its own -- `crate::pages::mod`'s own doc), a jump
+/// straight to the first comment card (`#comment-0`, in display order --
+/// see [`super::comments::comment_card`]'s own doc) when at least one
+/// comment is already anchored here, and `crate::pages::comments`'s own
+/// add form for this file ("comment on this file" -- the no-JS fallback
+/// entry point into the composer [`composer_template`] otherwise opens
+/// inline). Renders identically whether the view below it is raw source, a
+/// rendered document, or a binary placeholder -- only [`BlobHeaderMeta`]'s
+/// fields differ per kind.
+fn blob_header(meta: &BlobHeaderMeta<'_>) -> Markup {
+    html! {
+        div.blob-header {
+            span.blob-title { (meta.name) }
+            span.blob-meta {
+                @if let Some(lines) = meta.line_count {
+                    (lines) @if lines == 1 { " line" } @else { " lines" } " \u{b7} " (human_size(meta.size))
+                } @else {
+                    (human_size(meta.size))
+                }
+                @if let Some(language) = meta.language {
+                    " \u{b7} " (language)
+                }
+            }
+            span.blob-actions {
+                a href="/commits" { "history" }
+                @if meta.comments > 0 {
+                    a href="#comment-0" {
+                        (meta.comments) @if meta.comments == 1 { " comment" } @else { " comments" }
+                    }
+                }
+                a href={ "/comments?file=" (meta.path) } { "comment on this file" }
+            }
+        }
+    }
+}
+
+/// The composer's server-rendered `<template>`, cloned by `ents.js` when a
+/// reader clicks the gutter's `+` affordance on a raw-source view (see this
+/// module's own top-level doc). Its `form` posts to
+/// `crate::pages::comments`'s own `POST /comments` handler
+/// ([`super::comments::AddForm`]), pre-filled with this file's own
+/// `path`/`rev` (`head_oid`, the resolved `HEAD` commit, exactly what
+/// `div.blob`'s own `data-rev` names -- see [`source_view`]'s own doc) so
+/// the only field `ents.js` ever needs to fill in before submit is the
+/// hidden `lines` input, left empty here. With JS disabled this template
+/// never becomes visible at all (a `<template>` element's contents are
+/// inert, never rendered by a browser on their own), which is exactly why
+/// [`blob_header`]'s "comment on this file" link remains the no-JS path to
+/// the same form.
+// @relation(roots.web-session, scope=function)
+fn composer_template(path: &str, head_oid: &str, session: &Session) -> Markup {
+    html! {
+        template id="composer-template" {
+            form.composer-form method="post" action="/comments" {
+                (super::csrf_input(session))
+                input type="hidden" name="path" value=(path);
+                input type="hidden" name="rev" value=(head_oid);
+                input type="hidden" name="lines" value="";
+                textarea name="body" placeholder="Leave a comment (AsciiDoc)" {}
+                div.composer-buttons {
+                    button type="submit" { "Comment" }
+                    button.composer-cancel type="button" { "Cancel" }
+                }
+            }
+        }
+    }
+}
+
+/// The raw-source view: `header` and `composer` (see [`blob_header`]/
+/// [`composer_template`]'s own docs) around one table row per line (a
+/// `<tr>` pairing a `.blob-nums` line-number cell carrying the row's
+/// `#L{n}` anchor with a `.blob-code` cell, no wrapper beyond those two
+/// cells -- lean enough that thousands of lines stay cheap), highlighted
+/// via [`highlight`] when `highlighted` is `Some` and falling back to
+/// plain (still per-line, still auto-escaped by `maud`'s own
+/// interpolation) text otherwise. Each
 /// [`FileComment`](super::comments::FileComment) in `comments` whose
 /// [`ents_anchor::LineRange`] is `Some` renders its card
 /// ([`super::comments::comment_card`]) immediately after the row naming
@@ -361,7 +556,17 @@ fn blob_view(
 /// the same line stack in `comments`' own order (`comment::list`'s ref
 /// order). A comment with no current line range is [`blob_view`]'s own
 /// concern, not this function's: it never appears here.
+///
+/// `div.blob` itself carries `data-path=(path)`/`data-rev=(head_oid)` --
+/// `ents.js`'s own activation check and the values it writes into
+/// [`composer_template`]'s clone -- so a click on a gutter line number
+/// selects it (and a shift-click extends the selection) with no further
+/// server round trip needed until the reader actually submits a comment.
 fn source_view(
+    path: &str,
+    head_oid: &str,
+    header: Markup,
+    composer: Markup,
     text: &str,
     highlighted: Option<String>,
     comments: &[super::comments::FileComment],
@@ -397,7 +602,8 @@ fn source_view(
     }
 
     html! {
-        div.blob {
+        div.blob data-path=(path) data-rev=(head_oid) {
+            (header)
             table {
                 tbody {
                     @for (index, code) in code_lines.into_iter().enumerate() {
@@ -428,6 +634,7 @@ fn source_view(
                     }
                 }
             }
+            (composer)
         }
     }
 }
@@ -632,6 +839,15 @@ mod tests {
         }
     }
 
+    /// A minimal [`Session`] fixture -- [`blob_view`]'s own tests only ever
+    /// need a csrf token to render into [`composer_template`]'s hidden
+    /// input, never a real [`crate::session::SessionStore`]-minted one.
+    fn session() -> Session {
+        Session {
+            csrf: "test-csrf-token".to_owned(),
+        }
+    }
+
     #[rstest]
     #[case::empty("", true)]
     #[case::simple("src/main.rs", true)]
@@ -651,10 +867,10 @@ mod tests {
     #[test]
     fn dir_listing_sorts_directories_first_then_alphabetically() {
         let entries = vec![
-            ("zeta.txt".to_owned(), false),
-            ("alpha".to_owned(), true),
-            ("beta.txt".to_owned(), false),
-            ("gamma".to_owned(), true),
+            ("zeta.txt".to_owned(), false, Some(10)),
+            ("alpha".to_owned(), true, None),
+            ("beta.txt".to_owned(), false, Some(2048)),
+            ("gamma".to_owned(), true, None),
         ];
         let rendered = dir_listing("", entries).into_string();
         let alpha = rendered.find("alpha").expect("alpha listed");
@@ -667,22 +883,80 @@ mod tests {
     }
 
     #[test]
+    fn dir_listing_shows_a_size_for_a_file_and_none_for_a_directory() {
+        let entries = vec![
+            ("src".to_owned(), true, None),
+            ("main.rs".to_owned(), false, Some(2048)),
+        ];
+        let rendered = dir_listing("", entries).into_string();
+        let dir_index = rendered.find("src").expect("directory entry renders");
+        let file_index = rendered.find("main.rs").expect("file entry renders");
+        assert!(dir_index < file_index, "directories sort before files");
+        assert!(
+            !rendered
+                .get(..file_index)
+                .expect("slice up to the file entry")
+                .contains("entry-size"),
+            "the directory row carries no size cell"
+        );
+        assert!(
+            rendered.contains("entry-size"),
+            "the file row carries a size span"
+        );
+        assert!(rendered.contains("2.0 KB"), "the size is human-formatted");
+    }
+
+    #[rstest]
+    #[case::bytes(0, "0 B")]
+    #[case::bytes_under_a_kb(1023, "1023 B")]
+    #[case::exactly_one_kb(1024, "1.0 KB")]
+    #[case::fractional_kb(1536, "1.5 KB")]
+    #[case::just_under_a_mb(1_048_575, "1023.9 KB")]
+    #[case::exactly_one_mb(1_048_576, "1.0 MB")]
+    #[case::fractional_mb(1_572_864, "1.5 MB")]
+    fn human_size_formats_bytes_kb_and_mb(#[case] bytes: u64, #[case] expected: &str) {
+        assert_eq!(human_size(bytes), expected);
+    }
+
+    #[test]
     fn blob_view_renders_markdown_as_a_heading_not_raw_markup() {
-        let (body, _below) = blob_view("readme.md", b"# Title\n", &[]).expect("markdown renders");
+        let (body, _below) = blob_view(
+            "readme.md",
+            "readme.md",
+            "deadbeef",
+            &session(),
+            b"# Title\n",
+            &[],
+        )
+        .expect("markdown renders");
         assert!(body.into_string().contains("<h1>Title</h1>"));
     }
 
     #[test]
     fn blob_view_renders_asciidoc_as_a_heading_not_raw_markup() {
-        let (body, _below) =
-            blob_view("readme.adoc", b"= Title\n\nBody.\n", &[]).expect("asciidoc renders");
+        let (body, _below) = blob_view(
+            "readme.adoc",
+            "readme.adoc",
+            "deadbeef",
+            &session(),
+            b"= Title\n\nBody.\n",
+            &[],
+        )
+        .expect("asciidoc renders");
         assert!(body.into_string().contains("<h1>Title</h1>"));
     }
 
     #[test]
     fn blob_view_escapes_plain_text_into_a_line_numbered_code_block() {
-        let (body, _below) =
-            blob_view("notes.txt", b"1 < 2 and true", &[]).expect("plain text renders");
+        let (body, _below) = blob_view(
+            "notes.txt",
+            "notes.txt",
+            "deadbeef",
+            &session(),
+            b"1 < 2 and true",
+            &[],
+        )
+        .expect("plain text renders");
         let rendered = body.into_string();
         assert!(rendered.contains("blob-nums"));
         assert!(rendered.contains("<td class=\"blob-code\"><code>"));
@@ -691,8 +965,15 @@ mod tests {
 
     #[test]
     fn blob_view_highlights_a_recognized_language_with_syntax_token_classes() {
-        let (body, _below) =
-            blob_view("main.rs", b"fn main() { let x = 1; }", &[]).expect("rust renders");
+        let (body, _below) = blob_view(
+            "src/main.rs",
+            "main.rs",
+            "deadbeef",
+            &session(),
+            b"fn main() { let x = 1; }",
+            &[],
+        )
+        .expect("rust renders");
         let rendered = body.into_string();
         assert!(rendered.contains("blob-nums"));
         assert!(rendered.contains("class=\"code\""));
@@ -701,16 +982,30 @@ mod tests {
 
     #[test]
     fn blob_view_shows_a_placeholder_for_binary_content() {
-        let (body, _below) =
-            blob_view("data.bin", b"\0\x01\x02binary", &[]).expect("binary placeholder renders");
+        let (body, _below) = blob_view(
+            "data.bin",
+            "data.bin",
+            "deadbeef",
+            &session(),
+            b"\0\x01\x02binary",
+            &[],
+        )
+        .expect("binary placeholder renders");
         assert!(body.into_string().contains("Binary file"));
     }
 
     #[test]
     fn blob_view_routes_a_doc_comment_below_the_blob_never_inline() {
         let comments = vec![comment(Some(LineRange { start: 1, end: 1 }))];
-        let (_body, below) =
-            blob_view("readme.md", b"# Title\n", &comments).expect("markdown renders");
+        let (_body, below) = blob_view(
+            "readme.md",
+            "readme.md",
+            "deadbeef",
+            &session(),
+            b"# Title\n",
+            &comments,
+        )
+        .expect("markdown renders");
         // A doc view has no source line to interleave at: every comment,
         // even one with a current line range, renders in the below
         // section -- `comments_section`'s plain, untitled list, not
@@ -719,9 +1014,74 @@ mod tests {
     }
 
     #[test]
+    fn blob_view_shows_the_header_with_line_count_size_and_language() {
+        let (body, _below) = blob_view(
+            "src/main.rs",
+            "main.rs",
+            "deadbeef",
+            &session(),
+            b"fn main() {}\n",
+            &[],
+        )
+        .expect("rust renders");
+        let rendered = body.into_string();
+        assert!(rendered.contains("blob-header"));
+        assert!(rendered.contains("1 line"));
+        assert!(rendered.contains("13 B"));
+        assert!(rendered.contains("rust"));
+        assert!(rendered.contains("comment on this file"));
+    }
+
+    #[test]
+    fn blob_view_carries_the_composer_hooks_only_on_a_raw_source_view() {
+        let (body, _below) = blob_view(
+            "src/main.rs",
+            "main.rs",
+            "cafef00dcafef00dcafef00dcafef00dcafef00d",
+            &session(),
+            b"fn main() {}\n",
+            &[],
+        )
+        .expect("rust renders");
+        let rendered = body.into_string();
+        assert!(rendered.contains("data-path=\"src/main.rs\""));
+        assert!(rendered.contains("data-rev=\"cafef00dcafef00dcafef00dcafef00dcafef00d\""));
+        assert!(rendered.contains("id=\"composer-template\""));
+        assert!(rendered.contains("name=\"csrf\""));
+        assert!(rendered.contains("test-csrf-token"));
+        assert!(rendered.contains("name=\"path\" value=\"src/main.rs\""));
+        assert!(
+            rendered.contains("name=\"rev\" value=\"cafef00dcafef00dcafef00dcafef00dcafef00d\"")
+        );
+
+        let (doc_body, _below) = blob_view(
+            "readme.md",
+            "readme.md",
+            "deadbeef",
+            &session(),
+            b"# Title\n",
+            &[],
+        )
+        .expect("markdown renders");
+        assert!(
+            !doc_body.into_string().contains("composer-template"),
+            "a doc-rendered view has no source line to anchor a composer to"
+        );
+    }
+
+    #[test]
     fn source_view_interleaves_a_comment_directly_after_its_last_line() {
         let comments = vec![comment(Some(LineRange { start: 1, end: 2 }))];
-        let rendered = source_view("line 1\nline 2\nline 3\n", None, &comments).into_string();
+        let rendered = source_view(
+            "src/main.rs",
+            "deadbeef",
+            Markup::default(),
+            Markup::default(),
+            "line 1\nline 2\nline 3\n",
+            None,
+            &comments,
+        )
+        .into_string();
         let line2 = rendered.find("id=\"L2\"").expect("line 2 renders");
         let card = rendered.find("comment-meta").expect("card renders");
         let line3 = rendered.find("id=\"L3\"").expect("line 3 renders");
@@ -745,7 +1105,16 @@ mod tests {
                 c
             },
         ];
-        let rendered = source_view("line 1\nline 2\n", None, &comments).into_string();
+        let rendered = source_view(
+            "src/main.rs",
+            "deadbeef",
+            Markup::default(),
+            Markup::default(),
+            "line 1\nline 2\n",
+            None,
+            &comments,
+        )
+        .into_string();
         let first = rendered.find("first").expect("first comment renders");
         let second = rendered.find("second").expect("second comment renders");
         assert!(first < second, "stacked comments keep ref order");
@@ -754,7 +1123,16 @@ mod tests {
     #[test]
     fn source_view_omits_a_comment_with_no_current_line_range() {
         let comments = vec![comment(None)];
-        let rendered = source_view("line 1\nline 2\n", None, &comments).into_string();
+        let rendered = source_view(
+            "src/main.rs",
+            "deadbeef",
+            Markup::default(),
+            Markup::default(),
+            "line 1\nline 2\n",
+            None,
+            &comments,
+        )
+        .into_string();
         assert!(
             !rendered.contains("worth a look"),
             "a comment with no lines has nowhere to interleave -- blob_view routes it below instead"

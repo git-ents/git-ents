@@ -1184,6 +1184,168 @@ async fn files_blob_view_marks_an_outdated_comment() {
     assert!(body.contains("class=\"outdated\""));
 }
 
+/// A raw-source blob view carries the client-side hooks `assets/ents.js`
+/// needs: `div.blob`'s own `data-path`/`data-rev` (the latter a full
+/// 40-hex `HEAD` commit oid, not the string `"HEAD"`), and a
+/// `<template id="composer-template">` whose form carries a csrf input and
+/// hidden `path`/`rev` inputs pre-filled with this exact file and commit.
+#[tokio::test]
+async fn files_blob_view_carries_data_path_data_rev_and_the_composer_template() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {}\n")]);
+    let oid = head_oid(dir.path());
+    assert_eq!(oid.len(), 40, "a full sha1 hex oid is 40 characters");
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("data-path=\"src/main.rs\""));
+    assert!(body.contains(&format!("data-rev=\"{oid}\"")));
+    let template_start = body
+        .find("id=\"composer-template\"")
+        .expect("composer template renders");
+    let template = body.get(template_start..).expect("template slice");
+    assert!(
+        template.contains("name=\"csrf\""),
+        "the composer's own form carries a csrf input"
+    );
+    assert!(template.contains(r#"name="path" value="src/main.rs""#));
+    assert!(template.contains(&format!(r#"name="rev" value="{oid}""#)));
+}
+
+/// The blob header bar (`crate::pages::files::blob_header`) shows a raw
+/// source file's line count, human-formatted size, and detected language,
+/// plus the "comment on this file" no-JS fallback link -- moved here from
+/// `crumbs`'s own trailing edge.
+#[tokio::test]
+async fn files_blob_header_shows_line_count_size_language_and_the_comment_link() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {\n    let ok = 1;\n}\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/src/main.rs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("blob-header"));
+    assert!(body.contains("3 lines"));
+    assert!(body.contains("rust"));
+    assert!(body.contains("comment on this file"));
+}
+
+/// `GET /files` (a directory listing): a file entry carries a
+/// human-formatted size (`span.entry-size`), rendered after the
+/// directory-first entries, which carry none.
+#[tokio::test]
+async fn files_root_listing_shows_a_size_for_a_file_but_not_a_directory() {
+    let dir = seed_repo(&[("README.md", "# hi\n"), ("src/main.rs", "fn main() {}\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/files").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    let src_index = body
+        .find("/files/src\"")
+        .expect("the src directory links in");
+    let size_index = body.find("entry-size").expect("a size span renders");
+    assert!(
+        src_index < size_index,
+        "the directory row (sorted first, no size cell) renders before the file row's own size"
+    );
+}
+
+/// A doc-rendered (Markdown) blob view carries no composer template at
+/// all: there is no source line row for `assets/ents.js` to anchor an
+/// inline composer after, so `ents_web::pages::files::blob_view` never
+/// renders one for this view kind.
+#[tokio::test]
+async fn files_markdown_blob_view_has_no_composer_template() {
+    let dir = seed_repo(&[("docs/x.md", "# Doc Title\n\nSome text.\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/files/docs/x.md")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(
+        !body.contains("composer-template"),
+        "a doc-rendered view has no source line to anchor a composer to"
+    );
+}
+
 /// `GET /comments?file=<path>&lines=<range>` pre-fills the add-comment
 /// form's `path`/`lines` fields -- the entry point `crate::pages::files`'s
 /// own "comment on this file" link uses.

@@ -14,9 +14,13 @@
  * pre-redo sheet: `.meta-layout`/`.meta-rail` for the `meta` tab's
  * page-family rail (`crate::pages::META_SECTIONS`) and `.id-chip` for the
  * header's signing-identity link, both new to this crate's own four-tab
- * restructure; and `.comment-meta`/`.outdated` for the file-anchored
+ * restructure; `.comment-meta`/`.outdated` for the file-anchored
  * comment cards `crate::pages::comments::comments_section` renders below a
- * blob view, which otherwise reuse `.card`/`.doc-body` as-is.
+ * blob view, which otherwise reuse `.card`/`.doc-body` as-is; and
+ * `.blob-header`/`.blob-actions`/`.entry-size` for
+ * `crate::pages::files::blob_header`/`dir_listing`'s own metadata, plus
+ * `.composer-*` for its server-rendered comment-composer template --
+ * pre-redo had no blob header bar and no comment system at all.
  */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -155,6 +159,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .card-row a.row-link { display: flex; align-items: center; gap: .65rem; text-decoration: none; }
 .card-row:has(.row-link):hover { background: var(--color-code-bg); }
 
+/* A directory listing's per-entry byte size (`crate::pages::files::dir_listing`,
+ * `human_size`) -- muted, mono, right-aligned, absent for a directory
+ * entry. */
+.entry-size { margin-left: auto; font-family: var(--font-mono); font-size: .82rem; color: var(--color-text-muted); white-space: nowrap; }
+
 /* Repository overview (`GET /`): the rendered README beside a sticky aside
  * of a contents rail and a language breakdown (pre-redo:.../style.css's
  * `.overview`/`.aside`/`.lang`). */
@@ -261,12 +270,24 @@ form textarea { resize: vertical; }
 form button { align-self: flex-start; font-size: .88rem; font-weight: 600; color: var(--color-bg); background: var(--color-accent); border: none; border-radius: var(--radius-sm); padding: .45rem 1rem; cursor: pointer; transition: background .15s; }
 form button:hover { background: var(--color-link-hover); }
 
-/* Breadcrumbs and the file browser (`crate::pages::files`). */
+/* Breadcrumbs (pure path navigation) and the file browser
+ * (`crate::pages::files`). */
 .crumbs { font-family: var(--font-mono); font-size: .92rem; margin-bottom: 1.25rem; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; word-break: break-all; }
 .crumbs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .crumbs .sep { color: var(--color-text-muted); opacity: .55; }
 .crumbs .here { color: var(--color-text-muted); }
-.crumbs-history { margin-left: auto; font-size: .82rem; color: var(--color-text-muted); }
+
+/* The blob header bar (`crate::pages::files::blob_header`): a file's name
+ * and metadata on the left, the history/comment actions that used to
+ * trail `.crumbs` on the right -- rendered above every blob view (raw
+ * source, a rendered document, or a binary placeholder), matching the
+ * `.card-header` family look it sits beside. */
+.blob-header { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .9rem; padding: .55rem 1.1rem; border-bottom: 1px solid var(--color-border); background: var(--color-code-bg); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.blob-title { font-family: var(--font-mono); font-weight: 600; }
+.blob-meta { font-size: .78rem; color: var(--color-text-muted); }
+.blob-actions { margin-left: auto; display: flex; align-items: center; gap: .9rem; font-size: .82rem; color: var(--color-text-muted); }
+.blob-actions a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
+.blob-actions a:hover { color: var(--color-accent); }
 
 /* Commit history and view (`crate::pages::commits`). */
 .commit-subject { font-weight: 600; font-size: 1.05rem; margin-bottom: .3rem; }
@@ -293,6 +314,18 @@ form button:hover { background: var(--color-link-hover); }
 .blob tr.blob-comment-row td { padding: 0; background: var(--color-surface); }
 .blob tr.blob-comment-row .card { margin: .5rem 1rem; }
 .binary { padding: 2.5rem; text-align: center; font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); }
+
+/* The inline comment composer (`crate::pages::files::composer_template`,
+ * cloned and shown by `assets/ents.js`): mirrors `tr.blob-comment-row
+ * .card`'s own margin so it lands flush with the comment cards it
+ * follows. */
+.blob tr.blob-composer td { padding: 0; background: var(--color-surface); }
+.composer-form { margin: .5rem 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); padding: .75rem 1rem; }
+.composer-form textarea { min-height: 6rem; }
+.composer-buttons { display: flex; flex-direction: row; gap: .5rem; }
+.composer-buttons button { margin: 0; }
+.composer-cancel { align-self: flex-start; font-size: .88rem; font-weight: 600; color: var(--color-text); background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .45rem 1rem; cursor: pointer; transition: border-color .15s, color .15s; }
+.composer-cancel:hover { color: var(--color-accent); border-color: var(--color-accent); }
 
 /* File-anchored comment cards (`crate::pages::comments::comment_card`),
  * whether interleaved into a blob's own table (`tr.blob-comment-row`,
