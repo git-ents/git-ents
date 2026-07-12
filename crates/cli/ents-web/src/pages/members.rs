@@ -24,6 +24,7 @@ where
 {
     let rows = read_all(&state)?;
     Ok(super::layout(
+        super::Tab::Members,
         "members",
         crate::render::list_table(&rows, "username", |id| format!("/members/{id}")),
     ))
@@ -47,7 +48,11 @@ where
         .ok_or_else(|| Error::NotFound {
             what: format!("member {username}"),
         })?;
-    Ok(super::layout(&username, crate::render::view(&member)))
+    Ok(super::layout(
+        super::Tab::Members,
+        &username,
+        crate::render::view(&member),
+    ))
 }
 
 fn read_all<O: Find>(state: &AppState<O>) -> Result<Vec<(String, Member)>> {

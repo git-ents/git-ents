@@ -50,31 +50,61 @@ pub(crate) fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId
     Ok(commit.tree())
 }
 
+/// The tab-nav page families this crate exposes -- one variant per tab in
+/// [`layout`]'s nav bar, so a handler can name which tab it renders behind
+/// without `layout` re-deriving it from the request path (mirrors
+/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `Tab` enum,
+/// trimmed to this crate's page families).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Tab {
+    Dashboard,
+    Members,
+    Account,
+    Effects,
+    Redactions,
+    Toolchains,
+    Comments,
+    Inbox,
+}
+
 /// Wrap `title` and `body` in the one page shell every route renders
-/// through -- navigation to every generic and custom page family this
-/// crate exposes.
-pub(crate) fn layout(title: &str, body: Markup) -> Markup {
+/// through -- the pre-redo header bar and tab nav
+/// (`pre-redo:crates/git-ents-server/src/web/style.css`'s `.site-nav`/
+/// `.tabs` rules), `active` naming which tab is current.
+pub(crate) fn layout(active: Tab, title: &str, body: Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
-        html {
+        html lang="en" {
             head {
                 meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                meta name="color-scheme" content="light dark";
                 title { "git ents: " (title) }
+                link rel="preconnect" href="https://fonts.googleapis.com";
+                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
+                link rel="stylesheet" href=(crate::assets::FONTS_HREF);
+                link rel="stylesheet" href="/style.css";
             }
             body {
-                nav {
-                    a href="/" { "dashboard" } " | "
-                    a href="/members" { "members" } " | "
-                    a href="/account" { "account" } " | "
-                    a href="/effects" { "effects" } " | "
-                    a href="/redactions" { "redactions" } " | "
-                    a href="/toolchains" { "toolchains" } " | "
-                    a href="/comments" { "comments" } " | "
-                    a href="/inbox" { "inbox" }
+                nav.site-nav {
+                    div.nav-inner {
+                        a.nav-logo href="/" { span.nav-mark { "✳" } "git-ents" }
+                    }
                 }
-                hr;
-                h1 { (title) }
-                (body)
+                nav.tabs {
+                    a.tab.active[active == Tab::Dashboard] href="/" { "dashboard" }
+                    a.tab.active[active == Tab::Members] href="/members" { "members" }
+                    a.tab.active[active == Tab::Account] href="/account" { "account" }
+                    a.tab.active[active == Tab::Effects] href="/effects" { "effects" }
+                    a.tab.active[active == Tab::Redactions] href="/redactions" { "redactions" }
+                    a.tab.active[active == Tab::Toolchains] href="/toolchains" { "toolchains" }
+                    a.tab.active[active == Tab::Comments] href="/comments" { "comments" }
+                    a.tab.active[active == Tab::Inbox] href="/inbox" { "inbox" }
+                }
+                main.content {
+                    div.page-header { h1.page-title { (title) } }
+                    (body)
+                }
             }
         }
     }

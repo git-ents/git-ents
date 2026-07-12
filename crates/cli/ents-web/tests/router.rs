@@ -85,6 +85,47 @@ async fn smart_http_transport_is_never_exposed() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// `GET /style.css` is reachable with no session at all (every other route
+/// runs behind the session middleware, but that middleware only ever
+/// attaches a session -- it never gates), and serves this crate's own
+/// hand-rolled stylesheet.
+#[tokio::test]
+async fn style_css_is_served_with_no_session_required() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get("/style.css")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("content-type")
+            .to_str()
+            .expect("ascii"),
+        "text/css; charset=utf-8"
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 css");
+    assert!(!body.is_empty());
+    assert!(body.contains("--color-bg"));
+}
+
 /// `roots.web-agnostic`: the dashboard actually renders real content
 /// in-process, with no socket bound anywhere in this test -- reading the
 /// body back (rather than only checking the status) is what makes this

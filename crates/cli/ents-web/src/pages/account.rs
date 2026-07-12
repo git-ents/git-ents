@@ -52,6 +52,7 @@ where
         .unwrap_or_else(|| html! { p { "no account created yet" } });
 
     Ok(super::layout(
+        super::Tab::Account,
         "account",
         html! {
             (view)

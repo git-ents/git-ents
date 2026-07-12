@@ -99,10 +99,12 @@ fn render_scalar(peek: facet_reflect::Peek<'_, '_>) -> String {
 pub fn view<T: Facet<'static>>(value: &T) -> Markup {
     let rows = fields(value);
     html! {
-        dl.entity-view {
-            @for (name, rendered) in &rows {
-                dt { (name) }
-                dd { (rendered) }
+        div.card {
+            dl.entity-view {
+                @for (name, rendered) in &rows {
+                    dt { (name) }
+                    dd { (rendered) }
+                }
             }
         }
     }
@@ -136,21 +138,23 @@ pub fn list_table<T: Facet<'static>>(
         .map(|(_, entity)| fields(entity).into_iter().map(|(name, _)| name).collect())
         .unwrap_or_default();
     html! {
-        table.entity-list {
-            thead {
-                tr {
-                    th { (id_header) }
-                    @for name in &field_names {
-                        th { (name) }
+        div.card {
+            table.entity-list {
+                thead {
+                    tr {
+                        th { (id_header) }
+                        @for name in &field_names {
+                            th { (name) }
+                        }
                     }
                 }
-            }
-            tbody {
-                @for (id, entity) in rows {
-                    tr {
-                        td { a href=(href_for(id)) { (id) } }
-                        @for (_, rendered) in fields(entity) {
-                            td { (rendered) }
+                tbody {
+                    @for (id, entity) in rows {
+                        tr {
+                            td { a href=(href_for(id)) { (id) } }
+                            @for (_, rendered) in fields(entity) {
+                                td { (rendered) }
+                            }
                         }
                     }
                 }
@@ -165,9 +169,11 @@ pub fn list_table<T: Facet<'static>>(
 #[must_use]
 pub fn string_list(rows: &[String], href_for: impl Fn(&str) -> String) -> Markup {
     html! {
-        ul.string-list {
-            @for row in rows {
-                li { a href=(href_for(row)) { (row) } }
+        div.card {
+            ul.string-list {
+                @for row in rows {
+                    li { a href=(href_for(row)) { (row) } }
+                }
             }
         }
     }

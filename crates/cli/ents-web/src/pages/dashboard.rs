@@ -28,16 +28,19 @@ where
     let toolchains = state.refs.iter_prefix("refs/meta/toolchains/")?.count();
 
     Ok(super::layout(
+        super::Tab::Dashboard,
         "dashboard",
         html! {
-            ul {
-                li { a href="/members" { "members" } " (" (members) ")" }
-                li { a href="/account" { "account" } }
-                li { a href="/effects" { "effects" } " (" (effects) ")" }
-                li { a href="/redactions" { "redactions" } " (" (redactions) ")" }
-                li { a href="/toolchains" { "toolchains" } " (" (toolchains) ")" }
-                li { a href="/comments" { "comments" } " (" (comments) ")" }
-                li { a href="/inbox" { "inbox" } }
+            div.card {
+                ul.string-list {
+                    li { a href="/members" { "members" } span.badge { (members) } }
+                    li { a href="/account" { "account" } }
+                    li { a href="/effects" { "effects" } span.badge { (effects) } }
+                    li { a href="/redactions" { "redactions" } span.badge { (redactions) } }
+                    li { a href="/toolchains" { "toolchains" } span.badge { (toolchains) } }
+                    li { a href="/comments" { "comments" } span.badge { (comments) } }
+                    li { a href="/inbox" { "inbox" } }
+                }
             }
         },
     ))

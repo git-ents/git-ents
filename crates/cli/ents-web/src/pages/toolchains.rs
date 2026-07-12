@@ -29,6 +29,7 @@ where
 {
     let names = toolchain::list(state.refs.as_ref())?;
     Ok(super::layout(
+        super::Tab::Toolchains,
         "toolchains",
         crate::render::string_list(&names, |name| format!("/toolchains/{name}")),
     ))
@@ -51,6 +52,7 @@ where
     let (toolchain, recipe) = toolchain::view(state.refs.as_ref(), &*state.objects(), &name)?;
     let log = toolchain::log(state.refs.as_ref(), &*state.objects(), &name)?;
     Ok(super::layout(
+        super::Tab::Toolchains,
         &name,
         html! {
             dl {

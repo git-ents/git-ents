@@ -19,10 +19,11 @@ use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use gix_object::{Find, Write};
 
+use crate::assets;
 use crate::pages;
 use crate::session;
 use crate::state::AppState;
@@ -57,6 +58,7 @@ where
         )
         .route("/comments/{id}", get(pages::comments::show::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
+        .route("/style.css", get(style))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             session_middleware::<O>,
@@ -105,6 +107,19 @@ where
         response.headers_mut().append(header::SET_COOKIE, value);
     }
     response
+}
+
+/// `GET /style.css`: the one stylesheet [`pages::layout`]'s `head` links --
+/// the hand-rolled, ported pre-redo sheet (`crate::assets::OVERRIDES`). No
+/// session or CSRF gating applies here (the session middleware only ever
+/// attaches a session, never rejects a request), and it must not: every
+/// page, including one reached before a session exists, needs this to
+/// render styled.
+async fn style() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        assets::OVERRIDES,
+    )
 }
 
 /// Bind a loopback-or-otherwise socket for [`serve_on`], returning the
