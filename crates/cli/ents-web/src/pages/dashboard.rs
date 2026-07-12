@@ -1,21 +1,23 @@
-//! `GET /`: the repository overview -- the rendered `README` beside a
-//! sticky aside of a contents rail (one live count per page family, which
-//! doubles as a smoke test that every seam in [`crate::state::AppState`]
-//! actually reads) and a language breakdown of the `HEAD` tree
-//! (`pre-redo:crates/git-ents-server/src/web/pages.rs`'s `repo_page`,
-//! trimmed to the cards this single-repo, local crate has a data surface
-//! for -- no clone URL, homepage, releases, or topics).
+//! `GET /`: the repository overview -- a latest-commit freshness strip
+//! above the rendered `README`, beside a sticky aside of a contents rail
+//! (one live count per page family, which doubles as a smoke test that
+//! every seam in [`crate::state::AppState`] actually reads) and a
+//! language breakdown of the `HEAD` tree (`pre-redo:crates/git-ents-server/src/web/pages.rs`'s
+//! `repo_page`, trimmed to the cards this single-repo, local crate has a
+//! data surface for -- no clone URL, homepage, releases, or topics).
 //!
-//! The `README` and language reads browse the repository's `HEAD` tree
-//! through `gix`'s high-level `Repository`/`Tree` types, opened fresh per
-//! request from `state.path`, exactly as [`crate::pages::files`] does (and
-//! for the same reason: browsing arbitrary repository content is not the
-//! `facet-git-tree` meta-ref convention the generic pages use).
+//! The `README`, freshness-strip, and language reads browse the
+//! repository's `HEAD` commit/tree through `gix`'s high-level
+//! `Repository`/`Commit`/`Tree` types, opened fresh per request from
+//! `state.path`, exactly as [`crate::pages::files`]/[`crate::pages::commits`]
+//! do (and for the same reason: browsing arbitrary repository content is
+//! not the `facet-git-tree` meta-ref convention the generic pages use).
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use gix::bstr::ByteSlice as _;
+use gix_hash::ObjectId;
 use gix_object::{Find, Write};
 use maud::{Markup, html};
 
@@ -119,7 +121,8 @@ fn repo_overview<O>(state: &AppState<O>) -> (Markup, Vec<Lang>) {
         return (blankslate(), Vec::new());
     };
     let langs = languages(&repo, &tree);
-    let main = if let Some((name, rendered)) = readme(&tree) {
+    let strip = freshness_strip(&repo);
+    let content = if let Some((name, rendered)) = readme(&tree) {
         html! {
             div.card {
                 div.card-header { (assets::icon_file()) (name) }
@@ -134,7 +137,37 @@ fn repo_overview<O>(state: &AppState<O>) -> (Markup, Vec<Lang>) {
             files_card(&entries)
         }
     };
-    (main, langs)
+    (html! { (strip) (content) }, langs)
+}
+
+/// The overview's latest-commit freshness strip, above the `README` card:
+/// `HEAD`'s short oid linking to `crate::pages::commits::show`, its
+/// subject, author, [`super::ago`] time, and a link into
+/// `crate::pages::commits::list`'s full history. Renders nothing at all on
+/// an unborn `HEAD` or any other read failure -- best-effort chrome, not a
+/// reason to fail the page.
+fn freshness_strip(repo: &gix::Repository) -> Markup {
+    let Ok(commit) = repo.head_commit() else {
+        return html! {};
+    };
+    let Ok(message) = commit.message() else {
+        return html! {};
+    };
+    let Ok(author) = commit.author() else {
+        return html! {};
+    };
+    let seconds = author.time().map(|time| time.seconds).unwrap_or(0);
+    let oid = commit.id().detach();
+    html! {
+        div.card.freshness {
+            div.card-row {
+                a href={ "/commit/" (oid) } { code { (super::short_oid(&oid)) } }
+                span { (message.title.to_str_lossy()) }
+                span.muted { (author.name.to_str_lossy()) " \u{b7} " (super::ago(seconds)) }
+                a.freshness-history href="/commits" { "history \u{2192}" }
+            }
+        }
+    }
 }
 
 /// The empty-column placeholder shown when the repository has no `README`,
@@ -230,23 +263,29 @@ fn files_card(entries: &[(String, bool)]) -> Markup {
 }
 
 /// The language breakdown of the whole `HEAD` tree: the top four languages
-/// by file count, as `(name, color, percent)`, largest first. File-count
-/// based rather than pre-redo's byte-weighted `git ls-tree -l` (which shells
-/// out); the shape and the top-four cap match `pre-redo:.../git.rs`'s
-/// `languages`.
+/// by total blob byte size, as `(name, color, percent)`, largest first --
+/// byte-weighted like `pre-redo:.../git.rs`'s own `languages` (which shelled
+/// out to `git ls-tree -l` for the sizes), except every size here comes
+/// from [`gix::Repository::find_header`], an odb header lookup that never
+/// reads a blob's full content. The shape and the top-four cap match
+/// pre-redo's own.
 fn languages(repo: &gix::Repository, tree: &gix::Tree<'_>) -> Vec<Lang> {
-    let mut names = Vec::new();
-    collect_blob_names(repo, tree, &mut names);
+    let mut blobs = Vec::new();
+    collect_blobs(repo, tree, &mut blobs);
     let mut totals: Vec<(&'static str, &'static str, u64)> = Vec::new();
     let mut grand: u64 = 0;
-    for name in &names {
+    for (name, oid) in &blobs {
         let Some((lang, color)) = classify(name) else {
             continue;
         };
-        grand = grand.saturating_add(1);
+        let size = repo
+            .find_header(*oid)
+            .map(|header| header.size())
+            .unwrap_or(0);
+        grand = grand.saturating_add(size);
         match totals.iter_mut().find(|(existing, _, _)| *existing == lang) {
-            Some(entry) => entry.2 = entry.2.saturating_add(1),
-            None => totals.push((lang, color, 1)),
+            Some(entry) => entry.2 = entry.2.saturating_add(size),
+            None => totals.push((lang, color, size)),
         }
     }
     if grand == 0 {
@@ -256,28 +295,32 @@ fn languages(repo: &gix::Repository, tree: &gix::Tree<'_>) -> Vec<Lang> {
     totals.truncate(4);
     totals
         .into_iter()
-        .map(|(lang, color, count)| {
-            let pct = count.saturating_mul(100).checked_div(grand).unwrap_or(0);
+        .map(|(lang, color, size)| {
+            let pct = size.saturating_mul(100).checked_div(grand).unwrap_or(0);
             (lang, color, u8::try_from(pct).unwrap_or(100))
         })
         .filter(|(_, _, pct)| *pct > 0)
         .collect()
 }
 
-/// Recurse `tree`, pushing every blob's filename onto `out`. Subtree reads
-/// that fail are skipped rather than propagated -- a language bar is
-/// advisory chrome, not a reason to fail the whole page.
-fn collect_blob_names(repo: &gix::Repository, tree: &gix::Tree<'_>, out: &mut Vec<String>) {
+/// Recurse `tree`, pushing every blob's `(filename, oid)` onto `out`
+/// -- [`languages`] weighs each by its odb header size, not by count.
+/// Subtree reads that fail are skipped rather than propagated -- a
+/// language bar is advisory chrome, not a reason to fail the whole page.
+fn collect_blobs(repo: &gix::Repository, tree: &gix::Tree<'_>, out: &mut Vec<(String, ObjectId)>) {
     for entry in tree.iter() {
         let Ok(entry) = entry else { continue };
         if entry.mode().is_tree() {
             if let Ok(object) = repo.find_object(entry.oid().to_owned())
                 && let Ok(subtree) = object.try_into_tree()
             {
-                collect_blob_names(repo, &subtree, out);
+                collect_blobs(repo, &subtree, out);
             }
         } else if entry.mode().is_blob() {
-            out.push(entry.filename().to_str_lossy().into_owned());
+            out.push((
+                entry.filename().to_str_lossy().into_owned(),
+                entry.oid().to_owned(),
+            ));
         }
     }
 }

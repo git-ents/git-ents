@@ -173,6 +173,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .lang-legend { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; font-size: .78rem; }
 .lang-legend li { display: flex; align-items: center; gap: .45rem; }
 .lang-legend .pct { margin-left: auto; font-family: var(--font-mono); color: var(--color-text-muted); }
+.freshness .card-row a { flex: none; text-decoration: none; }
+.freshness .card-row a:hover { text-decoration: underline; }
+.freshness .muted { color: var(--color-text-muted); flex: 1; min-width: 0; }
+.freshness-history { margin-left: auto; color: var(--color-text-muted); }
+.freshness-history:hover { color: var(--color-accent); }
 .blankslate { text-align: center; padding: 3rem 1.5rem; }
 .blankslate h2 { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700; margin-bottom: .5rem; }
 .blankslate p { color: var(--color-text-muted); }

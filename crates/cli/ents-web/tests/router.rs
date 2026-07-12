@@ -339,6 +339,75 @@ async fn dashboard_renders_the_readme_and_a_languages_card() {
     );
 }
 
+/// `GET /` shows a freshness strip above the `README` card: the `HEAD`
+/// commit's own subject and a link into its `/commit/{oid}` page.
+#[tokio::test]
+async fn dashboard_shows_a_freshness_strip_linking_to_the_latest_commit() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(body.contains("class=\"card freshness\""));
+    assert!(body.contains(&format!("/commit/{oid}")));
+    assert!(body.contains("seed"), "the HEAD commit's subject renders");
+}
+
+/// `GET /` on an unborn `HEAD` (a freshly initialized, still-empty
+/// repository) omits the freshness strip entirely, rather than rendering
+/// a placeholder for a commit that does not exist.
+#[tokio::test]
+async fn dashboard_omits_the_freshness_strip_on_an_unborn_head() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["init", "-q"])
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git init failed");
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert!(!body.contains("class=\"card freshness\""));
+}
+
 /// `roots.web-session`: a state-changing request with no CSRF token at
 /// all is a bad request (axum's own `Form` rejection); one with the wrong
 /// token is refused by this crate's own check; the session cookie a `GET`
