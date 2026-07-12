@@ -140,12 +140,13 @@ fn repo_overview<O>(state: &AppState<O>) -> (Markup, Vec<Lang>) {
     (html! { (strip) (content) }, langs)
 }
 
-/// The overview's latest-commit freshness strip, above the `README` card:
-/// `HEAD`'s short oid linking to `crate::pages::commits::show`, its
-/// subject, author, [`super::ago`] time, and a link into
-/// `crate::pages::commits::list`'s full history. Renders nothing at all on
-/// an unborn `HEAD` or any other read failure -- best-effort chrome, not a
-/// reason to fail the page.
+/// The overview's latest-commit freshness strip, above the `README` card, a
+/// single non-wrapping flex row: `HEAD`'s short oid linking to
+/// `crate::pages::commits::show`, its subject (ellipsized on overflow, the
+/// row's only flexible cell), the author and [`super::ago`] time (muted,
+/// never wrapping), and a link into `crate::pages::commits::list`'s full
+/// history. Renders nothing at all on an unborn `HEAD` or any other read
+/// failure -- best-effort chrome, not a reason to fail the page.
 fn freshness_strip(repo: &gix::Repository) -> Markup {
     let Ok(commit) = repo.head_commit() else {
         return html! {};
@@ -162,8 +163,8 @@ fn freshness_strip(repo: &gix::Repository) -> Markup {
         div.card.freshness {
             div.card-row {
                 a href={ "/commit/" (oid) } { code { (super::short_oid(&oid)) } }
-                span { (message.title.to_str_lossy()) }
-                span.muted { (author.name.to_str_lossy()) " \u{b7} " (super::ago(seconds)) }
+                span.freshness-subject { (message.title.to_str_lossy()) }
+                span.freshness-meta { (author.name.to_str_lossy()) " \u{b7} " (super::ago(seconds)) }
                 a.freshness-history href="/commits" { "history \u{2192}" }
             }
         }

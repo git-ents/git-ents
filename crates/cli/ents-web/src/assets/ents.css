@@ -173,9 +173,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .lang-legend { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; font-size: .78rem; }
 .lang-legend li { display: flex; align-items: center; gap: .45rem; }
 .lang-legend .pct { margin-left: auto; font-family: var(--font-mono); color: var(--color-text-muted); }
+.freshness .card-row { flex-wrap: nowrap; }
 .freshness .card-row a { flex: none; text-decoration: none; }
 .freshness .card-row a:hover { text-decoration: underline; }
-.freshness .muted { color: var(--color-text-muted); flex: 1; min-width: 0; }
+.freshness-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.freshness-meta { flex: none; white-space: nowrap; color: var(--color-text-muted); }
 .freshness-history { margin-left: auto; color: var(--color-text-muted); }
 .freshness-history:hover { color: var(--color-accent); }
 .blankslate { text-align: center; padding: 3rem 1.5rem; }
@@ -202,6 +204,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .entity-list tbody tr + tr { border-top: 1px solid var(--color-border); }
 .entity-list td a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .entity-list td a:hover { color: var(--color-accent); }
+
+/* The commits list (`crate::pages::commits::list`) reuses `.entity-list`,
+ * but its oid/author/when columns are short tokens that should never
+ * shred mid-word the way a long unbroken key (`.entity-list`'s own
+ * break-all, correctly used by the members list's `key` column) needs to;
+ * only the subject column -- ordinary prose -- wraps at word boundaries. */
+.commits-table th:nth-child(1), .commits-table td:nth-child(1),
+.commits-table th:nth-child(3), .commits-table td:nth-child(3),
+.commits-table th:nth-child(4), .commits-table td:nth-child(4) {
+  white-space: nowrap;
+  word-break: normal;
+}
+.commits-table td:nth-child(2) { word-break: normal; }
 
 .string-list { list-style: none; font-family: var(--font-mono); font-size: .9rem; }
 .string-list li { display: flex; align-items: center; gap: .65rem; padding: .7rem 1.1rem; }

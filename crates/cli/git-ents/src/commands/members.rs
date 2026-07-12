@@ -137,7 +137,19 @@ pub fn check(
     key: Option<std::path::PathBuf>,
 ) -> Result<Option<(String, MemberState)>> {
     let signer = signer(root, key)?;
-    let pubkey = signer.public_openssh();
+    find_by_key(root, &signer.public_openssh())
+}
+
+/// Resolve `pubkey` to the enrolled member whose stored key matches it, if
+/// any -- the shared match loop behind [`check`] and `git ents serve`'s own
+/// identity-chip label (`crate::commands::serve::build_state`,
+/// `roots.web-signing`): both need "which member owns this key," never a
+/// bespoke re-scan of `list`'s own rows.
+///
+/// # Errors
+///
+/// Propagates a ref-store or object read failure.
+pub fn find_by_key(root: &LocalRoot, pubkey: &str) -> Result<Option<(String, MemberState)>> {
     for (username, member) in list(root)? {
         if member.key == pubkey {
             return Ok(Some((username, member.state)));

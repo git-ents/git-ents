@@ -62,3 +62,74 @@ async fn serve_reuses_the_local_root_and_exposes_no_git_transport() {
         "git ents serve must never expose git's own smart-HTTP transport"
     );
 }
+
+/// `roots.web-signing`: the identity chip shows the signer's own enrolled
+/// member username, resolved via `commands::members::find_by_key` (the
+/// same key-match loop `git ents members check` runs) -- not
+/// `actor().name`, which is a fixed `"git-ents"` commit-author wordmark
+/// that would otherwise just duplicate the site logo next to it.
+#[tokio::test]
+// @relation(roots.web-signing, scope=function, role=Verifies)
+async fn serve_identity_chip_shows_the_signers_enrolled_member_username() {
+    let fixture = common::Fixture::new(1);
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "jdc", None, Some(fixture.key_path.clone())).expect("bootstrap");
+
+    let root = LocalRoot::open(fixture.path()).expect("reopen for serve");
+    let state = git_ents::commands::serve::build_state(root, Some(fixture.key_path.clone()))
+        .expect("builds state from the local root");
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("utf8 html");
+    assert!(
+        body.contains(r#"class="id-chip" href="/account">jdc</a>"#),
+        "the id-chip must show the enrolled member's own username: {body}"
+    );
+}
+
+/// A signer whose key names no enrolled member falls back to a short key
+/// fingerprint for the identity chip -- never `actor()`'s `"git-ents"`
+/// wordmark, which would silently duplicate the site logo.
+#[tokio::test]
+// @relation(roots.web-signing, scope=function, role=Verifies)
+async fn serve_identity_chip_falls_back_to_a_fingerprint_when_unenrolled() {
+    let fixture = common::Fixture::new(2);
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    let state = git_ents::commands::serve::build_state(root, Some(fixture.key_path.clone()))
+        .expect("builds state from the local root");
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body")
+            .to_vec(),
+    )
+    .expect("utf8 html");
+    let chip = body
+        .split(r#"class="id-chip" href="/account">"#)
+        .nth(1)
+        .and_then(|rest| rest.split("</a>").next())
+        .expect("id-chip renders");
+    assert_ne!(
+        chip, "git-ents",
+        "an unenrolled key must never fall back to the commit-author wordmark"
+    );
+    assert!(!chip.is_empty(), "the fingerprint fallback is never blank");
+}

@@ -309,13 +309,12 @@ pub(crate) fn layout_meta(
 }
 
 /// The signing identity's display label for [`layout`]'s `.id-chip`
-/// (`roots.web-signing`) -- [`crate::identity::SigningIdentity::actor`]'s
-/// own author name, the cheapest accessor the trait exposes. Every page
-/// reads this off `state` itself rather than `layout` reaching into
-/// [`AppState`], so `layout` stays a pure function of the shell's own
+/// (`roots.web-signing`) -- [`crate::identity::SigningIdentity::label`].
+/// Every page reads this off `state` itself rather than `layout` reaching
+/// into [`AppState`], so `layout` stays a pure function of the shell's own
 /// chrome inputs (the same reason a [`Session`] is never threaded into it).
 pub(crate) fn identity_label<O>(state: &AppState<O>) -> String {
-    state.identity.actor().name.to_string()
+    state.identity.label()
 }
 
 /// A hidden CSRF input every form this crate renders carries

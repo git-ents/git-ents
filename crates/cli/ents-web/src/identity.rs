@@ -49,6 +49,9 @@
 ///
 /// let identity: Box<dyn SigningIdentity> = Box::new(Fixed);
 /// assert_eq!(identity.actor().name, "fixture");
+/// // `label` defaults to `actor().name` when a composition root has no
+/// // better identifier (a resolved member's own username, for instance).
+/// assert_eq!(identity.label(), "fixture");
 /// ```
 // @relation(roots.web-signing, roots.web-agnostic, scope=file)
 pub trait SigningIdentity: Send + Sync {
@@ -65,6 +68,22 @@ pub trait SigningIdentity: Send + Sync {
     /// acting, exactly as `git ents account create` resolves its own
     /// signer's member when `--member` is omitted.
     fn public_openssh(&self) -> String;
+
+    /// This identity's display label for [`crate::pages::layout`]'s
+    /// `.id-chip` (`roots.web-signing`) -- the one place this crate names
+    /// "who is acting" for a human reader, as opposed to [`Self::actor`]'s
+    /// commit-authorship signature.
+    ///
+    /// Defaults to [`Self::actor`]'s own author name: good enough when a
+    /// composition root has nothing better to show. `git-ents`'s own
+    /// `LocalIdentity` overrides this with the enrolled member's username
+    /// resolved from the signer's public key (falling back to a short key
+    /// fingerprint when no member matches), since `actor().name` there is
+    /// a fixed wordmark ("git-ents"), not a signer identity -- showing it
+    /// in the chip would just duplicate the site logo next to it.
+    fn label(&self) -> String {
+        self.actor().name.to_string()
+    }
 }
 
 /// Build the [`ents_receive::Identity`] every mutation page hands to

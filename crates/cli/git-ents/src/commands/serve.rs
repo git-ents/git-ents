@@ -18,7 +18,12 @@
 //! `user.signingkey`, else the default `~/.ssh/id_ed25519`) — no
 //! server-key indirection exists anywhere in this module, which is
 //! exactly what keeps `roots.web-signing`'s hosted-only indirection from
-//! leaking into the local root.
+//! leaking into the local root. [`LocalIdentity::label`] additionally
+//! resolves the signer's own enrolled member (reusing
+//! `crate::commands::members::find_by_key`, the same key-match loop
+//! `git ents members check` runs), so the web shell's identity chip shows
+//! a username instead of [`actor`]'s fixed `"git-ents"` commit-author
+//! wordmark.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -39,6 +44,11 @@ use crate::sign::Signer;
 struct LocalIdentity {
     signer: Signer,
     actor: gix::actor::Signature,
+    /// The web shell's identity-chip label (see [`SigningIdentity::label`]'s
+    /// own doc): the signer's enrolled member username when one matches,
+    /// its short key fingerprint otherwise — resolved once in
+    /// [`build_state`], not per request.
+    label: String,
 }
 
 impl SigningIdentity for LocalIdentity {
@@ -52,6 +62,10 @@ impl SigningIdentity for LocalIdentity {
 
     fn public_openssh(&self) -> String {
         self.signer.public_openssh()
+    }
+
+    fn label(&self) -> String {
+        self.label.clone()
     }
 }
 
@@ -80,8 +94,18 @@ pub fn build_state(
     key: Option<PathBuf>,
 ) -> Result<Arc<AppState<crate::root::Objects>>> {
     let signer = super::signer(&root, key)?;
+    let pubkey = signer.public_openssh();
+    // The identity chip's label (`roots.web-signing`): reuse the same
+    // key-match loop `git ents members check` runs (`find_by_key`) rather
+    // than re-scanning `refs/meta/member/*` by hand, falling back to the
+    // signer's own short fingerprint when no enrolled member's key matches
+    // (an unenrolled local key, still allowed to browse and sign).
+    let label = super::members::find_by_key(&root, &pubkey)?
+        .map(|(username, _state)| username)
+        .unwrap_or_else(|| super::short_fingerprint(&signer));
     let identity = LocalIdentity {
         actor: actor(&signer),
+        label,
         signer,
     };
     let mode = root.mode();

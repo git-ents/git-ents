@@ -89,7 +89,7 @@ where
             } @else {
                 div.card {
                     div.card-header { "commits" }
-                    table.entity-list {
+                    table.entity-list.commits-table {
                         thead {
                             tr { th { "commit" } th { "subject" } th { "author" } th { "when" } }
                         }
