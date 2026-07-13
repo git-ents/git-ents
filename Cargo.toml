@@ -9,6 +9,7 @@ members = [
     "crates/kernel/ents-receive",
     "crates/kernel/ents-sync",
     "crates/kernel/ents-testutil",
+    "crates/cli/ents-lens",
     "crates/cli/ents-web",
     "crates/cli/git-ents",
     "crates/forge/ents-forge",
@@ -31,6 +32,7 @@ ents-effect = { path = "crates/kernel/ents-effect" }
 ents-forge = { path = "crates/forge/ents-forge" }
 ents-gate = { path = "crates/kernel/ents-gate" }
 ents-kiln = { path = "crates/kiln/ents-kiln" }
+ents-lens = { path = "crates/cli/ents-lens" }
 ents-model = { path = "crates/kernel/ents-model" }
 ents-query = { path = "crates/kernel/ents-query" }
 ents-receive = { path = "crates/kernel/ents-receive" }
@@ -80,6 +82,8 @@ gix-object = "0.61"
 gix-odb = "0.81"
 gix-pack = "0.71"
 iddqd = "0.4"
+lsp-server = "0.9"
+lsp-types = "0.94"
 object_store = { version = "0.14", default-features = false, features = [
     "aws",
 ] }
@@ -89,6 +93,7 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 rayon = "1"
 rstest = "0.26"
 semver = "1"
+serde_json = "1"
 spdx = "0.13"
 ssh-key = { version = "0.6", features = ["ed25519"] }
 target-lexicon = "0.13"
