@@ -99,6 +99,7 @@
 //! // is the composition root's job (via `ents-kiln`), not this crate's —
 //! // `run_effect` only ever receives an already-materialized slice.
 //! let effect = Effect {
+//!     name: "unit".into(),
 //!     trigger: "rev(refs/heads/main)".into(),
 //!     toolchains: vec![],
 //!     run: "true".into(),

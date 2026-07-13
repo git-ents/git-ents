@@ -34,7 +34,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
 
-use ents_model::Status;
+use ents_model::{ResultRecord, Status};
 use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind};
@@ -370,21 +370,24 @@ impl<'a> Evaluator<'a> {
     }
 
     /// The recorded status behind one results ref tip, cached: the tip
-    /// commit's tree deserialized as the [`Status`] typed tree.
+    /// commit's tree deserialized as a [`ResultRecord`], of which the
+    /// status is one field (`model.result-identity`: the tree also carries
+    /// the effect and judged commit, so a signed status means something
+    /// with the refname stripped away).
     fn result_status(&self, name: &str, tip: ObjectId) -> EvalResult<Status> {
         if let Some(status) = self.status.borrow().get(&tip) {
             return Ok(*status);
         }
         let tree = self.commit_tree(tip)?;
-        let status: Status =
+        let record: ResultRecord =
             facet_git_tree::deserialize(&tree, self.objects).map_err(|source| {
                 EvalError::Status {
                     name: name.to_owned(),
                     source,
                 }
             })?;
-        self.status.borrow_mut().insert(tip, status);
-        Ok(status)
+        self.status.borrow_mut().insert(tip, record.status);
+        Ok(record.status)
     }
 
     /// The tip commits of every author-written meta-ref matching the

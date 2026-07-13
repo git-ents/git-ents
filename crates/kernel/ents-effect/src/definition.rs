@@ -33,6 +33,7 @@ use crate::error::{Error, Result};
 /// use ents_model::Effect;
 ///
 /// let good = Effect {
+///     name: "unit".into(),
 ///     trigger: "rev(refs/heads/main)".into(),
 ///     toolchains: vec!["rust-stable".into()],
 ///     run: "cargo test".into(),
@@ -65,6 +66,7 @@ mod tests {
 
     fn effect(trigger: &str, toolchains: &[&str]) -> Effect {
         Effect {
+            name: "unit".to_owned(),
             trigger: trigger.to_owned(),
             toolchains: toolchains.iter().map(|s| (*s).to_owned()).collect(),
             run: "true".to_owned(),

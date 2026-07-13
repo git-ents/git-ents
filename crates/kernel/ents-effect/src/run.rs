@@ -116,7 +116,7 @@ pub fn short_oid(oid: ObjectId) -> String {
 /// enroll_member(&refs, &objects, "worker", &worker, Provenance::AdminRegistered, 100);
 /// let commits = advance_ref(&refs, &objects, "refs/heads/main", 1, 200);
 ///
-/// let effect = Effect { trigger: "rev(refs/heads/main)".into(), toolchains: vec![], run: "true".into() };
+/// let effect = Effect { name: "unit".into(), trigger: "rev(refs/heads/main)".into(), toolchains: vec![], run: "true".into() };
 /// let results_ref = namespace::result_ref("unit", "abcabcabcabc").expect("valid");
 /// let author = gix::actor::Signature {
 ///     name: "worker".into(), email: "worker@ents.test".into(),
@@ -182,6 +182,8 @@ pub fn run_one(
         objects,
         events,
         results_ref,
+        &effect.name,
+        oid,
         status,
         author,
         sign,
@@ -351,6 +353,7 @@ mod tests {
         let commits = advance_ref(&refs, &objects, "refs/heads/main", 2, 200);
 
         let effect = Effect {
+            name: "unit".into(),
             trigger: "rev(refs/heads/main)".into(),
             toolchains: vec![],
             run: "true".into(),
@@ -405,6 +408,7 @@ mod tests {
         let commits = advance_ref(&refs, &objects, "refs/heads/main", 3, 200);
 
         let effect = Effect {
+            name: "unit".into(),
             trigger: "rev(refs/heads/main)".into(),
             toolchains: vec![],
             run: "true".into(),
@@ -451,6 +455,7 @@ mod tests {
         let commits = advance_ref(&refs, &objects, "refs/heads/main", 1, 200);
 
         let effect = Effect {
+            name: "unit".into(),
             trigger: "rev(refs/heads/main)".into(),
             toolchains: vec![],
             run: "true".into(),
@@ -498,6 +503,7 @@ mod tests {
         advance_ref(&refs, &objects, "refs/heads/main", 2, 200);
 
         let effect = Effect {
+            name: "unit".into(),
             trigger: "rev(refs/heads/main)".into(),
             toolchains: vec![],
             run: "true".into(),
@@ -577,6 +583,7 @@ mod tests {
         let first = *commits.first().expect("advance_ref produced a commit");
 
         let effect = Effect {
+            name: "unit".into(),
             trigger: "rev(refs/heads/main)".into(),
             toolchains: vec![],
             run: "true".into(),
