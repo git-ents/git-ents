@@ -18,7 +18,6 @@
 )]
 
 use ents_gate::{Config, Update, Verdict, verify};
-use ents_model::trailer::Trailers;
 use ents_model::{Provenance, namespace};
 use ents_sync::{Heads, Merged, merge_heads};
 use ents_testutil::{
@@ -45,32 +44,33 @@ fn issue(state: &str) -> Issue {
     }
 }
 
-/// Build a signed commit recording `entity`, bound to `refname`, with the
-/// given parents — the general shape [`write_meta_entity`] specializes.
+/// Build a signed commit recording `entity` with the given parents. The
+/// commit names no ref of its own — the gate recomputes the binding from
+/// signed content (`gate.identity-binding`).
 fn signed_commit(
     objects: &ObjectStore,
-    refname: &FullName,
     entity: &Issue,
     parents: Vec<ObjectId>,
     key: &Keypair,
     seconds: i64,
 ) -> ObjectId {
     let tree = facet_git_tree::serialize_into(entity, objects).unwrap();
-    let trailers = Trailers {
-        ents_ref: Some(refname.clone()),
-        schema_version: None,
-    };
-    let message = format!("Mutate {}\n\n{}", refname.as_bstr(), trailers.render());
     write_commit(
         objects,
         &CommitSpec {
             tree,
             parents,
-            message,
+            message: "Mutate issue".into(),
             seconds,
         },
         Some(key),
     )
+}
+
+/// The canonical issue refname for a genesis commit, keyed by its oid
+/// (`meta-ref.identity-binding`).
+fn issue_ref(genesis: ObjectId) -> FullName {
+    format!("refs/meta/issues/{genesis}").try_into().unwrap()
 }
 
 fn author(seconds: i64) -> gix::actor::Signature {
@@ -121,14 +121,15 @@ fn same_actor_divergence_merges_to_a_gate_valid_tip() {
     let jdc = Keypair::from_seed(1);
     boot(&refs, &objects, &jdc);
 
-    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
-    let base = signed_commit(&objects, &name, &issue("open"), vec![], &jdc, 300);
+    let base = signed_commit(&objects, &issue("open"), vec![], &jdc, 300);
+    // The issue's id is its genesis commit's own oid.
+    let name = issue_ref(base);
 
     // Two divergent children of the same base, editing different fields.
     let mut ours_issue = issue("open");
     ours_issue.title = "renamed".into();
-    let ours = signed_commit(&objects, &name, &ours_issue, vec![base], &jdc, 400);
-    let theirs = signed_commit(&objects, &name, &issue("closed"), vec![base], &jdc, 400);
+    let ours = signed_commit(&objects, &ours_issue, vec![base], &jdc, 400);
+    let theirs = signed_commit(&objects, &issue("closed"), vec![base], &jdc, 400);
 
     let heads = Heads {
         refname: name.clone(),
@@ -187,12 +188,12 @@ fn adoption_merges_the_contributors_commit_without_cherry_picking() {
     enroll_member(&refs, &objects, "bob", &bob, Provenance::SelfAttested, 250);
 
     // Bob submits an issue under his own inbox segment (all he may write).
-    let inbox: FullName = "refs/meta/inbox/bob/issues/5".try_into().unwrap();
-    let contribution = signed_commit(&objects, &inbox, &issue("open"), vec![], &bob, 300);
+    let contribution = signed_commit(&objects, &issue("open"), vec![], &bob, 300);
 
     // The maintainer adopts it onto the canonical ref via the *same*
-    // machinery divergence uses — only the heads differ.
-    let canonical: FullName = "refs/meta/issues/5".try_into().unwrap();
+    // machinery divergence uses — only the heads differ. The canonical id
+    // is bob's genesis commit oid, which stays the history's sole root.
+    let canonical = issue_ref(contribution);
     let heads = Heads {
         refname: canonical.clone(),
         ours: None,
@@ -238,14 +239,13 @@ fn adoption_onto_existing_canonical_ref_uses_the_merge() {
     boot(&refs, &objects, &admin);
     enroll_member(&refs, &objects, "bob", &bob, Provenance::SelfAttested, 250);
 
-    let canonical: FullName = "refs/meta/issues/7".try_into().unwrap();
-    let base = signed_commit(&objects, &canonical, &issue("open"), vec![], &admin, 300);
+    let base = signed_commit(&objects, &issue("open"), vec![], &admin, 300);
+    let canonical = issue_ref(base);
 
     // Bob branches from the canonical base and edits a field in his inbox.
-    let inbox: FullName = "refs/meta/inbox/bob/issues/7".try_into().unwrap();
     let mut contributed = issue("open");
     contributed.title = "bob's title".into();
-    let contribution = signed_commit(&objects, &inbox, &contributed, vec![base], &bob, 350);
+    let contribution = signed_commit(&objects, &contributed, vec![base], &bob, 350);
 
     let heads = Heads {
         refname: canonical.clone(),

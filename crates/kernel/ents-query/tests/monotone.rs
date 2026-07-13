@@ -135,8 +135,9 @@ fn recorded(objects: &ObjectStore, refs: &Refs, effect: &str, want: Option<Statu
             let tree = CommitRef::from_bytes(data.data, tip.kind())
                 .expect("commit")
                 .tree();
-            let status: Status = facet_git_tree::deserialize(&tree, objects).expect("status tree");
-            (want.is_none() || want == Some(status)).then(|| short.to_owned())
+            let record: ents_model::ResultRecord =
+                facet_git_tree::deserialize(&tree, objects).expect("result tree");
+            (want.is_none() || want == Some(record.status)).then(|| short.to_owned())
         })
         .collect()
 }
@@ -293,7 +294,7 @@ proptest! {
                 Op::Member { who } => {
                     let id = MEMBERS[who];
                     seconds += 100;
-                    let member = Member::new(format!("key-{id}"), Provenance::AdminRegistered);
+                    let member = Member::new(id, format!("key-{id}"), Provenance::AdminRegistered);
                     write_member(&refs, &objects, id, &member, None, seconds);
                     Some(format!("refs/meta/member/{id}"))
                 }

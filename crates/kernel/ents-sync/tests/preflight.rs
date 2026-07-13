@@ -11,13 +11,13 @@
 #![expect(clippy::unwrap_used, reason = "tests")]
 
 use ents_gate::{Config, Update, verify};
-use ents_model::trailer::Trailers;
 use ents_model::{MemberId, Provenance, namespace};
 use ents_sync::{inbox_route, preflight};
 use ents_testutil::{
     CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
 };
 use gix::refs::FullName;
+use gix_hash::ObjectId;
 use gix_ref_store::{Expected, RefEdit, RefStore, RefStoreRead};
 use rstest::rstest;
 
@@ -37,6 +37,47 @@ fn issue() -> Issue {
         body: "b".into(),
         state: "open".into(),
     }
+}
+
+/// Build a parentless, signed genesis issue commit and the oid-keyed
+/// refname it binds (`meta-ref.identity-binding`). Does not touch the ref
+/// store — pre-flight judges a proposal against a snapshot.
+fn genesis_issue(objects: &ObjectStore, signer: &Keypair, seconds: i64) -> (FullName, ObjectId) {
+    let tree = facet_git_tree::serialize_into(&issue(), objects).unwrap();
+    let tip = write_commit(
+        objects,
+        &CommitSpec {
+            tree,
+            parents: vec![],
+            message: "Open issue".into(),
+            seconds,
+        },
+        Some(signer),
+    );
+    (format!("refs/meta/issues/{tip}").try_into().unwrap(), tip)
+}
+
+/// A child issue commit of `parent`, signed, for divergence scenarios.
+fn child_issue(
+    objects: &ObjectStore,
+    parent: ObjectId,
+    state: &str,
+    signer: &Keypair,
+    seconds: i64,
+) -> ObjectId {
+    let mut edited = issue();
+    edited.state = state.into();
+    let tree = facet_git_tree::serialize_into(&edited, objects).unwrap();
+    write_commit(
+        objects,
+        &CommitSpec {
+            tree,
+            parents: vec![parent],
+            message: "Edit issue".into(),
+            seconds,
+        },
+        Some(signer),
+    )
 }
 
 /// A booted forge (admin enrolled, epoch set) plus a self-attested bob.
@@ -82,26 +123,25 @@ fn preflight_offers_inbox_only_on_an_authorization_refusal(
     let signer = if seed == 1 { &admin } else { &bob };
     let author = if seed == 1 { "admin" } else { "bob" };
 
-    let name: FullName = "refs/meta/issues/9".try_into().unwrap();
-    let tip = write_meta_entity(&refs, &objects, name.clone(), &issue(), Some(signer), 300);
-
-    let before = refs.fetched_copy();
-    before.remove(name.as_ref());
+    // The issue's id is its genesis commit's own oid; the ref does not yet
+    // exist, so pre-flight judges a fresh creation.
+    let (name, tip) = genesis_issue(&objects, signer, 300);
     let pf = preflight(
-        &before,
+        &refs,
         &objects,
         &Update {
-            name,
+            name: name.clone(),
             new: Some(tip),
         },
         &MemberId::new(author),
     )
     .unwrap();
 
-    assert_eq!(pf.is_pass(), expect_pass);
+    assert_eq!(pf.is_pass(), expect_pass, "{:?}", pf.verdict);
     assert_eq!(pf.inbox.is_some(), expect_inbox);
     if let Some(inbox) = pf.inbox {
-        assert_eq!(inbox.as_bstr(), "refs/meta/inbox/bob/issues/9");
+        let expected = format!("refs/meta/inbox/bob/issues/{tip}");
+        assert_eq!(inbox.as_bstr(), expected.as_str());
     }
 }
 
@@ -112,32 +152,15 @@ fn preflight_offers_inbox_only_on_an_authorization_refusal(
 #[test]
 fn a_divergence_refusal_offers_no_inbox() {
     let (refs, objects, admin, _bob) = forge();
-    let name: FullName = "refs/meta/issues/3".try_into().unwrap();
-    write_meta_entity(&refs, &objects, name.clone(), &issue(), Some(&admin), 300);
-
-    // An independent root correctly bound to the same ref: signed by an
-    // authorized member with a matching trailer, but with no parents, so it
-    // cannot descend from the current tip — a genuine fast-forward refusal.
-    let mut other = issue();
-    other.state = "closed".into();
-    let sibling = {
-        let tree = facet_git_tree::serialize_into(&other, &objects).unwrap();
-        let trailers = Trailers {
-            ents_ref: Some(name.clone()),
-            schema_version: None,
-        };
-        let message = format!("Mutate {}\n\n{}", name.as_bstr(), trailers.render());
-        write_commit(
-            &objects,
-            &CommitSpec {
-                tree,
-                parents: vec![],
-                message,
-                seconds: 350,
-            },
-            Some(&admin),
-        )
-    };
+    // A genesis and two divergent children of it, all correctly bound to
+    // the same oid-keyed ref (both descend from the same genesis, so
+    // identity binding holds); the current tip is one child, and the
+    // proposal is the sibling, which cannot descend from it — a genuine
+    // fast-forward refusal, not an identity mismatch.
+    let (name, genesis) = genesis_issue(&objects, &admin, 300);
+    let current = child_issue(&objects, genesis, "open", &admin, 350);
+    let sibling = child_issue(&objects, genesis, "closed", &admin, 350);
+    refs.set(name.as_ref(), current);
 
     let pf = preflight(
         &refs,
@@ -149,7 +172,7 @@ fn a_divergence_refusal_offers_no_inbox() {
         &MemberId::new("admin"),
     )
     .unwrap();
-    assert!(!pf.is_pass());
+    assert!(!pf.is_pass(), "{:?}", pf.verdict);
     assert!(
         pf.inbox.is_none(),
         "a divergence routes to a merge, not the inbox"
@@ -166,17 +189,14 @@ fn preflight_verdict_equals_the_gate_verdict() {
     let (refs, objects, admin, bob) = forge();
 
     for (author, signer) in [("admin", &admin), ("bob", &bob)] {
-        let name: FullName = format!("refs/meta/issues/{author}").try_into().unwrap();
-        let tip = write_meta_entity(&refs, &objects, name.clone(), &issue(), Some(signer), 300);
-        let before = refs.fetched_copy();
-        before.remove(name.as_ref());
+        let (name, tip) = genesis_issue(&objects, signer, 300);
         let update = Update {
             name,
             new: Some(tip),
         };
 
-        let pf = preflight(&before, &objects, &update, &MemberId::new(author)).unwrap();
-        let gate = verify(&before, &objects, &update).unwrap();
+        let pf = preflight(&refs, &objects, &update, &MemberId::new(author)).unwrap();
+        let gate = verify(&refs, &objects, &update).unwrap();
         assert_eq!(
             pf.verdict, gate,
             "pre-flight must be the gate, not a copy of it"
@@ -192,13 +212,10 @@ fn preflight_verdict_equals_the_gate_verdict() {
 #[test]
 fn a_failing_preflight_never_blocks_the_local_write() {
     let (refs, objects, _admin, bob) = forge();
-    let name: FullName = "refs/meta/issues/9".try_into().unwrap();
-    let tip = write_meta_entity(&refs, &objects, name.clone(), &issue(), Some(&bob), 300);
+    let (name, tip) = genesis_issue(&objects, &bob, 300);
 
-    let before = refs.fetched_copy();
-    before.remove(name.as_ref());
     let pf = preflight(
-        &before,
+        &refs,
         &objects,
         &Update {
             name: name.clone(),
@@ -214,14 +231,14 @@ fn a_failing_preflight_never_blocks_the_local_write() {
     );
 
     // Nothing sync did prevents the local write from applying.
-    let outcome = before
+    let outcome = refs
         .transaction(&[RefEdit {
             name: name.clone(),
             expected: Expected::MustNotExist,
             new: Some(tip),
         }])
         .unwrap();
-    assert_eq!(before.get(name.as_ref()).unwrap(), Some(tip));
+    assert_eq!(refs.get(name.as_ref()).unwrap(), Some(tip));
     let _ = outcome;
 }
 

@@ -22,6 +22,7 @@ use ents_testutil::{
     CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
 };
 use gix::refs::FullName;
+use gix_hash::ObjectId;
 use gix_ref_store::RefStoreRead;
 
 /// A stand-in for `ents-forge`'s `Issue` (this crate cannot depend on
@@ -40,6 +41,31 @@ fn issue(state: &str) -> Issue {
         body: "b".into(),
         state: state.into(),
     }
+}
+
+/// Write a parentless, signed genesis issue commit, set its oid-keyed ref
+/// (`meta-ref.identity-binding`), and return `(name, oid)`.
+fn genesis(
+    refs: &MemRefStore,
+    objects: &ObjectStore,
+    state: &str,
+    signer: &Keypair,
+    seconds: i64,
+) -> (FullName, ObjectId) {
+    let tree = facet_git_tree::serialize_into(&issue(state), objects).unwrap();
+    let tip = write_commit(
+        objects,
+        &CommitSpec {
+            tree,
+            parents: vec![],
+            message: "Open issue".into(),
+            seconds,
+        },
+        Some(signer),
+    );
+    let name: FullName = format!("refs/meta/issues/{tip}").try_into().unwrap();
+    refs.set(name.as_ref(), tip);
+    (name, tip)
 }
 
 /// Enroll `admin` (and optionally `bob`) and record the epoch.
@@ -77,16 +103,8 @@ fn fetch_moves_the_whole_forge_with_verifiable_signatures() {
     let admin = Keypair::from_seed(1);
     boot(&remote_refs, &remote_objects, &admin, None);
 
-    // An issue with two commits of history.
-    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
-    let parent = write_meta_entity(
-        &remote_refs,
-        &remote_objects,
-        name.clone(),
-        &issue("open"),
-        Some(&admin),
-        300,
-    );
+    // An issue with two commits of history; its id is the genesis oid.
+    let (name, parent) = genesis(&remote_refs, &remote_objects, "open", &admin, 300);
     let tip = write_meta_entity(
         &remote_refs,
         &remote_objects,
@@ -204,15 +222,7 @@ fn push_advances_the_remote_on_an_authorized_ref() {
     let local_objects = ObjectStore::default();
     boot(&local_refs, &local_objects, &admin, None);
 
-    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
-    let tip = write_meta_entity(
-        &local_refs,
-        &local_objects,
-        name.clone(),
-        &issue("open"),
-        Some(&admin),
-        300,
-    );
+    let (name, tip) = genesis(&local_refs, &local_objects, "open", &admin, 300);
 
     let pushed = push(
         &remote_refs,
@@ -336,15 +346,7 @@ fn push_reports_a_lost_cas_race_as_stale_not_success() {
     let local_objects = ObjectStore::default();
     boot(&local_refs, &local_objects, &admin, None);
 
-    let name: FullName = "refs/meta/issues/1".try_into().unwrap();
-    let ours = write_meta_entity(
-        &local_refs,
-        &local_objects,
-        name.clone(),
-        &issue("open"),
-        Some(&admin),
-        300,
-    );
+    let (name, ours) = genesis(&local_refs, &local_objects, "open", &admin, 300);
 
     // The racing writer's competing tip, landed on the remote the instant
     // push's transaction begins — after pre-flight has already passed.

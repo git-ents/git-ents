@@ -7,13 +7,15 @@
 #![expect(
     clippy::expect_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "integration test: fixtures panic on setup failure"
 )]
 
 use ents_gate::Config;
-use ents_model::{Effect, Provenance, Redaction, namespace, trailer::Trailers};
+use ents_model::{Effect, MemberId, Provenance, Redaction, ResultRecord, Status, namespace};
 use ents_receive::{
-    MemoryEventSink, Mode, NullEventSink, Proposal, RefTransition, TxResult, receive, reconcile,
+    Identity, MemoryEventSink, Mode, NullEventSink, Proposal, RefTransition, TxResult,
+    propose_genesis, receive, reconcile,
 };
 use ents_testutil::{
     CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
@@ -90,33 +92,43 @@ fn name(s: &str) -> FullName {
     s.try_into().expect("valid refname in test")
 }
 
-/// Build a signed (or unsigned) mutation commit that binds itself to
-/// `refname` via the `Advance-ref:` trailer, *without* moving the ref —
-/// unlike `ents_testutil::write_meta_entity`, so the test can hand the
-/// result to `receive` and observe whether *it* moves the ref.
+/// Build a signed (or unsigned) parentless genesis commit for `entity`,
+/// *without* moving any ref — unlike `ents_testutil::write_meta_entity`, so
+/// the test can hand the result to `receive` and observe whether *it* moves
+/// the ref. The commit names no ref (the gate recomputes the binding from
+/// signed content); callers derive the refname from the returned oid where
+/// the namespace is hash-identified.
 fn build_mutation<T: for<'facet> facet::Facet<'facet>>(
     objects: &ObjectStore,
-    refname: &FullName,
     entity: &T,
     signer: Option<&Keypair>,
     seconds: i64,
 ) -> ObjectId {
     let tree = facet_git_tree::serialize_into(entity, objects).expect("serializes");
-    let trailers = Trailers {
-        ents_ref: Some(refname.clone()),
-        schema_version: None,
-    };
-    let message = format!("Mutate {}\n\n{}", refname.as_bstr(), trailers.render());
     write_commit(
         objects,
         &CommitSpec {
             tree,
             parents: vec![],
-            message,
+            message: "Mutate entity".into(),
             seconds,
         },
         signer,
     )
+}
+
+/// The oid-keyed refname of a hash-identified issue genesis
+/// (`meta-ref.identity-binding`).
+fn issue_ref(genesis: ObjectId) -> FullName {
+    name(&format!("refs/meta/issues/{genesis}"))
+}
+
+fn sample_issue() -> Issue {
+    Issue {
+        title: "t".into(),
+        body: "b".into(),
+        state: "open".into(),
+    }
 }
 
 fn single(transition: RefTransition, objects: Vec<ObjectId>) -> Proposal {
@@ -146,18 +158,13 @@ fn gate_policy_matches_mode(
     #[case] expect_verdict_pass: bool,
 ) {
     let forge = forge();
-    let refname = namespace::issue_ref("1").expect("valid");
     let signer = if authorized {
         &forge.admin
     } else {
         &forge.guest
     };
-    let issue = Issue {
-        title: "t".into(),
-        body: "b".into(),
-        state: "open".into(),
-    };
-    let tip = build_mutation(&forge.objects, &refname, &issue, Some(signer), 300);
+    let tip = build_mutation(&forge.objects, &sample_issue(), Some(signer), 300);
+    let refname = issue_ref(tip);
 
     let outcome = receive(
         &forge.refs,
@@ -204,7 +211,7 @@ fn redaction_ref_push_requires_admin(#[case] as_admin: bool, #[case] expected: T
     let refname = namespace::redaction_ref("r1").expect("valid");
     let signer = if as_admin { &forge.admin } else { &forge.guest };
     let redaction = Redaction::new(ObjectId::null(gix_hash::Kind::Sha1), "leaked credential");
-    let tip = build_mutation(&forge.objects, &refname, &redaction, Some(signer), 300);
+    let tip = build_mutation(&forge.objects, &redaction, Some(signer), 300);
 
     let outcome = receive(
         &forge.refs,
@@ -252,13 +259,8 @@ fn reintroducing_a_redacted_object_refuses_the_whole_batch() {
 
     // Someone tries to push it back in, as part of an ordinary issue
     // mutation's object graph.
-    let issue_ref = namespace::issue_ref("1").expect("valid");
-    let issue = Issue {
-        title: "t".into(),
-        body: "b".into(),
-        state: "open".into(),
-    };
-    let tip = build_mutation(&forge.objects, &issue_ref, &issue, Some(&forge.admin), 300);
+    let tip = build_mutation(&forge.objects, &sample_issue(), Some(&forge.admin), 300);
+    let issue_ref = issue_ref(tip);
 
     let outcome = receive(
         &forge.refs,
@@ -348,6 +350,7 @@ fn chain_commits(objects: &ObjectStore, count: usize, start_seconds: i64) -> Vec
 // @relation(receive.reconstructible, receive.event-sink, receive.never-blocks, query.workset, scope=function, role=Verifies)
 fn reconcile_matches_incremental_delivery() {
     let effect = Effect {
+        name: "unit".to_owned(),
         trigger: "rev(refs/heads/main)".to_owned(),
         toolchains: vec![],
         run: "true".to_owned(),
@@ -455,7 +458,7 @@ fn pin_retains_every_reviewed_round_and_passes_the_mandatory_gate() {
     };
     let rounds = chain_commits(&forge.objects, 2, 250);
     let (first_round, second_round) = (rounds[0], rounds[1]);
-    let pin = namespace::review_pin_ref("7").expect("valid");
+    let pin = namespace::review_pin_ref("deadbeef", &MemberId::new("admin")).expect("valid");
     let empty = ents_testutil::empty_tree(&forge.objects);
 
     // First review: the pin's tip has the reviewed commit as its only
@@ -530,7 +533,7 @@ fn pin_writes_face_the_same_authorization_as_any_canonical_ref() {
         sign: &|payload| forge.guest.sign(payload),
     };
     let reviewed = chain_commits(&forge.objects, 1, 250)[0];
-    let pin = namespace::review_pin_ref("7").expect("valid");
+    let pin = namespace::review_pin_ref("deadbeef", &MemberId::new("admin")).expect("valid");
 
     let outcome = ents_receive::propose_pin(
         &forge.refs,
@@ -544,4 +547,155 @@ fn pin_writes_face_the_same_authorization_as_any_canonical_ref() {
     )
     .expect("reaches an outcome");
     assert_eq!(outcome.result, TxResult::Refused);
+}
+
+// ---------------------------------------------------------------------
+// Identity binding driven through receive: the replays the binding closes.
+// ---------------------------------------------------------------------
+
+fn comment_ref(genesis: ObjectId) -> FullName {
+    name(&format!("refs/meta/comments/{genesis}"))
+}
+
+/// The doppelgänger replay: a signed *mutation* commit (one with a parent)
+/// re-proposed as the genesis of a fresh entity is refused, because the
+/// all-roots walk reaches the original genesis, not the replayed commit
+/// (`gate.identity-binding`, `meta-ref.identity-binding`). This, not a
+/// creation-time-only check, is what makes the replay impossible.
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+#[test]
+fn a_signed_mutation_replayed_as_a_fresh_genesis_is_refused() {
+    let forge = forge();
+    // A legitimate comment genesis and one signed mutation of it.
+    let genesis = build_mutation(&forge.objects, &sample_issue(), Some(&forge.admin), 300);
+    forge.refs.set(comment_ref(genesis).as_ref(), genesis);
+    let mut edited = sample_issue();
+    edited.state = "resolved".into();
+    let tree = facet_git_tree::serialize_into(&edited, &forge.objects).expect("ser");
+    let mutation = write_commit(
+        &forge.objects,
+        &CommitSpec {
+            tree,
+            parents: vec![genesis],
+            message: "Resolve".into(),
+            seconds: 310,
+        },
+        Some(&forge.admin),
+    );
+
+    // Re-propose that mutation commit as the genesis of a brand-new
+    // comment named for its own oid.
+    let outcome = receive(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        &single(
+            RefTransition {
+                name: comment_ref(mutation),
+                old: None,
+                new: Some(mutation),
+            },
+            vec![mutation],
+        ),
+        Mode::Mandatory,
+    )
+    .expect("evaluates");
+
+    assert_eq!(outcome.result, TxResult::Refused);
+    let (_, verdict) = &outcome.verdicts[0];
+    let ents_gate::Verdict::Fail(refusal) = verdict else {
+        panic!("the replay must be refused: {verdict:?}");
+    };
+    assert_eq!(refusal.requirement, ents_gate::Requirement::IdentityBinding);
+    assert!(
+        forge
+            .refs
+            .get(comment_ref(mutation).as_ref())
+            .expect("readable")
+            .is_none(),
+        "no doppelgänger entity was created"
+    );
+}
+
+/// The result replay: a signed `pass` re-proposed for a different effect,
+/// or a different commit, is refused — the result tree carries its own
+/// effect and target, so the refname is a function of signed content
+/// (`model.result-identity`, `gate.identity-binding`).
+// @relation(model.result-identity, gate.identity-binding, scope=function, role=Verifies)
+#[rstest]
+#[case::wrong_effect("lint", "abc123")]
+#[case::wrong_commit("unit", "ffffff")]
+fn a_signed_pass_replayed_for_another_effect_or_commit_is_refused(
+    #[case] effect_seg: &str,
+    #[case] short: &str,
+) {
+    let forge = forge();
+    let target =
+        ObjectId::from_hex(b"abc1230000000000000000000000000000000000").expect("valid hex");
+    let record = ResultRecord::new("unit", target, Status::Pass);
+    let tip = build_mutation(&forge.objects, &record, Some(&forge.admin), 300);
+
+    // The honest ref is results/unit/abc123; the replay targets a
+    // different effect or commit segment.
+    let replay = namespace::result_ref(effect_seg, short).expect("valid");
+    let outcome = receive(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        &single(
+            RefTransition {
+                name: replay.clone(),
+                old: None,
+                new: Some(tip),
+            },
+            vec![tip],
+        ),
+        Mode::Mandatory,
+    )
+    .expect("evaluates");
+
+    assert_eq!(outcome.result, TxResult::Refused);
+    assert!(forge.refs.get(replay.as_ref()).expect("readable").is_none());
+}
+
+/// Creation via the inbox still works: a self-attested member creates a
+/// hash-identified entity under its own inbox segment, awaiting adoption
+/// (`gate.owner-mutation`: creation stays provenance-keyed). The
+/// sign-then-name genesis flow names the ref from the commit's own oid.
+// @relation(gate.owner-mutation, meta-ref.inbox, meta-ref.identity-binding, scope=function, role=Verifies)
+#[test]
+fn a_self_attested_member_creates_a_comment_in_its_inbox() {
+    let forge = forge();
+    let identity = Identity {
+        actor: gix::actor::Signature {
+            name: "guest".into(),
+            email: "guest@ents.test".into(),
+            time: gix::date::Time {
+                seconds: 300,
+                offset: 0,
+            },
+        },
+        sign: &|payload| forge.guest.sign(payload),
+    };
+
+    let (landed, outcome) = propose_genesis(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        &sample_issue(),
+        |oid| namespace::inbox_ref(&MemberId::new("guest"), &format!("comments/{oid}")),
+        &identity,
+        "Comment awaiting adoption",
+        Mode::Mandatory,
+    )
+    .expect("reaches an outcome");
+
+    assert_eq!(outcome.result, TxResult::Applied, "{:?}", outcome.verdicts);
+    assert!(
+        landed
+            .as_bstr()
+            .starts_with(b"refs/meta/inbox/guest/comments/"),
+        "created under the contributor's own inbox segment: {landed}"
+    );
+    assert!(forge.refs.get(landed.as_ref()).expect("readable").is_some());
 }
