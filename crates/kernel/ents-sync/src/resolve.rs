@@ -24,7 +24,6 @@ use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::{Commit, Find, Kind, Write, WriteTo as _};
 
-
 use crate::error::{Error, Result};
 use crate::merge::{Merge, three_way};
 use crate::objects::{commit_tree, parents};

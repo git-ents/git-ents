@@ -177,8 +177,7 @@ pub fn record_result(
 /// is not hex (query scan fixtures do not gate on the target).
 fn target_for(short_oid: &str) -> ObjectId {
     let padded = format!("{short_oid:0<40}");
-    ObjectId::from_hex(padded.as_bytes())
-        .unwrap_or_else(|_| ObjectId::null(gix_hash::Kind::Sha1))
+    ObjectId::from_hex(padded.as_bytes()).unwrap_or_else(|_| ObjectId::null(gix_hash::Kind::Sha1))
 }
 
 /// Append `count` empty-tree commits on top of `refname`'s current tip

@@ -248,8 +248,7 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
     // the member its refname names. Creation stays provenance-keyed,
     // already judged by `authorize` above.
     // @relation(gate.owner-mutation, scope=function)
-    if let Some(refusal) =
-        owner_mutation(objects, &update.name, old, new, &members, &id, &member)?
+    if let Some(refusal) = owner_mutation(objects, &update.name, old, new, &members, &id, &member)?
     {
         return Ok(Verdict::Fail(refusal));
     }
@@ -455,8 +454,7 @@ fn binding_refusal(name: &FullName, detail: String) -> Option<Refusal> {
 /// The value of a scalar tree field as UTF-8, or `None` if the entry is
 /// absent or not valid UTF-8.
 fn field_str(objects: &dyn Find, tree: ObjectId, field: &str) -> Result<Option<String>> {
-    Ok(read_tree_entry(objects, tree, field)?
-        .and_then(|bytes| String::from_utf8(bytes).ok()))
+    Ok(read_tree_entry(objects, tree, field)?.and_then(|bytes| String::from_utf8(bytes).ok()))
 }
 
 /// The hex form of a raw-oid (`[u8; 20]`) tree field, or `None` when the
@@ -497,7 +495,10 @@ fn bind_natural_key(
         )),
         None => Ok(binding_refusal(
             name,
-            format!("the tree carries no `{field}` field to bind {}", name.as_bstr()),
+            format!(
+                "the tree carries no `{field}` field to bind {}",
+                name.as_bstr()
+            ),
         )),
     }
 }

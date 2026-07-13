@@ -123,13 +123,17 @@
 //! let issue = Issue {
 //!     title: "t".into(), body: "b".into(), state: "open".into(),
 //! };
-//! let name: gix::refs::FullName = "refs/meta/issues/1".try_into().expect("valid");
-//! let tip = write_meta_entity(&refs, &objects, name.clone(), &issue, Some(&key), 300);
+//! // A hash-identified entity's id is its genesis commit's own oid, so the
+//! // ref is named from the signed commit (`meta-ref.identity-binding`).
+//! let tree = facet_git_tree::serialize_into(&issue, &objects).expect("serializes");
+//! let tip = ents_testutil::write_commit(&objects, &ents_testutil::CommitSpec {
+//!     tree, parents: vec![], message: "Open an issue".into(), seconds: 300,
+//! }, Some(&key));
+//! let name: gix::refs::FullName = format!("refs/meta/issues/{tip}").try_into().expect("valid");
 //!
-//! // The fixture already moved the ref; judge the same tip as a proposal
-//! // against a pre-push copy of the store, the way pre-flight would.
+//! // Judge the tip as a proposal against a store that does not yet have
+//! // the ref, the way hosted CAS or pre-flight would.
 //! let before = refs.fetched_copy();
-//! before.remove(name.as_ref());
 //! let verdict = verify(&before, &objects, &Update { name, new: Some(tip) })
 //!     .expect("evaluates");
 //! let Verdict::Pass(admission) = verdict else { panic!("authorized update passes") };
