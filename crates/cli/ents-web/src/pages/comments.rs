@@ -110,7 +110,11 @@ fn default_rev_field() -> String {
 }
 
 /// `GET /comments/{id}?rev=...`: the comment's body, its anchor, and the
-/// projection of that anchor onto `rev` (`anchor.projection`).
+/// projection of that anchor onto `rev` (`anchor.projection`). Its state
+/// (`model.comment-state`) and the reply/resolve/reopen actions
+/// ([`action_forms`], `model.comment-thread`, `model.comment-state`) render
+/// alongside, so a comment is a conversation from its own page and not only
+/// from an issue's or a review's.
 ///
 /// # Errors
 ///
@@ -118,6 +122,7 @@ fn default_rev_field() -> String {
 /// `id` has no comment ref.
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
     Path(id): Path<String>,
     PathQuery(query): PathQuery<ShowQuery>,
 ) -> Result<maud::Markup>
@@ -132,6 +137,8 @@ where
         &query.rev,
         false,
     )?;
+    let resolved = comment.state == "resolved";
+    let return_to = format!("/comments/{id}");
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -153,8 +160,181 @@ where
                 }
                 dt { "body" } dd { (comment.body) }
             }
+            (action_forms(&session, &id, resolved, &return_to))
         },
     ))
+}
+
+/// The form fields the reply route accepts.
+#[derive(Debug, Deserialize)]
+pub struct ReplyForm {
+    /// The reply's body text.
+    body: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+    /// Where to send the browser back to after the reply lands
+    /// ([`redirect_back`]) -- the issue, review, or comment page the reply
+    /// was composed on.
+    #[serde(default)]
+    return_to: String,
+}
+
+/// The form fields the resolve and reopen routes accept: a CSRF token and a
+/// return path, no body.
+#[derive(Debug, Deserialize)]
+pub struct ActionForm {
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+    /// Where to send the browser back to ([`redirect_back`]).
+    #[serde(default)]
+    return_to: String,
+}
+
+/// `POST /comments/{id}/reply`: a reply to `id` (`model.comment-thread`),
+/// signed (`roots.web-signing`) on behalf of the current session
+/// (`roots.web-session`) -- a caller of [`ents_forge::comment::reply`],
+/// never a second thread-building path.
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match; otherwise
+/// propagates [`ents_forge::comment::reply`]'s own failures (including
+/// [`ents_forge::Error::NotFound`] when `id` names no comment).
+// @relation(model.comment-thread, roots.web-signing, roots.web-session, scope=function)
+pub async fn reply<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(id): Path<String>,
+    Form(form): Form<ReplyForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let (_reply_id, outcome) = comment::reply(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        form.body,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(redirect_back(&form.return_to, &id))
+}
+
+/// `POST /comments/{id}/resolve`: record state `resolved` on `id`
+/// (`model.comment-state`), signed on behalf of the current session.
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match; otherwise
+/// propagates [`ents_forge::comment::resolve`]'s own failures.
+// @relation(model.comment-state, roots.web-signing, roots.web-session, scope=function)
+pub async fn resolve<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(id): Path<String>,
+    Form(form): Form<ActionForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let outcome = comment::resolve(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(redirect_back(&form.return_to, &id))
+}
+
+/// `POST /comments/{id}/reopen`: record state `open` on `id` again
+/// (`model.comment-state`), the way [`resolve`] records `resolved`.
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match; otherwise
+/// propagates [`ents_forge::comment::reopen`]'s own failures.
+// @relation(model.comment-state, roots.web-signing, roots.web-session, scope=function)
+pub async fn reopen<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(id): Path<String>,
+    Form(form): Form<ActionForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let outcome = comment::reopen(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(redirect_back(&form.return_to, &id))
+}
+
+/// Where a reply/resolve/reopen sends the browser after the mutation lands:
+/// back to `return_to` when it is a same-origin path (the issue, review, or
+/// comment page the action was taken on), or the comment's own page as a
+/// safe fallback. Only a value beginning with `/` is honored, so a crafted
+/// `return_to` can never redirect off-site.
+fn redirect_back(return_to: &str, id: &str) -> Redirect {
+    if return_to.starts_with('/') {
+        Redirect::to(return_to)
+    } else {
+        Redirect::to(&format!("/comments/{id}"))
+    }
+}
+
+/// The reply and resolve/reopen action forms every comment carries, on its
+/// own page and in an issue's or review's thread alike: a reply composer
+/// (`model.comment-thread`) and a single state toggle showing `resolve`
+/// when open or `reopen` when resolved (`model.comment-state`). `return_to`
+/// is echoed into a hidden field so [`redirect_back`] can return to
+/// whichever page rendered these forms.
+pub(crate) fn action_forms(
+    session: &Session,
+    id: &str,
+    resolved: bool,
+    return_to: &str,
+) -> maud::Markup {
+    html! {
+        div.comment-actions {
+            form method="post" action=(format!("/comments/{id}/reply")) {
+                (super::csrf_input(session))
+                input type="hidden" name="return_to" value=(return_to);
+                label { "reply" textarea name="body" {} }
+                button type="submit" { "reply" }
+            }
+            @if resolved {
+                form method="post" action=(format!("/comments/{id}/reopen")) {
+                    (super::csrf_input(session))
+                    input type="hidden" name="return_to" value=(return_to);
+                    button type="submit" { "reopen" }
+                }
+            } @else {
+                form method="post" action=(format!("/comments/{id}/resolve")) {
+                    (super::csrf_input(session))
+                    input type="hidden" name="return_to" value=(return_to);
+                    button type="submit" { "resolve" }
+                }
+            }
+        }
+    }
 }
 
 /// The form fields `POST /comments` accepts.

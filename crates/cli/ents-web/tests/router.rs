@@ -233,6 +233,25 @@ fn commit_change(dir: &std::path::Path, path: &str, contents: &str, message: &st
     ]);
 }
 
+/// `GET path` and return its body decoded as UTF-8, asserting a 200 --
+/// the read-back half of the many "mutate, then observe" tests below, so
+/// each does not re-spell the collect/decode dance inline.
+async fn get_body(router: &axum::Router, path: &str) -> String {
+    let response = router
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    String::from_utf8(bytes.to_vec()).expect("utf8 html")
+}
+
 /// Establish a session against `router` via a `GET` to `path`, returning
 /// its cookie header and CSRF token -- the same extraction
 /// `csrf_is_required_and_checked_on_every_state_changing_request` performs
@@ -274,7 +293,9 @@ async fn session_cookie_and_csrf(
 /// at `rev` -- what the comment tests below seed a real comment through,
 /// exercising the actual signed-write path (`ents_forge::comment::add`)
 /// rather than poking the ref store directly. Asserts the write succeeded
-/// (a redirect to the new comment's own page).
+/// (a redirect to the new comment's own page) and returns the new comment's
+/// id, read from that redirect's `Location` (`/comments/<id>`) -- what the
+/// thread-action tests below drive reply/resolve/reopen against.
 async fn seed_comment(
     router: &axum::Router,
     state: &AppState<ObjectStore>,
@@ -282,7 +303,7 @@ async fn seed_comment(
     body: &str,
     lines: &str,
     rev: &str,
-) {
+) -> String {
     let (cookie, csrf) = session_cookie_and_csrf(router, state, "/comments").await;
     let form = format!(
         "path={path}&body={}&lines={lines}&rev={rev}&csrf={csrf}",
@@ -304,6 +325,15 @@ async fn seed_comment(
         "comment write did not succeed: {:?}",
         response.status()
     );
+    response
+        .headers()
+        .get(header::LOCATION)
+        .expect("a successful comment write redirects to the new comment")
+        .to_str()
+        .expect("ascii")
+        .strip_prefix("/comments/")
+        .expect("redirect targets /comments/<id>")
+        .to_owned()
 }
 
 /// `roots.local`: this crate's route table never exposes git's own
@@ -1182,6 +1212,123 @@ async fn files_blob_view_marks_an_outdated_comment() {
         "comment is never dropped"
     );
     assert!(body.contains("class=\"outdated\""));
+}
+
+/// `model.comment-state`, `roots.web-session`: a comment resolves and
+/// reopens through CSRF-checked, signed `POST`s -- each an
+/// `ents_forge::comment::{resolve,reopen}` call -- and its `GET
+/// /comments/{id}` page reflects the new state and offers the opposite
+/// action each time. The wrong CSRF token is refused, exactly as every
+/// other state-changing route in this crate refuses one.
+#[tokio::test]
+// @relation(model.comment-state, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn a_comment_resolves_and_reopens_through_csrf_checked_posts() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "commenter",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    let id = seed_comment(&router, &state, "src/main.rs", "look here", "2:2", "HEAD").await;
+    let page = format!("/comments/{id}");
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, &page).await;
+
+    // A fresh comment lists open and offers "resolve".
+    let body = get_body(&router, &page).await;
+    assert!(body.contains("resolve"), "an open comment offers resolve");
+
+    // The wrong token is refused.
+    let refused = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/comments/{id}/resolve"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from("csrf=not-the-token"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    // The right token resolves it.
+    let resolved = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/comments/{id}/resolve"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(resolved.status().is_redirection());
+    let body = get_body(&router, &page).await;
+    assert!(body.contains("resolved"), "the comment now reads resolved");
+    assert!(body.contains("reopen"), "a resolved comment offers reopen");
+
+    // Reopen returns it to open.
+    let reopened = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/comments/{id}/reopen"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(reopened.status().is_redirection());
+    let body = get_body(&router, &page).await;
+    assert!(
+        body.contains(">open<") || body.contains("resolve"),
+        "the comment offers resolve again once reopened"
+    );
+}
+
+/// `model.comment-thread`: a reply through `POST /comments/{id}/reply` is a
+/// second comment (`ents_forge::comment::reply`) -- after it lands, the
+/// comment index lists two comments where the seed left one.
+#[tokio::test]
+// @relation(model.comment-thread, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn a_reply_creates_a_threaded_comment_through_a_signed_post() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "commenter",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    let id = seed_comment(&router, &state, "src/main.rs", "the parent", "2:2", "HEAD").await;
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/comments").await;
+
+    let reply = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/comments/{id}/reply"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("body=a+reply+here&csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(reply.status().is_redirection(), "{:?}", reply.status());
+
+    let body = get_body(&router, "/comments").await;
+    let count = body.matches("/comments/").count();
+    assert!(
+        count >= 2,
+        "the index lists the parent and its reply, got {count} links"
+    );
+    assert!(body.contains("a reply here"), "the reply's body renders");
 }
 
 /// A raw-source blob view carries the client-side hooks `assets/ents.js`

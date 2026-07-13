@@ -20,7 +20,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use gix_object::{Find, Write};
 
 use crate::assets;
@@ -63,6 +63,12 @@ where
             get(pages::comments::list::<O>).post(pages::comments::add::<O>),
         )
         .route("/comments/{id}", get(pages::comments::show::<O>))
+        .route("/comments/{id}/reply", post(pages::comments::reply::<O>))
+        .route(
+            "/comments/{id}/resolve",
+            post(pages::comments::resolve::<O>),
+        )
+        .route("/comments/{id}/reopen", post(pages::comments::reopen::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))
