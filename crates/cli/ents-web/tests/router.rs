@@ -1761,6 +1761,90 @@ async fn commit_show_lists_comments_captured_against_that_exact_commit() {
     );
 }
 
+/// `model.review`, `model.comment-context`: starting a review on a commit
+/// page (`POST /commit/{oid}/review`, `ents_forge::review::new`) makes its
+/// verdict, body, and reviewer render on that commit's page, and a comment
+/// on the review (`POST /reviews/{id}/comment`) joins the review's own
+/// discussion thread -- every step a CSRF-checked signed POST through the
+/// injected identity.
+#[tokio::test]
+// @relation(model.review, model.review-pin, model.comment-context, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn commit_page_shows_a_seeded_review_verdict_and_a_review_comment() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {}\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "reviewer",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+
+    // Start a review of this commit through the commit page's own form.
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, &format!("/commit/{oid}")).await;
+    let started = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/commit/{oid}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from(format!(
+                    "verdict=request-changes&body=needs+a+test&csrf={csrf}"
+                )))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(started.status().is_redirection(), "{:?}", started.status());
+
+    // The commit page renders the review's verdict, body, and reviewer.
+    let page = get_body(&router, &format!("/commit/{oid}")).await;
+    assert!(page.contains("reviews"), "the reviews section renders");
+    assert!(
+        page.contains("class=\"verdict\""),
+        "the verdict renders prominently"
+    );
+    assert!(page.contains("request-changes"), "the verdict text renders");
+    assert!(page.contains("needs a test"), "the review body renders");
+    assert!(
+        page.contains("reviewer"),
+        "the reviewer's own identity (from the commit chain) renders"
+    );
+
+    // Recover the review id from its comment form's action, then comment on
+    // the review; the comment joins the review's thread on the same page.
+    let review_id = page
+        .split_once("/reviews/")
+        .and_then(|(_, rest)| rest.split_once("/comment"))
+        .map(|(id, _)| id)
+        .expect("a review comment form links in");
+
+    let commented = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/reviews/{review_id}/comment"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!(
+                    "body=agreed+on+the+test&return_to=/commit/{oid}&csrf={csrf}"
+                )))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        commented.status().is_redirection(),
+        "{:?}",
+        commented.status()
+    );
+    let page = get_body(&router, &format!("/commit/{oid}")).await;
+    assert!(
+        page.contains("agreed on the test"),
+        "the review comment renders in the review's thread: {page}"
+    );
+}
+
 /// `GET /commit/{oid}` on a malformed id is a 404, never a panic or 500.
 #[tokio::test]
 async fn commit_show_on_an_invalid_oid_is_not_found_not_a_crash() {

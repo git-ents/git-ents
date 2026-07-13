@@ -27,7 +27,9 @@
 
 use std::sync::Arc;
 
+use axum::Form;
 use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Redirect};
 use gix::bstr::ByteSlice as _;
 use gix::diff::blob::unified_diff::{ConsumeBinaryHunk, ContextSize};
 use gix::diff::blob::{Algorithm, InternedInput, UnifiedDiff, diff_with_slider_heuristics};
@@ -38,6 +40,7 @@ use maud::{Markup, html};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::session::Session;
 use crate::state::AppState;
 
 /// One page of `GET /commits`.
@@ -208,6 +211,7 @@ fn blankslate() -> Markup {
 /// name a commit in the served repository.
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
     Path(oid): Path<String>,
 ) -> Result<Markup>
 where
@@ -250,6 +254,7 @@ where
     let old_tree_ref = old_tree.as_ref().unwrap_or(&empty_tree);
     let (diff, truncated) = diff_sections(&repo, old_tree_ref, &new_tree);
     let comments = super::comments::for_commit(&state, object_id);
+    let reviews = reviews_section(&state, &session, object_id, &oid);
 
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
@@ -284,6 +289,7 @@ where
                     }
                 }
             }
+            (reviews)
             (diff)
             @if truncated {
                 div.card { div.binary { "Diff truncated (over " (MAX_DIFF_BYTES / (1024 * 1024)) " MiB)." } }
@@ -296,6 +302,205 @@ where
             }
         },
     ))
+}
+
+/// Every review targeting `commit_id` (`ents_forge::review::list` filtered
+/// to this commit, `model.review`), each rendering its verdict prominently,
+/// its body as AsciiDoc, and its reviewer (from the review ref's own tip
+/// commit chain, `meta-ref.trailers` -- a review stores no author field),
+/// followed by its discussion: the comments naming `reviews/<id>` as their
+/// context (`ents_forge::comment::thread`, `model.comment-context`),
+/// rendered through the same shared `super::comments::thread_section` an
+/// issue's thread uses. A "start a review" form closes the section
+/// (`POST /commit/{oid}/review`). Best effort: a review whose ref cannot be
+/// listed degrades to just the start form rather than failing the page.
+fn reviews_section<O: Find + Write>(
+    state: &AppState<O>,
+    session: &Session,
+    commit_id: ObjectId,
+    oid: &str,
+) -> Markup {
+    let reviews = ents_forge::review::list(
+        state.refs.as_ref(),
+        &*state.objects(),
+        &state.path,
+        Some(&commit_id.to_string()),
+    )
+    .unwrap_or_default();
+    let return_to = format!("/commit/{oid}");
+    html! {
+        h2 { "reviews" }
+        @for (id, review) in &reviews {
+            div.card {
+                div.comment-meta {
+                    span.verdict { (review.verdict) }
+                    @let reviewer = ents_model::namespace::review_ref(id)
+                        .ok()
+                        .and_then(|ref_name| state.refs.get(ref_name.as_ref()).ok().flatten())
+                        .and_then(|tip| super::commit_authorship(&*state.objects(), tip).ok());
+                    @if let Some((author, seconds)) = &reviewer {
+                        span.author { (author) }
+                        span { (super::ago(*seconds)) }
+                    }
+                }
+                div.doc-body {
+                    (crate::asciidoc::to_html(&review.body).unwrap_or_else(|_| html! { p { (review.body) } }))
+                }
+                @let thread = ents_forge::comment::thread(
+                    state.refs.as_ref(),
+                    &*state.objects(),
+                    &format!("reviews/{id}"),
+                ).unwrap_or_default();
+                (super::comments::thread_section(state, session, &thread, &return_to))
+                (review_comment_form(session, id, &return_to))
+            }
+        }
+        (start_review_form(session, oid))
+    }
+}
+
+/// The comment-on-this-review form (`POST /reviews/{id}/comment`): a
+/// contextual comment naming `reviews/<id>` (`model.comment-context`), so a
+/// review's discussion can start from the web and not only the CLI or lens.
+fn review_comment_form(session: &Session, id: &str, return_to: &str) -> Markup {
+    html! {
+        form method="post" action=(format!("/reviews/{id}/comment")) {
+            (super::csrf_input(session))
+            input type="hidden" name="return_to" value=(return_to);
+            label { "comment on this review" textarea name="body" {} }
+            button type="submit" { "comment" }
+        }
+    }
+}
+
+/// The form fields `POST /reviews/{id}/comment` accepts.
+#[derive(Debug, Deserialize)]
+pub struct ReviewCommentForm {
+    /// The comment's body text.
+    body: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+    /// Where to send the browser back to -- the commit page rendering the
+    /// review; honored only when it is a same-origin path.
+    #[serde(default)]
+    return_to: String,
+}
+
+/// `POST /reviews/{id}/comment`: a comment naming `reviews/<id>` as its
+/// context (`model.comment-context`) -- an ordinary
+/// [`ents_forge::comment::add`], contextual and unanchored, joining the
+/// review's discussion thread the moment it lands.
+///
+/// # Errors
+///
+/// [`Error::BadCsrf`] if `form.csrf` does not match; otherwise propagates
+/// [`ents_forge::comment::add`]'s own failures.
+// @relation(model.comment-context, roots.web-signing, roots.web-session, scope=function)
+pub async fn review_comment<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(id): Path<String>,
+    Form(form): Form<ReviewCommentForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let new = ents_forge::comment::NewComment {
+        body: form.body,
+        path: None,
+        lines: None,
+        rev: "HEAD".to_owned(),
+        worktree: false,
+        context: Some(format!("reviews/{id}")),
+        parent: None,
+    };
+    let (_comment_id, outcome) = ents_forge::comment::add(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &state.path,
+        new,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    let target = if form.return_to.starts_with('/') {
+        form.return_to
+    } else {
+        "/commits".to_owned()
+    };
+    Ok(Redirect::to(&target))
+}
+
+/// The start-a-review form (`POST /commit/{oid}/review`): a verdict
+/// (`approve`, `request-changes`, or any custom value -- `model.review`
+/// makes these conventions, not an enum) and a body.
+fn start_review_form(session: &Session, oid: &str) -> Markup {
+    html! {
+        form method="post" action=(format!("/commit/{oid}/review")) {
+            (super::csrf_input(session))
+            label { "verdict" input type="text" name="verdict" value="approve"; }
+            label { "body" textarea name="body" {} }
+            button type="submit" { "start a review" }
+        }
+    }
+}
+
+/// The form fields `POST /commit/{oid}/review` accepts.
+#[derive(Debug, Deserialize)]
+pub struct ReviewForm {
+    /// The review's verdict.
+    verdict: String,
+    /// The review's body text.
+    #[serde(default)]
+    body: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+}
+
+/// `POST /commit/{oid}/review`: review the commit at `oid`
+/// (`ents_forge::review::new`), which writes both the review's entity ref
+/// and its retention pin (`model.review`, `model.review-pin`) -- the web is
+/// another caller of that one library func, never a second review or
+/// pin-writing path. Signed (`roots.web-signing`) on behalf of the current
+/// session (`roots.web-session`).
+///
+/// # Errors
+///
+/// [`Error::BadCsrf`] if `form.csrf` does not match; otherwise propagates
+/// [`ents_forge::review::new`]'s own failures (including an unresolvable
+/// target commit).
+// @relation(model.review, model.review-pin, roots.web-signing, roots.web-session, scope=function)
+pub async fn review<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(oid): Path<String>,
+    Form(form): Form<ReviewForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let new = ents_forge::review::NewReview {
+        target: oid.clone(),
+        verdict: form.verdict,
+        body: form.body,
+    };
+    let (_id, entity_outcome, pin_outcome) = ents_forge::review::new(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &state.path,
+        new,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(entity_outcome)?;
+    crate::error::outcome_to_result(pin_outcome)?;
+    Ok(Redirect::to(&format!("/commit/{oid}")))
 }
 
 /// Validate `text` as a full, well-formed object id -- hex characters only,
