@@ -6,14 +6,14 @@
 //! and [`inbox`] are the generic pages: they read a kernel entity and
 //! render it through [`crate::render`]'s reflection-driven mechanism,
 //! never matching on which entity type they were handed.
-//! [`toolchains`] and [`comments`] are legitimate custom pages
+//! [`toolchains`], [`comments`], and [`issues`] are legitimate custom pages
 //! (`ents-kiln`'s recipe provenance and `ents-forge`'s anchor projection
-//! both need domain-specific rendering no generic reflection walk should
-//! grow special cases for). [`members`], [`effects`], [`toolchains`],
-//! [`redactions`], and [`inbox`] additionally share one `meta` tab and
-//! [`META_SECTIONS`] rail rather than each carrying its own top-level tab
-//! (see [`Tab`]'s own doc); [`meta`] is that group's `GET /meta` landing
-//! page. [`commits`] is a view of the code, not a tab of its own -- both
+//! and issue threads all need domain-specific rendering no generic
+//! reflection walk should grow special cases for). [`issues`], [`members`],
+//! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
+//! share one `meta` tab and [`META_SECTIONS`] rail rather than each carrying
+//! its own top-level tab (see [`Tab`]'s own doc); [`meta`] is that group's
+//! `GET /meta` landing page. [`commits`] is a view of the code, not a tab of its own -- both
 //! its routes render with [`Tab::Files`] active, reached from
 //! [`files`]'s own "history" link. [`search`] renders with no tab active
 //! at all, like [`account`]; it is reached from [`layout`]'s own nav
@@ -26,6 +26,7 @@ pub mod dashboard;
 pub mod effects;
 pub mod files;
 pub mod inbox;
+pub mod issues;
 pub mod members;
 pub mod meta;
 pub mod redactions;
@@ -104,9 +105,10 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// [`layout`]'s nav bar, so a handler can name which tab it renders behind
 /// without `layout` re-deriving it from the request path (mirrors
 /// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `Tab` enum,
-/// trimmed to four primary tabs). `Meta` covers five page families
-/// ([`super::members`], [`super::effects`], [`super::toolchains`],
-/// [`super::redactions`], [`super::inbox`]) behind one tab and the
+/// trimmed to four primary tabs). `Meta` covers six page families
+/// ([`super::issues`], [`super::members`], [`super::effects`],
+/// [`super::toolchains`], [`super::redactions`], [`super::inbox`]) behind
+/// one tab and the
 /// [`META_SECTIONS`] rail (see [`layout_meta`]) rather than a tab each --
 /// nine equal tabs did not scale as page families grew. `Account` matches
 /// none of [`layout`]'s tab-strip arms, so it highlights nothing there;
@@ -145,6 +147,11 @@ pub(crate) struct MetaSection {
 
 /// The `meta` tab's registry (see [`MetaSection`]'s own doc).
 pub(crate) const META_SECTIONS: &[MetaSection] = &[
+    MetaSection {
+        name: "issues",
+        href: "/issues",
+        blurb: "Filed issues and their discussion threads.",
+    },
     MetaSection {
         name: "members",
         href: "/members",

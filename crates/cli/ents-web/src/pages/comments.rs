@@ -643,6 +643,66 @@ pub(crate) fn comment_card(index: usize, comment: &FileComment, link: LinkMode) 
     }
 }
 
+/// One comment in an entity's discussion thread -- an issue's
+/// (`crate::pages::issues::show`) or a review's
+/// (`crate::pages::commits::show`) -- rendered from an aggregation query
+/// (`comment::thread`, `model.comment-context`), never a list any entity
+/// stores. Author and time come from the comment ref's own tip commit
+/// (`super::commit_authorship`, `model.comment`: no stored author field),
+/// its state (`model.comment-state`) shows as a badge, its body renders as
+/// AsciiDoc, and it carries the same [`action_forms`] every comment does,
+/// with `return_to` pointing back at the entity page rendering it so a
+/// reply or resolve returns there. Best effort: a comment whose tip commit
+/// cannot be read still renders, only without an author line.
+pub(crate) fn thread_comment_card<O: Find + Write>(
+    state: &AppState<O>,
+    session: &Session,
+    id: &str,
+    comment: &ents_forge::comment::Comment,
+    return_to: &str,
+) -> Markup {
+    let authorship = ents_model::namespace::comment_ref(id)
+        .ok()
+        .and_then(|ref_name| state.refs.get(ref_name.as_ref()).ok().flatten())
+        .and_then(|tip| super::commit_authorship(&*state.objects(), tip).ok());
+    let body =
+        crate::asciidoc::to_html(&comment.body).unwrap_or_else(|_| html! { p { (comment.body) } });
+    html! {
+        div.card id={ "thread-" (id) } {
+            div.comment-meta {
+                @if let Some((author, seconds)) = &authorship {
+                    span.author { (author) }
+                    span { (super::ago(*seconds)) }
+                }
+                @if comment.parent.is_some() {
+                    span { "reply" }
+                }
+                span.comment-state { (comment.state) }
+            }
+            div.doc-body { (body) }
+            (action_forms(session, id, comment.state == "resolved", return_to))
+        }
+    }
+}
+
+/// An entity's whole discussion thread as a stack of [`thread_comment_card`]s
+/// (`model.comment-context`, `model.comment-thread`) -- what
+/// `crate::pages::issues::show` and `crate::pages::commits::show` render a
+/// `comment::thread` result through. Renders nothing when the thread is
+/// empty.
+pub(crate) fn thread_section<O: Find + Write>(
+    state: &AppState<O>,
+    session: &Session,
+    thread: &[(String, ents_forge::comment::Comment)],
+    return_to: &str,
+) -> Markup {
+    html! {
+        @for (id, comment) in thread {
+            (thread_comment_card(state, session, id, comment, return_to))
+        }
+    }
+}
+
 /// The comment cards under a blob view (a rendered document, a binary
 /// placeholder, or -- for a raw-source view -- the ones with no current
 /// line range to interleave at; see `crate::pages::files::source_view`),

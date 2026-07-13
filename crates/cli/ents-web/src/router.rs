@@ -69,6 +69,15 @@ where
             post(pages::comments::resolve::<O>),
         )
         .route("/comments/{id}/reopen", post(pages::comments::reopen::<O>))
+        .route(
+            "/issues",
+            get(pages::issues::list::<O>).post(pages::issues::create::<O>),
+        )
+        .route(
+            "/issues/{id}",
+            get(pages::issues::show::<O>).post(pages::issues::edit::<O>),
+        )
+        .route("/issues/{id}/comment", post(pages::issues::comment::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))

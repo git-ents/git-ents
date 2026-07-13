@@ -1781,6 +1781,169 @@ async fn commit_show_on_an_invalid_oid_is_not_found_not_a_crash() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// `POST /issues` through the real signed-write path
+/// (`ents_forge::issue::new`), returning the new issue's id from the
+/// redirect's `Location` (`/issues/<id>`). Asserts the write succeeded.
+async fn seed_issue(
+    router: &axum::Router,
+    state: &AppState<ObjectStore>,
+    title: &str,
+    issue_state: &str,
+    assignees: &str,
+    labels: &str,
+) -> String {
+    let (cookie, csrf) = session_cookie_and_csrf(router, state, "/issues").await;
+    let form = format!(
+        "title={}&state={issue_state}&assignees={assignees}&labels={labels}&body=the+full+body&csrf={csrf}",
+        title.replace(' ', "+")
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/issues")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "issue create did not succeed: {:?}",
+        response.status()
+    );
+    response
+        .headers()
+        .get(header::LOCATION)
+        .expect("a successful issue create redirects to the new issue")
+        .to_str()
+        .expect("ascii")
+        .strip_prefix("/issues/")
+        .expect("redirect targets /issues/<id>")
+        .to_owned()
+}
+
+/// `model.issue`, `model.comment-context`: the issues index lists a seeded
+/// issue with its state, assignees, and labels; the detail page shows the
+/// issue and its discussion thread; a comment naming `issues/<id>` as its
+/// context joins that thread; and an edit changes the issue's state -- every
+/// mutation a CSRF-checked signed POST calling the same `ents_forge` funcs
+/// the CLI and lens do.
+#[tokio::test]
+// @relation(model.issue, model.comment-context, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn issues_index_and_detail_render_a_seeded_issue_and_its_context_comment() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_issue(
+        &router,
+        &state,
+        "gate rejects a valid signature",
+        "triaged",
+        "jdc",
+        "bug",
+    )
+    .await;
+
+    // The index lists the issue with its state, assignees, and labels, and
+    // links into its detail page.
+    let index = get_body(&router, "/issues").await;
+    assert!(index.contains("gate rejects a valid signature"));
+    assert!(index.contains("triaged"));
+    assert!(index.contains("jdc"));
+    assert!(index.contains("bug"));
+    assert!(index.contains(&format!("/issues/{id}")));
+
+    // The detail page shows the issue and an (initially empty) discussion.
+    let detail = get_body(&router, &format!("/issues/{id}")).await;
+    assert!(detail.contains("gate rejects a valid signature"));
+    assert!(detail.contains("the full body"));
+    assert!(detail.contains("discussion"));
+
+    // A comment naming the issue as its context joins the thread.
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/issues").await;
+    let comment = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/issues/{id}/comment"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from(format!("body=cannot+reproduce+yet&csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(comment.status().is_redirection(), "{:?}", comment.status());
+    let detail = get_body(&router, &format!("/issues/{id}")).await;
+    assert!(
+        detail.contains("cannot reproduce yet"),
+        "the context comment renders in the issue's thread: {detail}"
+    );
+
+    // Editing the issue's state lands and reads back.
+    let edited = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/issues/{id}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("state=closed&csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(edited.status().is_redirection());
+    let detail = get_body(&router, &format!("/issues/{id}")).await;
+    assert!(detail.contains("closed"), "the edited state reads back");
+}
+
+/// `roots.web-session`: opening an issue is a state-changing route, so a
+/// `POST /issues` with no CSRF field at all is rejected, and one with the
+/// wrong token is a bad request -- the same gate every mutation in this
+/// crate runs behind.
+#[tokio::test]
+// @relation(model.issue, roots.web-session, scope=function, role=Verifies)
+async fn issue_create_is_rejected_without_a_valid_csrf_token() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(Arc::clone(&state));
+
+    // No CSRF field at all.
+    let no_csrf = router
+        .clone()
+        .oneshot(
+            Request::post("/issues")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("title=sneaky&state=open"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        !no_csrf.status().is_success() && !no_csrf.status().is_redirection(),
+        "a POST with no csrf field must not open an issue"
+    );
+
+    // A session's cookie, but the wrong token.
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/issues").await;
+    let wrong = router
+        .oneshot(
+            Request::post("/issues")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("title=sneaky&state=open&csrf=not-the-token"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+}
+
 /// `GET /search?q=` finds a known fixture file path, linking into its
 /// `/files/...` blob view.
 #[tokio::test]
