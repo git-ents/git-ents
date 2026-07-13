@@ -358,6 +358,12 @@ form button:hover { background: var(--color-link-hover); }
 .comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .7rem 1.1rem; font-size: .82rem; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
 .comment-meta .author { color: var(--color-text); font-weight: 600; }
 .outdated { color: var(--color-text-muted); font-style: italic; }
+/* State/verdict pills on comment, issue, and review cards
+ * (`crate::pages::{comments,issues,commits}`). */
+.comment-state, .verdict { display: inline-block; padding: .05rem .5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: .78rem; font-weight: 600; text-transform: lowercase; color: var(--color-text-muted); }
+.verdict { color: var(--color-text); }
+/* The reply/resolve/reopen and comment composer forms on a thread card. */
+.comment-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .6rem; padding: .7rem 1.1rem; border-top: 1px solid var(--color-border); }
 
 /* Syntax-highlight token classes (`crate::pages::files::highlight`, `arborium`'s `HtmlFormat::ClassNames`). */
 .code .keyword, .code .macro, .code .tag { color: var(--s-keyword); }
