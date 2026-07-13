@@ -1,11 +1,11 @@
 //! `GET /files`, `GET /files/{*path}`: a read-only directory listing and
 //! blob viewer over the `HEAD` tree of the repository `git ents serve` is
-//! serving. A `.md` blob renders via [`crate::markdown`], a
-//! `.adoc`/`.asciidoc`/`.asc`/`.adc` blob via [`crate::asciidoc`], and
+//! serving. A `.md` blob renders via `crate::markdown`, a
+//! `.adoc`/`.asciidoc`/`.asc`/`.adc` blob via `crate::asciidoc`, and
 //! everything else as a line-numbered source view, syntax-highlighted via
 //! [`arborium`] when its filename maps to a known grammar (ported from
 //! `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `highlight`;
-//! see [`highlight`]'s own doc), escaped plain text otherwise.
+//! see `highlight`'s own doc), escaped plain text otherwise.
 //!
 //! Tree/blob reads go through `gix`'s high-level `Repository`/`Tree`/`Blob`
 //! types (`repo.head_tree()`, `Tree::lookup_entry_by_path`,
@@ -17,9 +17,9 @@
 //! structured meta-ref data; browsing arbitrary repository content is not
 //! that).
 //!
-//! [`crumbs`] renders only the path trail now -- every action that used to
+//! `crumbs` renders only the path trail now -- every action that used to
 //! live at its trailing edge (jump into history, jump to the first
-//! comment, add a comment) moved into [`blob_header`]'s own right-aligned
+//! comment, add a comment) moved into `blob_header`'s own right-aligned
 //! action group, rendered above every blob view regardless of how it
 //! renders (raw source, a rendered document, or a binary placeholder); a
 //! directory listing carries neither the actions nor a header, since a
@@ -30,10 +30,10 @@
 //! rendered document or a binary placeholder) interleaves each comment's
 //! card directly after the row naming its anchored range's last line,
 //! full width across the blob's line-number and code columns
-//! ([`source_view`]); a comment with no current line range (a whole-file
+//! (`source_view`); a comment with no current line range (a whole-file
 //! anchor, or `ents_anchor::Projection::Outdated`) has nowhere to
 //! interleave, and renders in a below-the-blob "outdated comments"
-//! section instead ([`outdated_comments_section`]). Doc-rendered and
+//! section instead (`outdated_comments_section`). Doc-rendered and
 //! binary views keep every comment below the blob, unconditionally
 //! (`crate::pages::comments::comments_section`), since there is no source
 //! line to interleave at.
@@ -45,9 +45,9 @@
 //! exact commit being viewed) so a click on a gutter line number can select
 //! a line or a shift-extended range and open an inline comment composer
 //! cloned from a server-rendered `<template id="composer-template">`
-//! ([`composer_template`]) -- with JS disabled the page stays fully usable
-//! via [`blob_header`]'s "comment on this file" link and the plain `#L<n>`
-//! anchors [`crate::pages::comments::comment_card`] already emits.
+//! (`composer_template`) -- with JS disabled the page stays fully usable
+//! via `blob_header`'s "comment on this file" link and the plain `#L<n>`
+//! anchors `crate::pages::comments::comment_card` already emits.
 
 use std::sync::Arc;
 

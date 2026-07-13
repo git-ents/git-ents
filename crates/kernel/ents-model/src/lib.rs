@@ -7,7 +7,7 @@
 //! `ents-anchor`, `ents-sync`, and `ents-web` all depend on `ents-model`
 //! directly, and nothing here depends back on any of them. That is a
 //! deliberate constraint, not an oversight — see [`Effect::trigger`] and
-//! [`Comment::anchor`] for the two places a richer type would
+//! `Comment::anchor` (in `ents-forge`) for the two places a richer type would
 //! have been the natural choice and was rejected specifically to keep this
 //! edge one-directional.
 //!

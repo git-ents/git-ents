@@ -1,5 +1,5 @@
 //! `GET /meta`: the landing page for the `meta` tab -- a card listing
-//! every page family in [`super::META_SECTIONS`] with its blurb, so the
+//! every page family in `super::META_SECTIONS` with its blurb, so the
 //! tab resolves to something other than an arbitrary pick of its five
 //! children. The rail those children render beside their own content
 //! (`super::layout_meta`) is this same table; this page is its index.

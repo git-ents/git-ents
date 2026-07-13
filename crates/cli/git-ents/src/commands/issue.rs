@@ -38,7 +38,7 @@ pub fn show(root: &LocalRoot, id: &str) -> Result<Issue> {
 }
 
 /// `git ents issue new`: create an issue. When `title` is `None`, composes
-/// the title and body interactively (see [`compose_in_editor`]).
+/// the title and body interactively (see `compose_in_editor`).
 ///
 /// # Errors
 ///

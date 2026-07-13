@@ -1,6 +1,6 @@
 //! `GET /commits`, `GET /commit/{oid}`: a read-only commit history and
 //! per-commit unified diff over `HEAD` -- a view of the code, not a tab of
-//! its own (both routes render with [`super::Tab::Files`] active; see
+//! its own (both routes render with `super::Tab::Files` active; see
 //! [`super`]'s own doc), reached from [`super::files`]'s "history" link.
 //!
 //! Reads go through `gix`'s high-level `Repository`/`Commit`/`Tree` types,
@@ -13,13 +13,13 @@
 //! [`gix::diff::blob::diff_with_slider_heuristics`] computes the hunks, and
 //! [`gix::diff::blob::unified_diff::ConsumeBinaryHunk`] renders them as the
 //! same textual unified-diff format `git diff` itself produces, which
-//! [`diff_class`] then colorizes line by line -- no new dependency, since
+//! `diff_class` then colorizes line by line -- no new dependency, since
 //! `gix`'s default features already enable `blob-diff`.
 //!
 //! `GET /commit/{oid}` also lists a "conversation": every comment whose
 //! anchor was captured against that exact commit
 //! (`crate::pages::comments::for_commit`), rendered below the diff via the
-//! same [`crate::pages::comments::comment_card`] a blob view uses, each
+//! same `crate::pages::comments::comment_card` a blob view uses, each
 //! naming its `path#lines` and linking into `crate::pages::files`'s own
 //! `#L<n>` gutter. A "comment on this commit" link beside the parents list
 //! reaches `crate::pages::comments::list`'s add form with `rev` prefilled

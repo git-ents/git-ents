@@ -1,9 +1,9 @@
-//! `GET /search`: [`super::layout`]'s nav search form's target -- a plain
+//! `GET /search`: `super::layout`'s nav search form's target -- a plain
 //! request-time substring scan over the served repository, deliberately
 //! with no index and no new state (a design decision this crate settled
 //! on rather than relitigated here): every request re-walks the `HEAD`
 //! tree and the meta-ref listings the pages that already own them use.
-//! Renders with no tab active at all ([`super::Tab::None`]), like
+//! Renders with no tab active at all (`super::Tab::None`), like
 //! [`super::account`], since it is reached from the nav search form
 //! rather than any tab.
 

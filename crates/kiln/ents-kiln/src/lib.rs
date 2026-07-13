@@ -32,7 +32,7 @@
 //!   `&[(String, PathBuf)]` slice; resolving an effect's declared names to
 //!   that slice is this crate's job, done by a composition root before it
 //!   calls into `ents-effect`'s run loop.
-//! - `meta-ref.typed-tree` — [`toolchain::entity`]'s round-trip test (see
+//! - `meta-ref.typed-tree` — `toolchain::entity`'s round-trip test (see
 //!   the module itself for the concrete test, folded into `toolchain`'s
 //!   private `entity` submodule).
 //!

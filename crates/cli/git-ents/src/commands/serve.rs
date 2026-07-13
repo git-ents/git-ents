@@ -18,7 +18,7 @@
 //! `user.signingkey`, else the default `~/.ssh/id_ed25519`) — no
 //! server-key indirection exists anywhere in this module, which is
 //! exactly what keeps `roots.web-signing`'s hosted-only indirection from
-//! leaking into the local root. [`LocalIdentity::label`] additionally
+//! leaking into the local root. `LocalIdentity::label` additionally
 //! resolves the signer's own enrolled member (reusing
 //! `crate::commands::members::find_by_key`, the same key-match loop
 //! `git ents members check` runs), so the web shell's identity chip shows

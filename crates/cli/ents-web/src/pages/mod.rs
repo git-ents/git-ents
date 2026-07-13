@@ -11,12 +11,12 @@
 //! and issue threads all need domain-specific rendering no generic
 //! reflection walk should grow special cases for). [`issues`], [`members`],
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
-//! share one `meta` tab and [`META_SECTIONS`] rail rather than each carrying
-//! its own top-level tab (see [`Tab`]'s own doc); [`meta`] is that group's
+//! share one `meta` tab and `META_SECTIONS` rail rather than each carrying
+//! its own top-level tab (see `Tab`'s own doc); [`meta`] is that group's
 //! `GET /meta` landing page. [`commits`] is a view of the code, not a tab of its own -- both
-//! its routes render with [`Tab::Files`] active, reached from
+//! its routes render with `Tab::Files` active, reached from
 //! [`files`]'s own "history" link. [`search`] renders with no tab active
-//! at all, like [`account`]; it is reached from [`layout`]'s own nav
+//! at all, like [`account`]; it is reached from `layout`'s own nav
 //! search form rather than any tab.
 
 pub mod account;

@@ -6,13 +6,13 @@
 //! already returns structured data for, rather than a bare reflected
 //! field list.
 //!
-//! [`for_path`]/[`comment_card`]/[`comments_section`] are this module's
+//! `for_path`/`comment_card`/`comments_section` are this module's
 //! second entry point: `crate::pages::files`'s blob view calls them to
 //! render the comments anchored to the file it is showing -- inline,
 //! interleaved at the anchored line, or in a below-the-blob section for
 //! one with no current line to interleave at -- rather than duplicating
 //! this module's own read-project-render pattern or its card markup.
-//! [`for_commit`] is a third: `crate::pages::commits::show`'s own
+//! `for_commit` is a third: `crate::pages::commits::show`'s own
 //! "conversation" section, listing every comment whose anchor was captured
 //! against that exact commit (`Anchor::commit`, not a projection onto any
 //! revision -- a commit page shows what was written about that commit,
@@ -112,7 +112,7 @@ fn default_rev_field() -> String {
 /// `GET /comments/{id}?rev=...`: the comment's body, its anchor, and the
 /// projection of that anchor onto `rev` (`anchor.projection`). Its state
 /// (`model.comment-state`) and the reply/resolve/reopen actions
-/// ([`action_forms`], `model.comment-thread`, `model.comment-state`) render
+/// (`action_forms`, `model.comment-thread`, `model.comment-state`) render
 /// alongside, so a comment is a conversation from its own page and not only
 /// from an issue's or a review's.
 ///

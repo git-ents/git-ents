@@ -69,7 +69,7 @@ pub trait SigningIdentity: Send + Sync {
     /// signer's member when `--member` is omitted.
     fn public_openssh(&self) -> String;
 
-    /// This identity's display label for [`crate::pages::layout`]'s
+    /// This identity's display label for `crate::pages::layout`'s
     /// `.id-chip` (`roots.web-signing`) -- the one place this crate names
     /// "who is acting" for a human reader, as opposed to [`Self::actor`]'s
     /// commit-authorship signature.
