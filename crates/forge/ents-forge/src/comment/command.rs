@@ -551,8 +551,7 @@ pub fn list_for_document(
 /// the whole conversation attached to it (`lens.hover`); an anchored root
 /// need carry no `context`, so [`thread`]'s context aggregation cannot find
 /// its replies — this seeds the same parent-closure walk from the root id
-/// directly. Reads back through the legacy-shape fallback like every other
-/// read here (`meta-ref.migration`).
+/// directly.
 ///
 /// # Errors
 ///

@@ -15,8 +15,8 @@ use figue as args;
 #[repr(u8)]
 pub enum ReviewAction {
     /// Review a commit: a verdict plus a body, occupying two refs — the
-    /// review's own entity ref at refs/meta/reviews/<id>, and a retention
-    /// pin at refs/meta/pins/reviews/<id> keeping the reviewed commit (and
+    /// review's own entity ref at `refs/meta/reviews/<id>`, and a retention
+    /// pin at `refs/meta/pins/reviews/<id>` keeping the reviewed commit (and
     /// its ancestry) reachable.
     New {
         /// Revision to review.

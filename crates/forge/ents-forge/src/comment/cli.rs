@@ -20,11 +20,11 @@ pub enum CommentAction {
     ///
     /// With --porcelain, emits a stable machine-readable form:
     /// blank-line-separated records, each starting with the line
-    /// "<id> <state> <projection> <location>" — projection is current,
+    /// `<id> <state> <projection> <location>` — projection is current,
     /// relocated, outdated, or deleted ("-" for a comment with no
-    /// anchor); location is "path:start-end", "path" for a whole-file
+    /// anchor); location is `path:start-end`, `path` for a whole-file
     /// anchor ("-" when there is no anchor or the file is gone) —
-    /// followed by optional "context <c>" and "parent <id>" lines, then
+    /// followed by optional `context <c>` and `parent <id>` lines, then
     /// the body with every line prefixed by one tab.
     List {
         /// Project each anchor onto the working tree's on-disk bytes
@@ -38,7 +38,7 @@ pub enum CommentAction {
         #[facet(args::named, default)]
         open: bool,
         /// Keep only comments naming this context (a ref path below
-        /// refs/meta/, e.g. issues/<id>).
+        /// refs/meta/, e.g. `issues/<id>`).
         #[facet(args::named)]
         context: Option<String>,
         /// Emit the stable machine-readable form described above.
@@ -69,7 +69,7 @@ pub enum CommentAction {
         #[facet(args::named, default)]
         worktree: bool,
         /// Canonical ref path below refs/meta/ of the entity this comment
-        /// belongs to, e.g. issues/<id> or reviews/<id>.
+        /// belongs to, e.g. `issues/<id>` or `reviews/<id>`.
         #[facet(args::named)]
         context: Option<String>,
         /// Id of the comment this one replies to.
@@ -79,8 +79,9 @@ pub enum CommentAction {
         #[facet(args::named)]
         key: Option<PathBuf>,
     },
-    /// Reply to a comment: a new comment whose parent is <id>, inheriting
-    /// its aboutness from the thread — no anchor or context required.
+    /// Reply to a comment: a new comment whose parent is the given id,
+    /// inheriting its aboutness from the thread — no anchor or context
+    /// required.
     Reply {
         /// The comment being replied to.
         #[facet(args::positional)]
