@@ -1,7 +1,6 @@
 //! Seeding helpers: members, meta entities, results, and code-ref history.
 
-use ents_model::trailer::Trailers;
-use ents_model::{Member, MemberId, Provenance, Status, namespace};
+use ents_model::{Member, MemberId, Provenance, ResultRecord, Status, namespace};
 use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::{Find, Kind, Write};
@@ -28,9 +27,10 @@ pub fn empty_tree(objects: &impl Write) -> ObjectId {
 }
 
 /// Serialize `entity` as its typed tree and land it on `refname` as a
-/// mutation commit carrying the `Advance-ref:` trailer, signed by `signer`
-/// when one is given. Parents come from `refname`'s current tip. Returns
-/// the new tip.
+/// mutation commit signed by `signer` when one is given. Parents come from
+/// `refname`'s current tip. Returns the new tip. The refname is bound to
+/// the signed content by the gate (`meta-ref.identity-binding`), not by
+/// any commit trailer.
 ///
 /// # Examples
 ///
@@ -59,11 +59,7 @@ pub fn write_meta_entity<T: for<'facet> facet::Facet<'facet>>(
 ) -> ObjectId {
     let tree =
         facet_git_tree::serialize_into(entity, objects).expect("fixture entity always serializes");
-    let trailers = Trailers {
-        ents_ref: Some(refname.clone()),
-        schema_version: None,
-    };
-    let message = format!("Mutate {}\n\n{}", refname.as_bstr(), trailers.render());
+    let message = format!("Mutate {}", refname.as_bstr());
     let parents = crate::refs_get(refs, &refname).into_iter().collect();
     let tip = write_commit(
         objects,
@@ -103,7 +99,7 @@ pub fn enroll_member(
     provenance: Provenance,
     seconds: i64,
 ) -> ObjectId {
-    let member = Member::new(key.public_openssh(), provenance);
+    let member = Member::new(id, key.public_openssh(), provenance);
     write_member(refs, objects, id, &member, Some(key), seconds)
 }
 
@@ -121,7 +117,7 @@ pub fn enroll_member(
 /// let objects = ObjectStore::default();
 /// let key = Keypair::from_seed(1);
 ///
-/// let mut member = Member::new(key.public_openssh(), Provenance::AdminRegistered);
+/// let mut member = Member::new("jdc", key.public_openssh(), Provenance::AdminRegistered);
 /// member.revoke();
 /// write_member(&refs, &objects, "jdc", &member, Some(&key), 900);
 /// ```
@@ -140,6 +136,12 @@ pub fn write_member(
 /// Record a result of `status` for `effect` on the commit whose hex id
 /// starts with `short_oid`, at the canonical
 /// `refs/meta/results/<effect>/<short_oid>` ref (`effect.results-writeback`).
+///
+/// The tree is a [`ResultRecord`] carrying `effect` and a target oid whose
+/// hex begins with `short_oid` (`model.result-identity`): when `short_oid`
+/// is a hex prefix it is right-padded with zeros to a full oid, so the
+/// gate's identity binding recomputes the ref; when it is not hex, a null
+/// target is used, sufficient for query scan tests that never gate.
 ///
 /// The result commit is unsigned unless `signer` is given — query tests
 /// exercise scan semantics, gate tests exercise signatures.
@@ -165,7 +167,18 @@ pub fn record_result(
 ) -> ObjectId {
     let refname =
         namespace::result_ref(effect, short_oid).expect("valid result segments in fixture");
-    write_meta_entity(refs, objects, refname, &status, signer, seconds)
+    let target = target_for(short_oid);
+    let record = ResultRecord::new(effect, target, status);
+    write_meta_entity(refs, objects, refname, &record, signer, seconds)
+}
+
+/// An oid whose hex form begins with `short_oid`: right-pad a hex prefix
+/// with zeros to 40 chars, or fall back to the null oid when `short_oid`
+/// is not hex (query scan fixtures do not gate on the target).
+fn target_for(short_oid: &str) -> ObjectId {
+    let padded = format!("{short_oid:0<40}");
+    ObjectId::from_hex(padded.as_bytes())
+        .unwrap_or_else(|_| ObjectId::null(gix_hash::Kind::Sha1))
 }
 
 /// Append `count` empty-tree commits on top of `refname`'s current tip

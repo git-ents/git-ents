@@ -50,7 +50,7 @@
 //!
 //! ```
 //! use ents_gate::{Config, Update, Verdict, verify};
-//! use ents_model::{Provenance, namespace, trailer::Trailers};
+//! use ents_model::{Provenance, namespace};
 //! use ents_sync::resolve::{Heads, Merged, merge_heads};
 //! use ents_testutil::{
 //!     CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
@@ -70,26 +70,26 @@
 //! let config: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
 //! write_meta_entity(&refs, &objects, config, &Config { epoch: Some(200) }, Some(&jdc), 200);
 //!
-//! let name: gix::refs::FullName = "refs/meta/issues/1".try_into().expect("valid");
 //! let issue = Issue {
 //!     title: "t".into(), body: "b".into(), state: "open".into(),
 //! };
-//! let trailers = Trailers { ents_ref: Some(name.clone()), schema_version: None };
-//! let msg = |s: &str| format!("{s}\n\n{}", trailers.render());
 //!
-//! // A common base, then two divergent children editing disjoint fields.
+//! // A common base (the genesis), then two divergent children editing
+//! // disjoint fields. The issue's id is the genesis commit's own oid
+//! // (`meta-ref.identity-binding`), so the ref is named from it.
 //! let base_tree = facet_git_tree::serialize_into(&issue, &objects).expect("ser");
-//! let base = write_commit(&objects, &CommitSpec { tree: base_tree, parents: vec![], message: msg("Open"), seconds: 300 }, Some(&jdc));
+//! let base = write_commit(&objects, &CommitSpec { tree: base_tree, parents: vec![], message: "Open".into(), seconds: 300 }, Some(&jdc));
+//! let name: gix::refs::FullName = format!("refs/meta/issues/{base}").try_into().expect("valid");
 //!
 //! let mut renamed = issue.clone();
 //! renamed.title = "renamed".into();
 //! let ours_tree = facet_git_tree::serialize_into(&renamed, &objects).expect("ser");
-//! let ours = write_commit(&objects, &CommitSpec { tree: ours_tree, parents: vec![base], message: msg("Rename"), seconds: 400 }, Some(&jdc));
+//! let ours = write_commit(&objects, &CommitSpec { tree: ours_tree, parents: vec![base], message: "Rename".into(), seconds: 400 }, Some(&jdc));
 //!
 //! let mut closed = issue.clone();
 //! closed.state = "closed".into();
 //! let theirs_tree = facet_git_tree::serialize_into(&closed, &objects).expect("ser");
-//! let theirs = write_commit(&objects, &CommitSpec { tree: theirs_tree, parents: vec![base], message: msg("Close"), seconds: 400 }, Some(&jdc));
+//! let theirs = write_commit(&objects, &CommitSpec { tree: theirs_tree, parents: vec![base], message: "Close".into(), seconds: 400 }, Some(&jdc));
 //!
 //! let author = gix::actor::Signature {
 //!     name: "jdc".into(), email: "jdc@ents.test".into(),

@@ -24,7 +24,6 @@ use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::{Commit, Find, Kind, Write, WriteTo as _};
 
-use ents_model::trailer::Trailers;
 
 use crate::error::{Error, Result};
 use crate::merge::{Merge, three_way};
@@ -39,7 +38,8 @@ use crate::objects::{commit_tree, parents};
 /// divergence, or the contributor's inbox / self-run tip in an adoption.
 #[derive(Debug, Clone)]
 pub struct Heads {
-    /// The ref the resulting merge tip advances (its `Advance-ref` trailer).
+    /// The ref the resulting merge tip advances; the gate recomputes this
+    /// name from the merge's signed content (`gate.identity-binding`).
     pub refname: FullName,
     /// The authorized side's current tip, or `None` if the ref is new.
     pub ours: Option<ObjectId>,
@@ -69,8 +69,9 @@ pub enum Merged {
 /// The typed trees of `ours` and `theirs` are merged three-way against
 /// their merge base; a clean merge is recorded as a merge commit whose
 /// parents are `[ours, theirs]` (just `[theirs]` when the canonical ref is
-/// new), authored and committed by `author`, bound to [`Heads::refname`] by
-/// the `Advance-ref` trailer, and signed by `sign`. `sign` returns the
+/// new), authored and committed by `author`, and signed by `sign`; the
+/// merge names no ref of its own, and the gate recomputes the binding for
+/// [`Heads::refname`] from the merged content. `sign` returns the
 /// armored SSHSIG PEM for the commit's payload — exactly what git stores in
 /// the `gpgsig` header — so the composition root injects the placing
 /// member's key without this crate ever holding one.
@@ -149,34 +150,24 @@ pub fn merge_heads(
         }
     };
 
-    let tip = seal(
-        objects,
-        tree,
-        parents,
-        &heads.refname,
-        author,
-        summary,
-        sign,
-    )?;
+    let tip = seal(objects, tree, parents, author, summary, sign)?;
     Ok(Merged::Tip(tip))
 }
 
 /// Build and sign the merge commit — the tip whose signature, not any tree
-/// content, is what satisfies the tip invariant.
+/// content, is what satisfies the tip invariant. The commit names no ref
+/// of its own; the gate recomputes the binding from the merged content and
+/// the all-roots walk (`gate.identity-binding`), which holds across this
+/// merge because both parents descend from the same genesis.
 fn seal(
     objects: &impl Write,
     tree: ObjectId,
     parents: Vec<ObjectId>,
-    refname: &FullName,
     author: &gix::actor::Signature,
     summary: &str,
     sign: impl FnOnce(&[u8]) -> String,
 ) -> Result<ObjectId> {
-    let trailers = Trailers {
-        ents_ref: Some(refname.clone()),
-        schema_version: None,
-    };
-    let message = format!("{summary}\n\n{}", trailers.render());
+    let message = summary.to_owned();
     let mut commit = Commit {
         tree,
         parents: parents.into(),
