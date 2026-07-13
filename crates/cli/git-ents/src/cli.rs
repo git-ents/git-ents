@@ -10,6 +10,8 @@ use facet::Facet;
 use figue::{self as args, FigueBuiltins};
 
 pub use ents_forge::comment::CommentAction;
+pub use ents_forge::issue::IssueAction;
+pub use ents_forge::review::ReviewAction;
 pub use ents_kiln::toolchain::ToolchainAction;
 
 /// Local root wiring, subcommand surface, and the single-node hosted
@@ -90,6 +92,20 @@ pub enum Top {
         /// The comment action to run.
         #[facet(args::subcommand)]
         action: CommentAction,
+    },
+    /// Manage issues at `refs/meta/issues/<id>`.
+    Issue {
+        /// The issue action to run.
+        #[facet(args::subcommand)]
+        action: IssueAction,
+    },
+    /// Review a commit: a verdict plus a body at `refs/meta/reviews/<id>`,
+    /// with a retention pin at `refs/meta/pins/reviews/<id>` keeping the
+    /// reviewed commit reachable.
+    Review {
+        /// The review action to run.
+        #[facet(args::subcommand)]
+        action: ReviewAction,
     },
     /// Work with entities awaiting adoption at
     /// `refs/meta/inbox/<member>/<id>`.

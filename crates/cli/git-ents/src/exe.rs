@@ -8,8 +8,8 @@
 )]
 
 use crate::cli::{
-    AccountAction, Cli, CommentAction, EffectAction, HookAction, InboxAction, MembersAction,
-    RedactAction, ToolchainAction, Top,
+    AccountAction, Cli, CommentAction, EffectAction, HookAction, InboxAction, IssueAction,
+    MembersAction, RedactAction, ReviewAction, ToolchainAction, Top,
 };
 use crate::commands;
 use crate::error::Result;
@@ -49,6 +49,8 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         Top::Effect { action } => run_effect(action, out),
         Top::Toolchain { action } => run_toolchain(action, out),
         Top::Comment { action } => run_comment(action, out),
+        Top::Issue { action } => run_issue(action, out),
+        Top::Review { action } => run_review(action, out),
         Top::Inbox { action } => run_inbox(action, out),
         Top::Redact { action } => run_redact(action, out),
         Top::Hook { action } => run_hook(action, out),
@@ -267,6 +269,91 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                 let _ = writeln!(out, "projection at {target}: {projection:?}");
             }
             let _ = writeln!(out, "body: {}", comment.body);
+        }
+    }
+    Ok(())
+}
+
+fn run_issue(action: IssueAction, out: &mut impl std::io::Write) -> Result<()> {
+    let root = LocalRoot::discover(".")?;
+    match action {
+        IssueAction::List => {
+            for (id, issue) in commands::issue::list(&root)? {
+                let _ = writeln!(out, "{id}\t{}\t{}", issue.state, issue.title);
+            }
+        }
+        IssueAction::Show { id } => {
+            let issue = commands::issue::show(&root, &id)?;
+            let _ = writeln!(out, "title: {}", issue.title);
+            let _ = writeln!(out, "state: {}", issue.state);
+            if !issue.assignees.is_empty() {
+                let names: Vec<_> = issue.assignees.iter().map(ToString::to_string).collect();
+                let _ = writeln!(out, "assignees: {}", names.join(", "));
+            }
+            if !issue.labels.is_empty() {
+                let _ = writeln!(out, "labels: {}", issue.labels.join(", "));
+            }
+            let _ = writeln!(out, "body: {}", issue.body);
+        }
+        IssueAction::New {
+            title,
+            body,
+            state,
+            label,
+            assignee,
+            key,
+        } => {
+            let id = commands::issue::new(&root, title, body, state, label, assignee, key)?;
+            let _ = writeln!(out, "opened {id}");
+        }
+        IssueAction::Edit {
+            id,
+            state,
+            label,
+            assignee,
+            key,
+        } => {
+            commands::issue::edit(&root, &id, state, label, assignee, key)?;
+            let _ = writeln!(out, "edited {id}");
+        }
+    }
+    Ok(())
+}
+
+fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()> {
+    let root = LocalRoot::discover(".")?;
+    match action {
+        ReviewAction::New {
+            target,
+            verdict,
+            body,
+            key,
+        } => {
+            let new = ents_forge::review::NewReview {
+                target,
+                verdict,
+                body,
+            };
+            let id = commands::review::new(&root, new, key)?;
+            let _ = writeln!(out, "reviewed {id}");
+        }
+        ReviewAction::List { target } => {
+            for (id, review) in commands::review::list(&root, target)? {
+                let _ = writeln!(out, "{id}\t{}\t{}", review.commit(), review.verdict);
+            }
+        }
+        ReviewAction::Show { id } => {
+            let (review, thread) = commands::review::show(&root, &id)?;
+            let _ = writeln!(out, "commit: {}", review.commit());
+            let _ = writeln!(out, "verdict: {}", review.verdict);
+            let _ = writeln!(out, "body: {}", review.body);
+            for (comment_id, comment) in thread {
+                let _ = writeln!(
+                    out,
+                    "comment {comment_id}\t{}\t{}",
+                    comment.state, comment.body
+                );
+            }
         }
     }
     Ok(())

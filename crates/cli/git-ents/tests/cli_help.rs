@@ -39,6 +39,8 @@ fn help_names_every_subcommand_family() {
         "effect",
         "toolchain",
         "comment",
+        "issue",
+        "review",
         "inbox",
         "redact",
         "hook",
