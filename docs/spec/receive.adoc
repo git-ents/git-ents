@@ -46,6 +46,26 @@ No policy for that `refs/heads/*` ACL input is specified yet
 through uninterpreted until one is.
 --
 
+[role="requirement", id="receive.multi-ref-atomicity"]
+.An Entity Declared Across Multiple Refs Writes Them as One Proposal
+--
+Some entities are declared to require more than one ref at once as part
+of their canonical shape — a review and its retention pin are the
+motivating case: two refs that MUST both exist for the review to exist
+at all.
+Creating or updating such an entity MUST carry every one of its refs'
+transitions in a single `Proposal` (<<receive.proposal-shape>>) through
+one call to `receive`, never as two or more independent proposals.
+The ref-store's atomic multi-ref compare-and-swap
+(<<arch.refstore-read-cas-split>>) then admits or refuses the whole
+batch together, so such an entity is never observable with only some of
+its refs written.
+This is distinct from the inbox/canonical relationship
+(<<meta-ref.inbox>>), where a contributor's ref and the canonical ref
+are deliberately written at different times by different actors, not as
+one unit.
+--
+
 [role="requirement", id="receive.shared-path"]
 .One Receive, Every Frontend
 --
