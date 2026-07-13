@@ -110,6 +110,7 @@ pub(crate) fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<Option<O
 /// let commits = advance_ref(&refs, &objects, "refs/heads/main", 1, 100);
 ///
 /// let effect = Effect {
+///     name: "unit".to_owned(),
 ///     trigger: "rev(refs/heads/main)".to_owned(),
 ///     toolchains: vec![],
 ///     run: "true".to_owned(),

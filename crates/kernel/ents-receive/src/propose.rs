@@ -263,7 +263,7 @@ pub fn propose_genesis<T: for<'facet> facet::Facet<'facet>>(
 /// # Examples
 ///
 /// ```
-/// use ents_model::{Provenance, namespace};
+/// use ents_model::{MemberId, Provenance, namespace};
 /// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_pin};
 /// use ents_testutil::{CommitSpec, Keypair, MemRefStore, ObjectStore, empty_tree, enroll_member};
 /// use gix_object::Write as _;
@@ -281,7 +281,7 @@ pub fn propose_genesis<T: for<'facet> facet::Facet<'facet>>(
 ///     None,
 /// );
 ///
-/// let name = namespace::review_pin_ref("7").expect("valid");
+/// let name = namespace::review_pin_ref("7", &MemberId::new("admin")).expect("valid");
 /// let identity = Identity {
 ///     actor: gix::actor::Signature {
 ///         name: "admin".into(),
@@ -367,10 +367,11 @@ fn pin_transition(
 /// # Examples
 ///
 /// ```
-/// use ents_model::{Provenance, namespace};
+/// use ents_model::{MemberId, Provenance, namespace};
 /// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_entity_with_pin};
 /// use ents_testutil::{CommitSpec, Keypair, MemRefStore, ObjectStore, empty_tree, enroll_member};
 /// use facet::Facet;
+/// use gix_ref_store::RefStoreRead as _;
 ///
 /// # #[derive(Facet)]
 /// # struct Review { verdict: String }
@@ -395,17 +396,18 @@ fn pin_transition(
 ///     sign: &|payload| admin.sign(payload),
 /// };
 ///
+/// let member = MemberId::new("admin");
 /// let outcome = propose_entity_with_pin(
 ///     &refs, &objects, &NullEventSink,
-///     namespace::review_ref("7").expect("valid"), &Review { verdict: "approve".into() },
-///     namespace::review_pin_ref("7").expect("valid"), reviewed,
+///     namespace::review_ref("7", &member).expect("valid"), &Review { verdict: "approve".into() },
+///     namespace::review_pin_ref("7", &member).expect("valid"), reviewed,
 ///     &identity, "Review 7", "Pin review 7", Mode::Advisory,
 /// )
 /// .expect("reaches an outcome");
 /// assert_eq!(outcome.result, TxResult::Applied);
 /// // Both refs advanced together.
-/// assert!(refs.get(namespace::review_ref("7").expect("valid").as_ref()).expect("read").is_some());
-/// assert!(refs.get(namespace::review_pin_ref("7").expect("valid").as_ref()).expect("read").is_some());
+/// assert!(refs.get(namespace::review_ref("7", &member).expect("valid").as_ref()).expect("read").is_some());
+/// assert!(refs.get(namespace::review_pin_ref("7", &member).expect("valid").as_ref()).expect("read").is_some());
 /// ```
 // @relation(receive.multi-ref-atomicity, model.review, model.review-pin, scope=function)
 #[expect(
