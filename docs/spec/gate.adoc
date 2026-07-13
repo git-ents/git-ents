@@ -33,15 +33,22 @@ different meta-ref than the one its author created it for — including
 a signed pass replayed as the result of a different effect or commit,
 which is why a result's effect and target are tree fields
 (<<model.result-identity>>).
-The creation of a hash-identified entity MUST strictly decode as its
-namespace's entity type, an unknown tree entry refusing, so one signed
-genesis can never be admitted under two namespaces; entity structs
-MUST stay pairwise disjoint under this decode, a property held by test
-rather than by a stored marker (<<meta-ref.typed-tree>>).
+The creation of a hash-identified entity whose type the gate crate
+itself owns MUST strictly decode as that type, an unknown tree entry
+refusing; the gate-owned entity structs MUST stay pairwise disjoint
+under this decode, a property held by test rather than by a stored
+marker (<<meta-ref.typed-tree>>).
+A hash-identified entity whose type lives outside the gate's own crate
+(a comment, an issue) binds by genesis oid and the all-roots walk
+alone (<<meta-ref.identity-binding>>): the gate cannot strictly decode
+a type it does not depend on, so the same signed genesis commit is not
+yet refused from being admitted a second time under a different such
+namespace (<<gate.non-kernel-strict-decode>>).
 When an object the binding needs is withheld by redaction, the binding
 MUST be vouched by the admin-signed redaction record instead of
 recomputed, and a redacted object MUST NOT be re-admitted
-(<<receive.redaction-ingest>>, <<model.redaction>>).
+(<<receive.redaction-ingest>>, <<model.redaction>>); this vouching has
+no implementation yet (<<gate.redaction-vouching-undefined>>).
 --
 
 [role="requirement", id="gate.owner-mutation"]
@@ -57,6 +64,52 @@ routes it: a self-attested member creates and mutates through its own
 inbox, adopted onto the canonical ref by merge
 (<<gate.adoption-merge>>), which satisfies the parentless-roots walk
 because the contributor's genesis remains the history's sole root.
+--
+
+=== Identity Binding Gaps
+
+[role="requirement", id="gate.non-kernel-strict-decode"]
+.Non-Kernel Hash-Identified Types Have No Strict-Decode Enforcement (Deferred)
+--
+<<gate.identity-binding>>'s strict-decode refusal only runs for a
+hash-identified entity whose Rust type the gate crate itself owns
+(today, a result); a comment or an issue's type lives in a higher-layer
+crate the gate MUST NOT depend on, so the gate's binding for those
+namespaces checks only the genesis oid and the all-roots walk, never
+the tree's shape.
+The workspace-level pairwise-disjointness test (<<meta-ref.typed-tree>>)
+proves the *types* cannot both decode one tree; it does not by itself
+stop the *gate* from admitting the identical signed genesis commit as
+the tip of two different such namespaces (for example
+`refs/meta/comments/<oid>` and `refs/meta/issues/<oid>`), since neither
+admission path ever calls either type's decoder.
+Closing this gap needs either a decoder a non-kernel crate can register
+with the gate, or moving strict decode to a layer that already depends
+on every entity type (`receive` or above); this is chosen direction,
+not yet designed, the same acknowledged-gap shape as <<gate.bootstrap>>.
+--
+
+[role="requirement", id="gate.redaction-vouching-undefined"]
+.Redaction Vouching for the Binding Has No Implementation (Deferred)
+--
+<<gate.identity-binding>> requires that when an object the binding
+needs has been redacted, the gate vouch by the admin-signed redaction
+record rather than fail trying to re-read withheld bytes.
+No such check exists: the gate treats a redacted (missing) object the
+same as any other unreadable one — for a walk like the all-roots
+reachability check this ends that path early rather than consulting
+`refs/meta/redactions/*`, and for a required tree-entry read it
+surfaces as an evaluation error the mandatory call site MUST block on
+(<<gate.mandatory-hosted>>), not the vouched pass-through the
+requirement describes.
+`receive.redaction-ingest`'s refusal to re-admit already-redacted bytes
+is a different guarantee — it stops refilling a yanked object at
+ingest — and does not give the gate a way to keep verifying later,
+unrelated mutations on a ref whose history happens to reach a redacted
+object.
+Which component consults the redaction list on the gate's behalf, and
+how, is chosen direction, not yet designed, the same acknowledged-gap
+shape as <<gate.bootstrap>>.
 --
 
 [role="requirement", id="gate.fast-forward"]

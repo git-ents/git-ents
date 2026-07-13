@@ -155,8 +155,11 @@ written, gated, synced, and audited exactly like a comment.
 An issue's identity MUST be the oid of its genesis commit, exactly as a
 comment's (<<model.comment>>, <<meta-ref.identity-binding>>) — no
 sequential counter exists, because a counter is a coordination point
-and issues are created offline and concurrently; porcelain abbreviates
-ids the way git abbreviates commit oids.
+and issues are created offline and concurrently; the CLI's plain
+(human-facing) display and the web UI abbreviate ids the way git
+abbreviates commit oids, but a machine-readable form — the `--porcelain`
+flag included — MUST carry the full id, since that is what `lens.parity`
+requires to be "sufficient for an agent to enumerate and resolve."
 An Issue entity MUST carry a title, a body, a state, assignees, and
 labels as struct fields; multiple assignees and custom states are
 schema, not platform features.

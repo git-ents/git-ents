@@ -275,10 +275,16 @@ the coverage dashboard is a later call.
   history), natural-key tree fields (`Member` and `Effect` gain their
   name field), composite review segments, and result trees gaining
   effect + target (`model.result-identity`, closing a result-forgery
-  replay). Strict genesis decode plus the pairwise schema-disjointness
-  test; `gate.owner-mutation`; redaction vouching; `propose_*` grows the
-  sign-then-name genesis flow (the ref named from the signed commit's
-  own oid — no circularity, since no commit names its own ref anymore).
+  replay). Strict genesis decode for the gate's own types (a result)
+  plus the pairwise schema-disjointness test across every genesis-borne
+  struct; `gate.owner-mutation`; `propose_*` grows the sign-then-name
+  genesis flow (the ref named from the signed commit's own oid — no
+  circularity, since no commit names its own ref anymore). Two gaps ship
+  unclosed, neither assigned a phase: a comment or an issue's type lives
+  outside the gate's own crate, so strict decode never runs for those
+  namespaces (`gate.non-kernel-strict-decode`); and the binding's
+  redaction-vouching clause has no implementation
+  (`gate.redaction-vouching-undefined`).
 
 | forge and surface identity migration (`ents-forge`, `git-ents`,
   `ents-web`, `ents-lens`, skills)
@@ -287,9 +293,11 @@ the coverage dashboard is a later call.
 | sonnet
 | `uuid` leaves the workspace: comment and issue ids are genesis commit
   oids, reviews move to the composite `reviews/<target>/<member>` key
-  with re-review's fast-forward advance now a reachable CLI path;
-  porcelain and web abbreviate ids the way git abbreviates oids; lens
-  and agent skills updated for the id format.
+  with re-review's fast-forward advance now a reachable CLI path; the
+  CLI's plain display and the web UI abbreviate ids the way git
+  abbreviates oids, while the `--porcelain` and lens machine-readable
+  forms keep the full id (`lens.parity`); lens and agent skills updated
+  for the id format.
 |===
 
 == Phase gates
@@ -353,7 +361,11 @@ the coverage dashboard is a later call.
   (the pin advancing fast-forward), round-trip through CLI and web
   under genesis-oid and composite ids (`model.comment`,
   `model.review`). Same clean-break rule as phase 9: no legacy reader,
-  ids regenerate with the data.
+  ids regenerate with the data. The two gaps this row's own notes name
+  (`gate.non-kernel-strict-decode`; `gate.redaction-vouching-undefined`)
+  are known exceptions, not silent ones: a comment or issue genesis is
+  not yet refused from double-admission across namespaces, and the
+  binding's redaction-vouching clause is unimplemented.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
