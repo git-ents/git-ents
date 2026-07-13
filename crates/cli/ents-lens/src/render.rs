@@ -162,7 +162,7 @@ pub fn diagnostic(id: &str, comment: &Comment, range: Range, outdated: bool) -> 
 /// bodies, states, and authorship — rendered as Markdown so the whole
 /// conversation is readable in the buffer. `rows` are `(id, comment,
 /// author, when)` in thread order; `author`/`when` come from each ref's
-/// mutation commit chain (`meta-ref.trailers`), read by the caller.
+/// mutation commit chain (`meta-ref.identity-binding`), read by the caller.
 #[must_use]
 pub fn hover_markup(rows: &[(String, Comment, String, String)]) -> MarkupContent {
     let mut value = String::new();

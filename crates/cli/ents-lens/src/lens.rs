@@ -426,7 +426,7 @@ impl<O: Find + Write> Lens<O> {
 
     /// The whole thread rooted at `root_id` as hover Markdown (`lens.hover`)
     /// — root plus replies (`thread_of`), each stamped with the author and
-    /// time read from its ref's tip mutation commit (`meta-ref.trailers`).
+    /// time read from its ref's tip mutation commit (`meta-ref.identity-binding`).
     fn thread_markup(&self, root_id: &str) -> Result<lsp_types::MarkupContent> {
         let rows = comment::thread_of(self.refs.as_ref(), &self.objects, root_id)?;
         let mut with_authors = Vec::with_capacity(rows.len());
