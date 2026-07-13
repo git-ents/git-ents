@@ -1,10 +1,7 @@
 //! Integration coverage for the comment command layer: the broadened
 //! `model.comment` (aboutness refused at creation, `model.comment-state`
 //! transitions, `model.comment-context`/`model.comment-thread`
-//! aggregation) and — with the most care, per this phase's plan row — the
-//! `meta-ref.migration` guarantee that comment trees written by phase-7
-//! code still read back, and are rewritten under the current struct only
-//! when mutated.
+//! aggregation).
 
 #![allow(
     clippy::expect_used,
@@ -16,22 +13,8 @@
 
 use ents_forge::comment::{self, ListFilter, NewComment};
 use ents_receive::{Identity, Mode, NullEventSink, TxResult};
-use ents_testutil::{Keypair, MemRefStore, ObjectStore, write_meta_entity};
-use facet_git_tree::RawTree;
-use gix_object::Write as _;
-use gix_ref_store::RefStoreRead as _;
+use ents_testutil::{Keypair, MemRefStore, ObjectStore};
 use rstest::rstest;
-
-/// The exact struct phase-7 code declared for its Comment entity — the
-/// on-disk encoding `meta-ref.migration` requires the broadened reader to
-/// keep reading. Declared independently here (not imported) so this test
-/// pins the *storage shape*, not whatever the crate's internal legacy
-/// struct happens to be.
-#[derive(facet::Facet)]
-struct Phase7Comment {
-    body: String,
-    anchor: RawTree,
-}
 
 /// A throwaway on-disk repository holding one committed file — the
 /// content anchors capture against — alongside the in-memory ref/object
@@ -117,145 +100,6 @@ impl Fixture {
         assert_eq!(outcome.result, TxResult::Applied);
         id
     }
-
-    /// Seed a comment ref exactly as phase-7 code wrote one: the bare
-    /// `{body, anchor}` tree under `refs/meta/comments/<id>`.
-    fn seed_phase7(&self, id: &str, body: &str) -> gix_hash::ObjectId {
-        let anchor = ents_anchor::capture(
-            &gix::open(self.path()).expect("opens"),
-            "HEAD",
-            "file.txt",
-            None,
-        )
-        .expect("captures");
-        let anchor_tree =
-            facet_git_tree::serialize_into(&anchor, &self.objects).expect("serializes");
-        let legacy = Phase7Comment {
-            body: body.to_owned(),
-            anchor: RawTree::new(anchor_tree),
-        };
-        let name = ents_model::namespace::comment_ref(id).expect("valid");
-        write_meta_entity(&self.refs, &self.objects, name, &legacy, None, 500)
-    }
-}
-
-// ---------------------------------------------------------------------
-// meta-ref.migration: phase-7 trees still read; mutation rewrites.
-// ---------------------------------------------------------------------
-
-/// A pre-migration ref's tip reads back through every read surface —
-/// list, show — mapping to state `open` with no context or parent.
-// @relation(meta-ref.migration, scope=function, role=Verifies)
-#[rstest]
-fn phase7_comment_refs_still_read_back() {
-    let fixture = Fixture::new();
-    fixture.seed_phase7("legacy1", "written by phase-7 code");
-
-    let listed = comment::list(&fixture.refs, &fixture.objects).expect("lists");
-    assert_eq!(listed.len(), 1);
-    let (id, read) = &listed[0];
-    assert_eq!(id, "legacy1");
-    assert_eq!(read.body, "written by phase-7 code");
-    assert_eq!(read.state, "open");
-    assert_eq!(read.context, None);
-    assert_eq!(read.parent, None);
-
-    let (shown, projected) = comment::show(
-        &fixture.refs,
-        &fixture.objects,
-        fixture.path(),
-        "legacy1",
-        "HEAD",
-        false,
-    )
-    .expect("shows");
-    assert_eq!(shown.body, "written by phase-7 code");
-    let (anchor, projection) = projected.expect("legacy comments always carry an anchor");
-    assert_eq!(anchor.path, "file.txt");
-    assert_eq!(projection, ents_anchor::Projection::Current);
-}
-
-/// Mutating a pre-migration ref rewrites its tree under the current
-/// struct as a commit on top of the old tip (`meta-ref.migration`):
-/// the new tip deserializes directly as the broadened `Comment`, its
-/// parent is the untouched legacy commit, and nothing rewrote history.
-// @relation(meta-ref.migration, model.comment-state, scope=function, role=Verifies)
-#[rstest]
-fn mutating_a_phase7_ref_migrates_it_on_top_of_the_old_tip() {
-    use gix_object::Find as _;
-
-    let fixture = Fixture::new();
-    let old_tip = fixture.seed_phase7("legacy1", "written by phase-7 code");
-
-    let outcome = comment::resolve(
-        &fixture.refs,
-        &fixture.objects,
-        &NullEventSink,
-        "legacy1",
-        &fixture.identity(),
-        Mode::Advisory,
-    )
-    .expect("resolves");
-    assert_eq!(outcome.result, TxResult::Applied);
-
-    let name = ents_model::namespace::comment_ref("legacy1").expect("valid");
-    let new_tip = fixture
-        .refs
-        .get(name.as_ref())
-        .expect("readable")
-        .expect("set");
-    assert_ne!(new_tip, old_tip);
-
-    // The new tip's tree is the *current* encoding, no fallback needed...
-    let mut buf = Vec::new();
-    let data = fixture
-        .objects
-        .try_find(&new_tip, &mut buf)
-        .expect("readable")
-        .expect("present");
-    let commit = gix_object::CommitRef::from_bytes(data.data, new_tip.kind()).expect("parses");
-    let migrated: ents_forge::comment::Comment =
-        facet_git_tree::deserialize(&commit.tree(), &fixture.objects)
-            .expect("the migrated tip deserializes directly as the broadened struct");
-    assert_eq!(migrated.state, "resolved");
-    assert_eq!(migrated.body, "written by phase-7 code");
-    assert!(migrated.anchor.is_some());
-
-    // ...and it sits on top of the old tip: history keeps the old
-    // encoding as archive, nothing was rewritten or deleted.
-    let parents: Vec<_> = commit.parents().collect();
-    assert_eq!(parents, vec![old_tip]);
-}
-
-/// The legacy fallback holds for any body content, not just the fixture
-/// string — old-shape trees over an unenumerable input space read back
-/// with the same mapping.
-// @relation(meta-ref.migration, scope=function, role=Verifies)
-#[test]
-fn any_phase7_tree_reads_back_mapped_to_open() {
-    let runner = proptest::test_runner::Config::with_cases(64);
-    proptest::proptest!(runner, |(body in proptest::prelude::any::<String>())| {
-        let objects = ObjectStore::default();
-        let refs = MemRefStore::default();
-        let anchor_tree = objects
-            .write(&gix_object::Tree { entries: vec![] })
-            .expect("tree");
-        let legacy = Phase7Comment {
-            body: body.clone(),
-            anchor: RawTree::new(anchor_tree),
-        };
-        let name = ents_model::namespace::comment_ref("p").expect("valid");
-        write_meta_entity(&refs, &objects, name, &legacy, None, 500);
-
-        let listed = comment::list(&refs, &objects).expect("lists");
-        proptest::prop_assert_eq!(listed.len(), 1);
-        let read = &listed[0].1;
-        proptest::prop_assert_eq!(&read.body, &body);
-        proptest::prop_assert_eq!(&read.state, "open");
-        proptest::prop_assert_eq!(read.anchor.as_ref(), Some(&RawTree::new(anchor_tree)));
-        proptest::prop_assert_eq!(&read.context, &None);
-        proptest::prop_assert_eq!(&read.parent, &None);
-    });
 }
 
 // ---------------------------------------------------------------------

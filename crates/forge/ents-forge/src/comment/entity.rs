@@ -2,7 +2,7 @@
 //! entity, a parent comment, or any combination.
 //!
 //! Spec coverage: `model.comment`, `model.comment-state`,
-//! `model.comment-context`, `model.comment-thread`, `meta-ref.migration`.
+//! `model.comment-context`, `model.comment-thread`.
 
 use facet::Facet;
 use facet_git_tree::RawTree;
@@ -27,12 +27,6 @@ use gix_object::Find;
 /// and how it survives force-push and gc, and it is owned by
 /// [`ents_anchor`], this crate's own dependency for anchoring a comment to
 /// code (`super::command`).
-///
-/// Comment trees written before this struct broadened (a bare
-/// `{body, anchor}` shape) still read back through
-/// [`read_comment`]'s legacy fallback (`meta-ref.migration`); mutating one
-/// rewrites its tree under this struct as an ordinary commit on top of the
-/// old tip, keeping the old encoding as archive.
 ///
 /// # Examples
 ///
@@ -94,61 +88,13 @@ impl Comment {
     }
 }
 
-/// The comment tree shape phase-7 code wrote: a body and a mandatory,
-/// directly-embedded anchor — no state, context, or parent. Kept only as
-/// [`read_comment`]'s fallback target (`meta-ref.migration`: history keeps
-/// the old encoding as archive, and the tip of a pre-migration ref *is*
-/// still this encoding until something mutates it).
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-pub(crate) struct LegacyComment {
-    pub(crate) body: String,
-    pub(crate) anchor: RawTree,
-}
-
-impl From<LegacyComment> for Comment {
-    fn from(legacy: LegacyComment) -> Self {
-        Self {
-            body: legacy.body,
-            state: "open".to_owned(),
-            anchor: Some(legacy.anchor),
-            context: None,
-            parent: None,
-        }
-    }
-}
-
-/// Read the [`Comment`] stored at `tree`, falling back to the legacy
-/// `{body, anchor}` shape (`meta-ref.migration`).
-///
-/// The two encodings are structurally disjoint, so no version marker is
-/// consulted (`meta-ref.typed-tree` forbids one in the tree, and the
-/// reserved `Schema-Version:` trailer stays unused while detection works
-/// structurally): a legacy tree has no `state` entry and embeds its anchor
-/// tree directly where the broadened struct expects an `Option` wrapper,
-/// so it can never be misread as a current [`Comment`] — and a current tree
-/// always carries `state`, so it is never consulted against the legacy
-/// shape at all.
-///
-/// A legacy read maps to the broadened struct exactly as the migration
-/// commit would rewrite it: state `open` (`model.comment-state`'s value
-/// for every comment created before states existed), no context, no
-/// parent.
+/// Read the [`Comment`] stored at `tree`.
 ///
 /// # Errors
 ///
-/// The current shape's own [`facet_git_tree::Error`] when `tree` reads as
-/// neither encoding.
-// @relation(meta-ref.migration, scope=function)
+/// A [`facet_git_tree::Error`] when `tree` is not a well-formed comment.
 pub(crate) fn read_comment(tree: &ObjectId, objects: &impl Find) -> crate::Result<Comment> {
-    match facet_git_tree::deserialize::<Comment>(tree, objects) {
-        Ok(comment) => Ok(comment),
-        Err(error) => match facet_git_tree::deserialize::<LegacyComment>(tree, objects) {
-            Ok(legacy) => Ok(legacy.into()),
-            // Report the *current* shape's failure: a tree that is neither
-            // encoding is diagnosed against the schema in force.
-            Err(_legacy_error) => Err(error.into()),
-        },
-    }
+    Ok(facet_git_tree::deserialize::<Comment>(tree, objects)?)
 }
 
 #[cfg(test)]
@@ -190,32 +136,10 @@ mod tests {
         assert_eq!(back, comment);
     }
 
-    /// `meta-ref.migration`: a tree written by phase-7 code — the bare
-    /// `{body, anchor}` shape — still reads back, mapping to state `open`
-    /// with no context or parent; a current tree reads as itself.
-    // @relation(meta-ref.migration, scope=function, role=Verifies)
+    /// A tree that is not a well-formed comment fails to read.
+    // @relation(model.comment, scope=function, role=Verifies)
     #[rstest]
-    fn legacy_trees_still_read_back() {
-        let store = ObjectStore::default();
-        let legacy = LegacyComment {
-            body: "written by phase-7 code".to_owned(),
-            anchor: anchor_tree(&store),
-        };
-        let root = serialize_into(&legacy, &store).expect("serialize");
-
-        let read = read_comment(&root, &store).expect("legacy fallback reads");
-        assert_eq!(read.body, legacy.body);
-        assert_eq!(read.state, "open");
-        assert_eq!(read.anchor, Some(legacy.anchor));
-        assert_eq!(read.context, None);
-        assert_eq!(read.parent, None);
-    }
-
-    /// A tree that is neither encoding fails against the schema in force,
-    /// not the archival one.
-    // @relation(meta-ref.migration, scope=function, role=Verifies)
-    #[rstest]
-    fn a_foreign_tree_reads_as_neither_encoding() {
+    fn a_foreign_tree_fails_to_read() {
         let store = ObjectStore::default();
         let root = store
             .write(&gix_object::Tree { entries: vec![] })

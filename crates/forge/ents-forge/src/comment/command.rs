@@ -47,9 +47,8 @@ fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId> {
     Ok(commit.tree())
 }
 
-/// Read the [`Comment`] at `id`'s ref tip, through the legacy-shape
-/// fallback (`meta-ref.migration`), or [`Error::NotFound`] when no such
-/// ref exists.
+/// Read the [`Comment`] at `id`'s ref tip, or [`Error::NotFound`] when no
+/// such ref exists.
 fn comment_at(refs: &dyn RefStoreRead, objects: &impl Find, id: &str) -> Result<Comment> {
     let ref_name = ents_model::namespace::comment_ref(id)?;
     let Some(tip) = refs.get(ref_name.as_ref())? else {
@@ -61,8 +60,7 @@ fn comment_at(refs: &dyn RefStoreRead, objects: &impl Find, id: &str) -> Result<
     read_comment(&tree, objects)
 }
 
-/// `git ents comment list`: every comment recorded in this repository,
-/// pre-migration trees included (`meta-ref.migration`).
+/// `git ents comment list`: every comment recorded in this repository.
 ///
 /// # Errors
 ///
@@ -374,10 +372,8 @@ pub fn reopen(
 }
 
 /// The shared state mutation [`resolve`] and [`reopen`] are: read the
-/// comment at `id` — through the legacy fallback, so a pre-migration ref
-/// is rewritten under the broadened struct by this very commit
-/// (`meta-ref.migration`) — set `state`, and propose the new tree on top
-/// of the old tip.
+/// comment at `id`, set `state`, and propose the new tree on top of the
+/// old tip.
 fn set_state(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),

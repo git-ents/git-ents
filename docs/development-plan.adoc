@@ -220,9 +220,10 @@ the coverage dashboard is a later call.
 | fable
 | Comments become the universal conversational primitive (`model.comment`
   broadened, `model.comment-state`, `model.comment-context`,
-  `model.comment-thread`, `model.review`): the Comment struct's migration
-  (`meta-ref.migration` — old trees must stay readable), working-tree
-  capture and projection in `ents-anchor` (`anchor.working-tree`), the
+  `model.comment-thread`, `model.review`): the Comment struct broadens as
+  a clean break (experimental repo, no on-disk data to preserve, so no
+  back-compat reader), working-tree capture and projection in
+  `ents-anchor` (`anchor.working-tree`), the
   Review entity plus its retention pin ref (`model.review-pin` —
   `refs/meta/pins/reviews/<id>`, an empty-tree signed commit whose
   parents include the reviewed commit; verify the gate's tip-signed and
@@ -306,8 +307,12 @@ the coverage dashboard is a later call.
   (`lens.parity`), resolved through the CLI (`model.comment-state`),
   and gone from the lens's next publish; an issue and a review each
   round-trip CLI ↔ web with their threads rendered as context queries
-  (`model.comment-context`, `model.review`); pre-migration comment refs
-  written by phase-7 code still read back (`meta-ref.migration`).
+  (`model.comment-context`, `model.review`). This being an experimental
+  repository with no on-disk data to preserve, a struct change is a
+  clean break: entities read only as their current shape, and no
+  back-compat reader is kept — `meta-ref.migration`'s forward rewrite
+  applies whenever data actually needs carrying, not a permanent legacy
+  code path.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —
