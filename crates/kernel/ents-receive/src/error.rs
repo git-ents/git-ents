@@ -59,6 +59,15 @@ pub enum Error {
     /// deletion transition).
     #[error("object write failed: {0}")]
     ObjectWrite(#[from] gix_object::write::Error),
+
+    /// A refname could not be built from a genesis commit's oid
+    /// ([`crate::propose_genesis`]'s name-from-oid step). This cannot
+    /// occur for a real oid, whose hex is always a valid refname segment.
+    #[error("naming a ref from signed content failed: {source}")]
+    Model {
+        /// The underlying model error.
+        source: ents_model::Error,
+    },
 }
 
 /// The `Result` alias every fallible `ents-receive` operation returns.

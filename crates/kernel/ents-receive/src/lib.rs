@@ -40,14 +40,17 @@
 //! - `receive.redaction-ingest` — [`receive`]'s first step: any proposal
 //!   object matching a recorded redaction target refuses the whole batch.
 //!
-//! [`propose_entity`] and [`propose_delete`] are the shared mechanism every
-//! entity-mutation frontend builds its call to [`receive`] through: they
-//! serialize a typed tree, bind a signed commit to its ref via the
-//! `Advance-ref` trailer (`meta-ref.trailers`), and hand the transition to
-//! `receive` — one place that builds the trailer block, one place that
-//! signs, one place that calls `receive`, shared by `git-ents`'s `members`,
-//! `account`, `effect`, `toolchain`, `comment`, and `redact` commands (and,
-//! later, `ents-forge`'s own comment command) alike.
+//! [`propose_entity`], [`propose_genesis`], and [`propose_delete`] are the
+//! shared mechanism every entity-mutation frontend builds its call to
+//! [`receive`] through: they serialize a typed tree and hand a signed
+//! commit to `receive`, whose ref name the gate recomputes from the signed
+//! content (`meta-ref.identity-binding`) — no commit trailer binds it. An
+//! owner-keyed mutation advances a known ref ([`propose_entity`]); the
+//! creation of a hash-identified entity names its ref from the genesis
+//! commit's own oid ([`propose_genesis`]). One place signs, one place
+//! calls `receive`, shared by `git-ents`'s `members`, `account`, `effect`,
+//! `toolchain`, `comment`, and `redact` commands (and, later,
+//! `ents-forge`'s own comment command) alike.
 //!
 //! # Examples
 //!
@@ -96,7 +99,10 @@ mod sink;
 pub use error::{Error, Result};
 pub use outcome::{Mode, Outcome, TxResult};
 pub use proposal::{Proposal, RefTransition, TransportAuth};
-pub use propose::{Identity, propose_delete, propose_entity, propose_entity_with_pin, propose_pin};
+pub use propose::{
+    Identity, propose_delete, propose_entity, propose_entity_with_pin, propose_genesis,
+    propose_pin,
+};
 pub use receive::receive;
 pub use reconcile::reconcile;
 pub use sink::{EventSink, MemoryEventSink, NullEventSink};

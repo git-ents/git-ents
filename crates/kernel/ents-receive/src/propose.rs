@@ -1,24 +1,30 @@
 //! One shared primitive every entity-mutation command uses: serialize a
-//! typed tree, wrap it in a signed commit bound to its refname (per
-//! `meta-ref.trailers`'s `Advance-ref` trailer), and hand it to
+//! typed tree, wrap it in a signed commit, and hand it to
 //! [`crate::receive`] — the sole path a meta-ref mutation may enter the
-//! repository (`receive.unit`).
+//! repository (`receive.unit`). No commit trailer binds the commit to its
+//! refname anymore: the gate recomputes the refname from the signed
+//! content (`meta-ref.identity-binding`, `gate.identity-binding`).
+//!
+//! An owner-keyed mutation advances an existing ref, whose name the caller
+//! already knows ([`propose_entity`]). The creation of a hash-identified
+//! entity instead runs sign-then-name ([`propose_genesis`]): build and
+//! sign the genesis commit first, then name the ref from that commit's own
+//! oid — there is no circularity, because no commit names its own ref.
 //!
 //! Every porcelain command that writes an entity (`members`, `account`,
-//! `effect`, `toolchain`, `comment`, `redact`) goes through
-//! [`propose_entity`] rather than repeating this shape, so there is exactly
-//! one place that builds the trailer block, one place that signs, and one
-//! place that calls `receive`. This lives in `ents-receive` rather than a
-//! frontend crate because it is mechanism, not policy: every mutation
-//! frontend across every composition root shares it (`arch.no-object-store-trait`'s
-//! sibling rule — signing and commit-building plumbing is kernel material).
+//! `effect`, `toolchain`, `comment`, `redact`) goes through one of these
+//! rather than repeating the shape, so there is exactly one place that
+//! signs and one place that calls `receive`. This lives in `ents-receive`
+//! rather than a frontend crate because it is mechanism, not policy: every
+//! mutation frontend across every composition root shares it
+//! (`arch.no-object-store-trait`'s sibling rule — signing and
+//! commit-building plumbing is kernel material).
 //!
 //! [`propose_pin`] is the same mechanism for the one commit shape that
 //! carries no entity: a retention pin's empty-tree, merge-shaped commit
 //! (`model.review-pin`), built and signed by the identical
 //! [`signed_commit`] plumbing and admitted through the identical gate.
 
-use ents_model::trailer::Trailers;
 use gix::refs::FullName;
 use gix_object::{Commit, Find, Kind, Write, WriteTo as _};
 use gix_ref_store::RefStore;
@@ -42,9 +48,12 @@ pub struct Identity<'a> {
     pub sign: &'a dyn Fn(&[u8]) -> String,
 }
 
-/// Serialize `entity` into `objects`, wrap it in a commit bound to `name`
-/// via the `Advance-ref` trailer, sign it with `identity`, and propose the
-/// transition through [`crate::receive`].
+/// Serialize `entity` into `objects`, wrap it in a signed commit whose
+/// only parent is `name`'s current tip, and propose the transition through
+/// [`crate::receive`]. This is the owner-keyed advance of an existing ref
+/// (`members`, `account`, `effect`, ...); the ref name is bound to the
+/// signed content by the gate (`gate.identity-binding`), not a trailer.
+/// For the creation of a hash-identified entity, use [`propose_genesis`].
 ///
 /// `name`'s current tip is read fresh from `refs` immediately before
 /// building the commit, so the proposed transition's `old` is always
@@ -132,7 +141,7 @@ fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
     let tree = facet_git_tree::serialize_into(entity, objects)?;
     let old = refs.get(name.as_ref())?;
     let parents: Vec<_> = old.into_iter().collect();
-    let tip = signed_commit(objects, name, tree, parents, identity, subject)?;
+    let tip = signed_commit(objects, tree, parents, identity, subject)?;
     Ok((
         RefTransition {
             name: name.clone(),
@@ -141,6 +150,95 @@ fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
         },
         tip,
     ))
+}
+
+/// Create a hash-identified entity by sign-then-name (`model.comment`,
+/// `model.issue`, `meta-ref.identity-binding`): serialize `entity`, build
+/// and sign a *parentless* genesis commit, then name the ref from that
+/// commit's own oid via `name_from_oid` (for example
+/// `ents_model::namespace::comment_ref`) and propose the creation through
+/// [`crate::receive`]. Returns the derived refname alongside the outcome,
+/// since the caller cannot know the id until the commit is signed.
+///
+/// There is no circularity — the genesis commit carries no reference to
+/// the ref it will name (no trailer names it) — so the id is git's own
+/// hash over the genesis tree, author, timestamp, and signature, exactly
+/// as `model.comment` requires, and the gate's all-roots walk binds it
+/// (`gate.identity-binding`).
+///
+/// # Errors
+///
+/// [`crate::Error::Tree`] if `entity` cannot be serialized;
+/// [`crate::Error::Refs`] if building the refname fails (an invalid oid
+/// segment cannot occur for a real oid, but the closure is fallible);
+/// other [`crate::Error`] variants if `receive` could not reach an
+/// outcome.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{Provenance, namespace};
+/// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_genesis};
+/// use ents_testutil::{Keypair, MemRefStore, ObjectStore, enroll_member};
+/// use gix_ref_store::RefStoreRead as _;
+///
+/// # #[derive(facet::Facet)]
+/// # struct Comment { body: String }
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let admin = Keypair::from_seed(1);
+/// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
+///
+/// let identity = Identity {
+///     actor: gix::actor::Signature {
+///         name: "admin".into(),
+///         email: "admin@ents.test".into(),
+///         time: gix::date::Time { seconds: 300, offset: 0 },
+///     },
+///     sign: &|payload| admin.sign(payload),
+/// };
+///
+/// let (name, outcome) = propose_genesis(
+///     &refs, &objects, &NullEventSink, &Comment { body: "first".into() },
+///     |oid| namespace::comment_ref(&oid.to_string()), &identity, "Comment on X",
+///     Mode::Advisory,
+/// )
+/// .expect("reaches an outcome");
+/// assert_eq!(outcome.result, TxResult::Applied);
+/// // The ref is named from the genesis commit's own oid.
+/// assert!(name.as_bstr().starts_with(b"refs/meta/comments/"));
+/// assert!(refs.get(name.as_ref()).expect("read").is_some());
+/// ```
+// @relation(meta-ref.identity-binding, model.comment, model.issue, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors propose_entity's shape, plus the name-from-oid closure that is the whole \
+              point of the sign-then-name flow"
+)]
+pub fn propose_genesis<T: for<'facet> facet::Facet<'facet>>(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn EventSink,
+    entity: &T,
+    name_from_oid: impl FnOnce(gix_hash::ObjectId) -> ents_model::Result<FullName>,
+    identity: &Identity<'_>,
+    subject: &str,
+    mode: Mode,
+) -> Result<(FullName, Outcome)> {
+    let tree = facet_git_tree::serialize_into(entity, objects)?;
+    let tip = signed_commit(objects, tree, Vec::new(), identity, subject)?;
+    let name = name_from_oid(tip).map_err(|source| crate::Error::Model { source })?;
+    let proposal = Proposal {
+        transitions: vec![RefTransition {
+            name: name.clone(),
+            old: None,
+            new: Some(tip),
+        }],
+        objects: vec![tip],
+        auth: None,
+    };
+    let outcome = crate::receive::receive(refs, objects, events, &proposal, mode)?;
+    Ok((name, outcome))
 }
 
 /// Advance the retention pin at `name` to keep `retain` (and its ancestry)
@@ -241,7 +339,7 @@ fn pin_transition(
     let tree = objects.write(&gix_object::Tree { entries: vec![] })?;
     let old = refs.get(name.as_ref())?;
     let parents: Vec<_> = old.into_iter().chain(std::iter::once(retain)).collect();
-    let tip = signed_commit(objects, name, tree, parents, identity, subject)?;
+    let tip = signed_commit(objects, tree, parents, identity, subject)?;
     Ok((
         RefTransition {
             name: name.clone(),
@@ -347,24 +445,21 @@ pub fn propose_entity_with_pin<T: for<'facet> facet::Facet<'facet>>(
     crate::receive::receive(refs, objects, events, &proposal, mode)
 }
 
-/// Build, sign, and write the mutation commit both proposal shapes share:
-/// `tree` under a message whose `Advance-ref:` trailer binds it to `name`
-/// (`meta-ref.trailers`, `gate.refname-binding`), authored and signed by
-/// `identity` — the one place a mutation commit is built, whatever its
-/// tree and parents.
+/// Build, sign, and write the commit every proposal shape shares: `tree`
+/// under `subject`, authored and signed by `identity` — the one place a
+/// commit is built, whatever its tree and parents. The commit carries no
+/// reference to the ref it will name; the gate recomputes that name from
+/// the signed content (`gate.identity-binding`), which is exactly what
+/// lets [`propose_genesis`] name a ref from this commit's own oid without
+/// circularity.
 fn signed_commit(
     objects: &impl Write,
-    name: &FullName,
     tree: gix_hash::ObjectId,
     parents: Vec<gix_hash::ObjectId>,
     identity: &Identity<'_>,
     subject: &str,
 ) -> Result<gix_hash::ObjectId> {
-    let trailers = Trailers {
-        ents_ref: Some(name.clone()),
-        schema_version: None,
-    };
-    let message = format!("{subject}\n\n{}", trailers.render());
+    let message = subject.to_owned();
 
     let mut commit = Commit {
         tree,

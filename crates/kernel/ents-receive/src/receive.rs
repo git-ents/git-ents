@@ -111,17 +111,16 @@ const REDACTIONS_PREFIX: &str = "refs/meta/redactions/";
 /// let issue = Issue {
 ///     title: "t".into(), body: "b".into(), state: "open".into(),
 /// };
-/// let name: gix::refs::FullName = "refs/meta/issues/1".try_into().expect("valid");
-/// // write_meta_entity signs and lands the commit's object graph, but does
-/// // not move the ref through the gate — that is exactly receive's job.
+/// // A hash-identified entity is created by sign-then-name: build the
+/// // genesis commit first, then name the ref from its own oid
+/// // (`meta-ref.identity-binding`).
 /// let tip = {
 ///     let tree = facet_git_tree::serialize_into(&issue, &objects).expect("serializes");
-///     let trailers = ents_model::trailer::Trailers { ents_ref: Some(name.clone()), schema_version: None };
-///     let message = format!("Mutate {}\n\n{}", name.as_bstr(), trailers.render());
 ///     ents_testutil::write_commit(&objects, &ents_testutil::CommitSpec {
-///         tree, parents: vec![], message, seconds: 300,
+///         tree, parents: vec![], message: "Open an issue".into(), seconds: 300,
 ///     }, Some(&admin))
 /// };
+/// let name: gix::refs::FullName = format!("refs/meta/issues/{tip}").try_into().expect("valid");
 ///
 /// let proposal = Proposal {
 ///     transitions: vec![RefTransition { name: name.clone(), old: None, new: Some(tip) }],
