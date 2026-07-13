@@ -33,11 +33,12 @@ proptest! {
     // @relation(meta-ref.typed-tree, scope=function, role=Verifies)
     #[test]
     fn member_round_trips_for_any_key_state_and_provenance(
+        id in any::<String>(),
         key in any::<String>(),
         state in member_state(),
         provenance in provenance(),
     ) {
-        let member = Member { key, state, provenance };
+        let member = Member { id: ents_model::MemberId::new(id), key, state, provenance };
         let (id, store) = serialize(&member).expect("serialize");
         let back: Member = deserialize(&id, &store).expect("deserialize");
         prop_assert_eq!(back, member);

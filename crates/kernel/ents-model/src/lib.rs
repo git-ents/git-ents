@@ -1,6 +1,6 @@
-//! The forge's entity vocabulary: structs, refname namespaces, reserved
-//! commit trailers, and the one closed status taxonomy, all built directly
-//! on `facet-git-tree`'s struct-to-tree mapping.
+//! The forge's entity vocabulary: structs, refname namespaces, and the one
+//! closed status taxonomy, all built directly on `facet-git-tree`'s
+//! struct-to-tree mapping.
 //!
 //! Every other library crate in `git-ents` eventually imports this one
 //! (`docs/spec/overview.sdoc`'s crate graph): `ents-query`, `ents-gate`,
@@ -12,7 +12,7 @@
 //! edge one-directional.
 //!
 //! This crate is declarative on purpose: it defines *what* forge state
-//! means (entity structs, taxonomy, namespace, trailers), never *how* it is
+//! means (entity structs, taxonomy, namespace), never *how* it is
 //! verified, queried, or executed. Those verbs belong to `ents-gate`,
 //! `ents-query`, and `ents-effect` respectively (`docs/spec/overview.sdoc`,
 //! "Boundary Rules").
@@ -33,6 +33,7 @@
 //!   `ents-forge`'s `Issue` and `Comment`.
 //! - `model.effect-definition` — [`Effect`].
 //! - `model.result-taxonomy` — [`Status`].
+//! - `model.result-identity` — [`ResultRecord`].
 //! - `model.toolchain` — moved to `ents-kiln` (resolving and materializing
 //!   a toolchain needs `ents-effect`'s toolchain-resolution machinery,
 //!   which a purely declarative vocabulary crate like this one may not
@@ -46,7 +47,12 @@
 //!   `refs/meta/self/<member>/<effect>/<short-oid>` self-run mirror half
 //!   ([`namespace::self_result_ref`], [`namespace::self_run_owner`]).
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.
-//! - `meta-ref.trailers` — [`trailer`].
+//! - `meta-ref.identity-binding` — the natural-key tree fields
+//!   ([`Member::id`], [`Effect::name`]) and composite key fields
+//!   ([`ResultRecord::effect`], `ResultRecord::target`) the gate
+//!   recomputes a refname from, plus the composite review/result refname
+//!   builders and parsers in [`namespace`]; the recomputation itself is
+//!   `ents-gate`'s (`gate.identity-binding`).
 //!
 //! Two `meta-ref.sdoc` rules are deliberately not implemented here:
 //! `meta-ref.tip-invariant` (a non-owning reader degrading to opaque
@@ -62,28 +68,21 @@
 //! # Examples
 //!
 //! A worked round trip through every layer this crate owns: build a
-//! [`Member`], place it under its namespace ref, bind a mutation commit to
-//! that ref with a reserved trailer, and round-trip the entity through a
-//! tree.
+//! [`Member`], place it under its namespace ref whose final segment its id
+//! field binds (`meta-ref.identity-binding`), and round-trip the entity
+//! through a tree.
 //!
 //! ```
-//! use ents_model::{Member, MemberId, Provenance, namespace, trailer::Trailers};
+//! use ents_model::{Member, MemberId, Provenance, namespace};
 //!
 //! let id = MemberId::new("jdc");
-//! let member = Member::new("ssh-ed25519 AAAA... jdc", Provenance::AdminRegistered);
+//! let member = Member::new(&id, "ssh-ed25519 AAAA... jdc", Provenance::AdminRegistered);
 //!
-//! // Where this member's ref lives.
+//! // Where this member's ref lives — its final segment is the id field the
+//! // gate recomputes from the signed tree (`meta-ref.identity-binding`).
 //! let refname = namespace::member_ref(&id).expect("valid id");
 //! assert_eq!(refname.as_bstr(), "refs/meta/member/jdc");
-//!
-//! // The commit that would write it binds itself to that ref via the
-//! // reserved `Advance-ref:` trailer (`meta-ref.trailers`).
-//! let trailers = Trailers {
-//!     ents_ref: Some(refname),
-//!     schema_version: None,
-//! };
-//! let message = format!("Enroll jdc\n\n{}", trailers.render());
-//! assert_eq!(Trailers::parse(message.as_bytes()), trailers);
+//! assert_eq!(member.id, id);
 //!
 //! // The entity itself round-trips through `facet-git-tree` unchanged —
 //! // the struct is the schema (`meta-ref.typed-tree`).
@@ -99,14 +98,13 @@ mod member;
 pub mod namespace;
 mod redaction;
 mod result;
-pub mod trailer;
 
 pub use account::Account;
 pub use effect::Effect;
 pub use error::{Error, Result};
 pub use member::{Member, MemberId, MemberState, Provenance};
 pub use redaction::Redaction;
-pub use result::Status;
+pub use result::{ResultRecord, Status};
 
 #[cfg(test)]
 mod tests {
@@ -128,6 +126,7 @@ mod tests {
     #[case::effect(Effect::SHAPE.type_identifier, "Effect")]
     #[case::member(Member::SHAPE.type_identifier, "Member")]
     #[case::redaction(Redaction::SHAPE.type_identifier, "Redaction")]
+    #[case::result(ResultRecord::SHAPE.type_identifier, "ResultRecord")]
     #[case::status(Status::SHAPE.type_identifier, "Status")]
     // @relation(model.extensibility, scope=function, role=Verifies)
     fn every_entity_shape_name_tracks_its_struct_declaration(

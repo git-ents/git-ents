@@ -61,35 +61,138 @@ pub fn comment_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/comments/{id}"))
 }
 
-/// The ref holding the review named `id` — `refs/meta/reviews/<id>`
-/// (`meta-ref.granularity`, `model.review`).
-// @relation(meta-ref.granularity, model.review, scope=function)
-pub fn review_ref(id: &str) -> Result<FullName> {
-    build(format!("refs/meta/reviews/{id}"))
+/// The ref holding one reviewer's review of one commit —
+/// `refs/meta/reviews/<target>/<member>` (`meta-ref.granularity`,
+/// `model.review`), where `<target>` is the oid of the first commit the
+/// review judged and `<member>` is the reviewer's member id: a composite
+/// natural key (`meta-ref.identity-binding`) with no minted id anywhere,
+/// so one review thread lives per (target, reviewer) and all reviews of a
+/// commit enumerate by ref prefix.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name = namespace::review_ref("deadbeef", &MemberId::new("jdc")).expect("valid");
+/// assert_eq!(name.as_bstr(), "refs/meta/reviews/deadbeef/jdc");
+/// ```
+// @relation(meta-ref.granularity, model.review, meta-ref.identity-binding, scope=function)
+pub fn review_ref(target: &str, member: &MemberId) -> Result<FullName> {
+    build(format!("refs/meta/reviews/{target}/{member}"))
 }
 
-/// The retention pin for the review named `id` —
-/// `refs/meta/pins/reviews/<id>` (`model.review-pin`): the entity's own
-/// canonical suffix (`reviews/<id>`) prefixed with `pins/`, the same way
-/// `meta-ref.inbox` prefixes one, so two entity kinds can never collide
-/// under the same pin id.
+/// The retention pin for one reviewer's review of one commit —
+/// `refs/meta/pins/reviews/<target>/<member>` (`model.review-pin`): the
+/// entity's own canonical suffix (`reviews/<target>/<member>`) prefixed
+/// with `pins/`, the same way `meta-ref.inbox` prefixes one, so two entity
+/// kinds can never collide under the same pin id.
 ///
 /// A pin ref's commits carry the empty tree, never an entity — the sole
 /// exception to `meta-ref.namespace`'s tree-is-the-entity shape; the
 /// commits exist purely to keep the reviewed commit and its ancestry
-/// reachable.
+/// reachable. Because a pin's ancestry deliberately reaches into code
+/// history, the gate's parentless-roots walk is never applied to a pin
+/// (`meta-ref.identity-binding`).
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name = namespace::review_pin_ref("deadbeef", &MemberId::new("jdc")).expect("valid");
+/// assert_eq!(name.as_bstr(), "refs/meta/pins/reviews/deadbeef/jdc");
+/// ```
+// @relation(model.review-pin, meta-ref.namespace, meta-ref.identity-binding, scope=function)
+pub fn review_pin_ref(target: &str, member: &MemberId) -> Result<FullName> {
+    build(format!("refs/meta/pins/reviews/{target}/{member}"))
+}
+
+/// The `(target, member)` a review or review-pin refname names, or `None`
+/// when `name` is not a well-formed `refs/meta/reviews/<target>/<member>`
+/// or `refs/meta/pins/reviews/<target>/<member>` ref (`model.review`).
+///
+/// The gate recomputes a review's composite key from its signed content
+/// and compares it to this parse (`meta-ref.identity-binding`,
+/// `gate.identity-binding`), so the parser lives here next to the builder
+/// rather than re-derived at the call site.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{MemberId, namespace};
+///
+/// let name: gix::refs::FullName = "refs/meta/reviews/deadbeef/jdc".try_into().expect("valid");
+/// assert_eq!(
+///     namespace::parse_review_ref(name.as_ref()),
+///     Some(("deadbeef".to_owned(), MemberId::new("jdc"))),
+/// );
+///
+/// let pin: gix::refs::FullName = "refs/meta/pins/reviews/deadbeef/jdc".try_into().expect("valid");
+/// assert_eq!(
+///     namespace::parse_review_ref(pin.as_ref()),
+///     Some(("deadbeef".to_owned(), MemberId::new("jdc"))),
+/// );
+/// ```
+// @relation(model.review, meta-ref.identity-binding, scope=function)
+#[must_use]
+pub fn parse_review_ref(name: &FullNameRef) -> Option<(String, MemberId)> {
+    let path = name.as_bstr().to_string();
+    let rest = path
+        .strip_prefix("refs/meta/reviews/")
+        .or_else(|| path.strip_prefix("refs/meta/pins/reviews/"))?;
+    let (target, member) = rest.split_once('/')?;
+    if target.is_empty() || member.is_empty() || member.contains('/') {
+        return None;
+    }
+    Some((target.to_owned(), MemberId::new(member)))
+}
+
+/// The `(effect, short_oid)` a result refname names, or `None` when `name`
+/// is not a well-formed `refs/meta/results/<effect>/<short-oid>` or
+/// `refs/meta/self/<member>/<effect>/<short-oid>` ref
+/// (`effect.results-writeback`, `meta-ref.inbox`).
+///
+/// The gate recomputes a result's composite key from its signed tree's
+/// effect and target fields and compares it to this parse
+/// (`model.result-identity`, `gate.identity-binding`).
 ///
 /// # Examples
 ///
 /// ```
 /// use ents_model::namespace;
 ///
-/// let name = namespace::review_pin_ref("7").expect("valid id");
-/// assert_eq!(name.as_bstr(), "refs/meta/pins/reviews/7");
+/// let name: gix::refs::FullName = "refs/meta/results/unit/abc123".try_into().expect("valid");
+/// assert_eq!(
+///     namespace::parse_result_ref(name.as_ref()),
+///     Some(("unit".to_owned(), "abc123".to_owned())),
+/// );
+///
+/// let self_run: gix::refs::FullName = "refs/meta/self/jdc/unit/abc123".try_into().expect("valid");
+/// assert_eq!(
+///     namespace::parse_result_ref(self_run.as_ref()),
+///     Some(("unit".to_owned(), "abc123".to_owned())),
+/// );
 /// ```
-// @relation(model.review-pin, meta-ref.namespace, scope=function)
-pub fn review_pin_ref(id: &str) -> Result<FullName> {
-    build(format!("refs/meta/pins/reviews/{id}"))
+// @relation(model.result-identity, meta-ref.identity-binding, scope=function)
+#[must_use]
+pub fn parse_result_ref(name: &FullNameRef) -> Option<(String, String)> {
+    let path = name.as_bstr().to_string();
+    let rest = path.strip_prefix("refs/meta/")?;
+    let tail = if let Some(canonical) = rest.strip_prefix("results/") {
+        canonical.to_owned()
+    } else if let Some(self_run) = rest.strip_prefix("self/") {
+        // refs/meta/self/<member>/<effect>/<short-oid>: drop the member.
+        let (_, effect_and_oid) = self_run.split_once('/')?;
+        effect_and_oid.to_owned()
+    } else {
+        return None;
+    };
+    let (effect, short_oid) = tail.split_once('/')?;
+    if effect.is_empty() || short_oid.is_empty() || short_oid.contains('/') {
+        return None;
+    }
+    Some((effect.to_owned(), short_oid.to_owned()))
 }
 
 /// The ref holding the effect named `name` — `refs/meta/effects/<name>`
@@ -445,8 +548,8 @@ mod tests {
             member_ref(&id).expect("valid"),
             issue_ref("42").expect("valid"),
             comment_ref("abc").expect("valid"),
-            review_ref("7").expect("valid"),
-            review_pin_ref("7").expect("valid"),
+            review_ref("deadbeef", &id).expect("valid"),
+            review_pin_ref("deadbeef", &id).expect("valid"),
             effect_ref("unit").expect("valid"),
             result_ref("unit", "abc123").expect("valid"),
             self_result_ref(&id, "unit", "abc123").expect("valid"),

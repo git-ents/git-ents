@@ -24,6 +24,7 @@ use facet::Facet;
 /// use ents_model::Effect;
 ///
 /// let effect = Effect {
+///     name: "unit".to_owned(),
 ///     trigger: "rev(refs/heads/main)".to_owned(),
 ///     toolchains: vec!["rust-stable".to_owned()],
 ///     run: "cargo nextest run".to_owned(),
@@ -32,9 +33,13 @@ use facet::Facet;
 /// let back: Effect = facet_git_tree::deserialize(&id, &store).expect("deserialize");
 /// assert_eq!(back, effect);
 /// ```
-// @relation(model.effect-definition, effect.definition, effect.deployment-property, meta-ref.typed-tree, model.extensibility, scope=file)
+// @relation(model.effect-definition, effect.definition, effect.deployment-property, meta-ref.identity-binding, meta-ref.typed-tree, model.extensibility, scope=file)
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Effect {
+    /// The effect's own name — the natural key the refname's final segment
+    /// binds to (`model.effect-definition`, `meta-ref.identity-binding`):
+    /// the gate recomputes `refs/meta/effects/<name>` from this field.
+    pub name: String,
     /// The raw `CommitQuery` text denoting the commit set this effect
     /// fires for (`query.grammar`).
     pub trigger: String,
@@ -63,6 +68,7 @@ mod tests {
     // @relation(model.effect-definition, effect.definition, meta-ref.typed-tree, scope=function, role=Verifies)
     fn effect_round_trips_through_a_tree() {
         let effect = Effect {
+            name: "unit".to_owned(),
             trigger: "rev(refs/heads/main) & results(unit, pass)".to_owned(),
             toolchains: vec!["rust-stable".to_owned(), "node-lts".to_owned()],
             run: "cargo nextest run".to_owned(),
