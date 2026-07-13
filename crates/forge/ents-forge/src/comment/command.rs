@@ -476,6 +476,124 @@ pub fn thread(
         .collect())
 }
 
+/// Every open (per `filter`) comment whose anchor lands on `target_path`
+/// in the working tree, each projected onto `buffer` — the editor's
+/// in-memory bytes for that document — when one is given, or the on-disk
+/// file otherwise (`anchor.working-tree`, `lens.working-tree`).
+///
+/// This is the per-document, buffer-aware companion to [`list_projected`]:
+/// [`list_projected`] projects every comment onto the plain on-disk working
+/// tree at once, but the editor lens holds one open document at a time and
+/// must project onto that document's unsaved buffer content when it differs
+/// from disk, so ranges track edits the user has not saved yet. Projection
+/// on the working tree never follows a rename ([`project_worktree`] consults
+/// only [`Anchor::path`]), so a comment lands on exactly its own anchored
+/// path: filtering to `target_path` here is the whole of "which comments
+/// belong to this document". A [`Projection::Deleted`] row is still
+/// returned; the caller decides whether a deleted anchor surfaces (the lens
+/// omits it, since a deleted anchor no longer projects onto the buffer).
+///
+/// The lens calls this rather than reimplementing the read-and-project loop
+/// itself (`lens.parity`): listing and projection are one mechanism shared
+/// by the CLI, the web UI, and the editor.
+///
+/// # Errors
+///
+/// Propagates a ref-store, object read, repository open, or projection
+/// failure.
+// @relation(lens.parity, lens.working-tree, model.comment-state, scope=function)
+pub fn list_for_document(
+    refs: &dyn RefStoreRead,
+    objects: &impl Find,
+    repo_path: &std::path::Path,
+    target_path: &str,
+    buffer: Option<&[u8]>,
+    filter: &ListFilter,
+) -> Result<Vec<Listed>> {
+    let repo = gix::open(repo_path)?;
+    let mut out = Vec::new();
+    for (id, comment) in list(refs, objects)? {
+        if let Some(state) = &filter.state
+            && comment.state != *state
+        {
+            continue;
+        }
+        if let Some(context) = &filter.context
+            && comment.context.as_ref() != Some(context)
+        {
+            continue;
+        }
+        let Some(raw) = &comment.anchor else {
+            continue;
+        };
+        let anchor = facet_git_tree::deserialize::<Anchor>(&raw.oid(), objects)?;
+        if anchor.path != target_path {
+            continue;
+        }
+        let projection = project_worktree(&repo, &anchor, buffer)?;
+        out.push(Listed {
+            id,
+            comment,
+            anchor: Some(anchor),
+            projection: Some(projection),
+        });
+    }
+    Ok(out)
+}
+
+/// The thread rooted at `root_id` (`model.comment-thread`): the comment
+/// with that id, plus every reply whose parent chain reaches it — the
+/// anchored-comment counterpart to [`thread`], which aggregates by
+/// `context` instead. Rows come back sorted by id, root and replies alike;
+/// the `parent` field reconstructs the tree.
+///
+/// The lens shows a code lens per anchored root comment and, on hover,
+/// the whole conversation attached to it (`lens.hover`); an anchored root
+/// need carry no `context`, so [`thread`]'s context aggregation cannot find
+/// its replies — this seeds the same parent-closure walk from the root id
+/// directly. Reads back through the legacy-shape fallback like every other
+/// read here (`meta-ref.migration`).
+///
+/// # Errors
+///
+/// Propagates a ref-store or object read failure.
+// @relation(model.comment-thread, lens.hover, scope=function)
+pub fn thread_of(
+    refs: &dyn RefStoreRead,
+    objects: &impl Find,
+    root_id: &str,
+) -> Result<Vec<(String, Comment)>> {
+    let all = list(refs, objects)?;
+    let mut included: std::collections::BTreeMap<&str, &Comment> = all
+        .iter()
+        .filter(|(id, _comment)| id == root_id)
+        .map(|(id, comment)| (id.as_str(), comment))
+        .collect();
+    // Close over parent links exactly as `thread` does, but seeded with the
+    // root id rather than a context: a reply names a comment already in the
+    // thread, transitively.
+    loop {
+        let mut grew = false;
+        for (id, comment) in &all {
+            if included.contains_key(id.as_str()) {
+                continue;
+            }
+            if let Some(parent) = &comment.parent
+                && included.contains_key(parent.as_str())
+            {
+                included.insert(id.as_str(), comment);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    Ok(included
+        .into_iter()
+        .map(|(id, comment)| (id.to_owned(), comment.clone()))
+        .collect())
+}
 /// Validate a `model.comment-context` value: the canonical ref path below
 /// `refs/meta/` of the entity the comment belongs to, such as
 /// `issues/<id>` — checked by building the full refname it names.

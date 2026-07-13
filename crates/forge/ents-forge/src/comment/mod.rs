@@ -10,6 +10,7 @@ mod entity;
 
 pub use cli::CommentAction;
 pub use command::{
-    ListFilter, Listed, NewComment, add, list, list_projected, reopen, reply, resolve, show, thread,
+    ListFilter, Listed, NewComment, add, list, list_for_document, list_projected, reopen, reply,
+    resolve, show, thread, thread_of,
 };
 pub use entity::Comment;
