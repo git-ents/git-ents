@@ -225,7 +225,7 @@ the coverage dashboard is a later call.
   back-compat reader), working-tree capture and projection in
   `ents-anchor` (`anchor.working-tree`), the
   Review entity plus its retention pin ref (`model.review-pin` —
-  `refs/meta/pins/reviews/<id>`, an empty-tree signed commit whose
+  `refs/meta/pins/reviews/<target>/<member>`, an empty-tree signed commit whose
   parents include the reviewed commit; verify the gate's tip-signed and
   fast-forward checks accept the merge-shaped pin advance), and
   porcelain — `comment reply/resolve/reopen`,
@@ -261,6 +261,35 @@ the coverage dashboard is a later call.
   commit pages (`model.review`), reply/resolve on the existing comment
   views. Reuses the registry-driven meta rail and session/CSRF machinery
   already in place.
+
+| kernel identity binding (`ents-model`, `ents-gate`, `ents-receive`,
+  `ents-sync`, `ents-effect`, `ents-testutil`)
+| 10
+| High
+| fable
+| One atomic migration — the kernel cannot build half-converted. Retire
+  `trailer.rs` (`Advance-ref` and the never-used `Schema-Version`) in
+  favor of `meta-ref.identity-binding`: the gate recomputes each refname
+  from signed content — the parentless-roots walk for hash-identified
+  namespaces (never applied to pins, whose ancestry reaches code
+  history), natural-key tree fields (`Member` and `Effect` gain their
+  name field), composite review segments, and result trees gaining
+  effect + target (`model.result-identity`, closing a result-forgery
+  replay). Strict genesis decode plus the pairwise schema-disjointness
+  test; `gate.owner-mutation`; redaction vouching; `propose_*` grows the
+  sign-then-name genesis flow (the ref named from the signed commit's
+  own oid — no circularity, since no commit names its own ref anymore).
+
+| forge and surface identity migration (`ents-forge`, `git-ents`,
+  `ents-web`, `ents-lens`, skills)
+| 10
+| Medium
+| sonnet
+| `uuid` leaves the workspace: comment and issue ids are genesis commit
+  oids, reviews move to the composite `reviews/<target>/<member>` key
+  with re-review's fast-forward advance now a reachable CLI path;
+  porcelain and web abbreviate ids the way git abbreviates oids; lens
+  and agent skills updated for the id format.
 |===
 
 == Phase gates
@@ -313,6 +342,18 @@ the coverage dashboard is a later call.
   back-compat reader is kept — `meta-ref.migration`'s forward rewrite
   applies whenever data actually needs carrying, not a permanent legacy
   code path.
+* *Phase 10 exit*: identity is derivation — no minted id and no binding
+  trailer exists anywhere in the workspace. The doppelgänger replay (a
+  signed mutation commit proposed as the genesis of a new entity) and
+  the result replay (a signed `pass` proposed for a different effect or
+  commit) are refused by tests driving `receive`
+  (`gate.identity-binding`, `model.result-identity`); entity structs
+  prove pairwise disjoint under strict decode; a comment created,
+  replied to, and resolved, and a commit reviewed then re-reviewed
+  (the pin advancing fast-forward), round-trip through CLI and web
+  under genesis-oid and composite ids (`model.comment`,
+  `model.review`). Same clean-break rule as phase 9: no legacy reader,
+  ids regenerate with the data.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —

@@ -98,14 +98,59 @@ A tree MUST stay a pure representation of its struct; it MUST NOT carry
 a version-marker entry.
 --
 
-[role="requirement", id="meta-ref.trailers"]
-.Reserved Commit Trailers
+[role="requirement", id="meta-ref.identity-binding"]
+.The Refname Is a Function of Signed Content
 --
-Ref-level metadata that is not entity content MUST live in the mutation
-commit's trailers, never inside the tree (<<meta-ref.typed-tree>>).
-Two trailers are reserved: `Schema-Version:`, for explicit encoding
-detection if it is ever needed, and `Advance-ref:`, for binding the commit
-to the refname it was authored for.
+A meta-ref's name MUST be a total function of its signed content, and
+the gate MUST recompute that function and refuse a mismatch
+(<<gate.identity-binding>>); no commit-message trailer or other
+side channel participates in the binding, and no reserved trailer
+exists.
+The function, by namespace:
+
+* Singleton state binds by its fixed name: `refs/meta/config`,
+  `refs/meta/account`.
+* A natural-key entity binds by a designated tree field equal to the
+  refname's final segment: a member's id, an effect's name, a
+  toolchain's name (<<model.member-identity>>,
+  <<model.effect-definition>>, <<model.toolchain>>).
+* A hash-identified entity binds by genesis: the refname's final
+  segment MUST equal the oid of the entity's genesis commit, and every
+  parentless commit reachable from the proposed tip MUST be that
+  genesis — comments and issues (<<model.comment>>, <<model.issue>>).
+  The reachability form, not a creation-time-only check, is what makes
+  replaying a signed mutation commit as the genesis of a doppelgänger
+  entity impossible, and it holds across the merge commits divergence
+  resolution creates (<<gate.same-actor-divergence>>).
+* A composite-keyed entity binds by genesis fields and signer: a
+  review's `reviews/<target>/<member>` segments MUST equal its genesis
+  tree's target field and its genesis signer's member id
+  (<<model.review>>); a result's `results/<effect>/<short-oid>`
+  segments MUST derive from its own tree's effect and target fields
+  (<<model.result-identity>>), and a self-run's member segment MUST
+  additionally equal its signer (<<meta-ref.inbox>>).
+* A retention pin binds by mirroring its entity's segments, with
+  parents that include the retained commit (<<model.review-pin>>).
+  A pin's ancestry deliberately reaches into code history, so the
+  parentless-roots walk above MUST NOT be applied to pins.
+* An inbox ref binds by its owner segment equal to the signer
+  (<<meta-ref.inbox>>), with the canonical suffix bound exactly as its
+  canonical namespace binds.
+
+Who authored a state, and when, MUST come from the commit itself — its
+header and its signature — never from duplicated tree fields: each
+datum has exactly one signed home, and a tree field participates in the
+binding only where the namespace's function above names it.
+Within a meta-ref's history, a commit parent means exactly one thing —
+the prior state of the same entity — with the pin's retained-commit
+parents as the sole exception (<<meta-ref.namespace>>); a cross-entity
+relationship MUST be tree data (a reply's parent field, a comment's
+context field), never a parent edge.
+A genesis commit is frozen by the identity derived from it, so the
+struct of a hash-identified or composite-keyed entity MUST evolve
+additively only — new fields optional, required fields never added,
+renamed, or removed; <<meta-ref.migration>> governs the remaining
+namespaces.
 --
 
 === Tip Invariant and Migration

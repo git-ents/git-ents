@@ -54,7 +54,7 @@ configuration without affecting the lenses.
 --
 Hovering a projected comment's range MUST return the full thread —
 bodies, states, and authorship read from each ref's mutation commit
-chain (<<meta-ref.trailers>>) — rendered as markup, so the complete
+chain (<<meta-ref.identity-binding>>) — rendered as markup, so the complete
 conversation is readable without leaving the buffer.
 --
 

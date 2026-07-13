@@ -22,12 +22,41 @@ saw is an audit function over the deployment's out-of-scope op log, not
 a gate path.
 --
 
-[role="requirement", id="gate.refname-binding"]
-.Refname Binding
+[role="requirement", id="gate.identity-binding"]
+.Identity Binding
 --
-The commit's `Advance-ref:` trailer MUST match the refname being updated.
+The refname being updated MUST be recomputable from the proposed tip's
+signed content, per namespace exactly as <<meta-ref.identity-binding>>
+tabulates; a mismatch MUST refuse.
 Without this check a signed commit could be replayed as the tip of a
-different meta-ref than the one its author signed for.
+different meta-ref than the one its author created it for — including
+a signed pass replayed as the result of a different effect or commit,
+which is why a result's effect and target are tree fields
+(<<model.result-identity>>).
+The creation of a hash-identified entity MUST strictly decode as its
+namespace's entity type, an unknown tree entry refusing, so one signed
+genesis can never be admitted under two namespaces; entity structs
+MUST stay pairwise disjoint under this decode, a property held by test
+rather than by a stored marker (<<meta-ref.typed-tree>>).
+When an object the binding needs is withheld by redaction, the binding
+MUST be vouched by the admin-signed redaction record instead of
+recomputed, and a redacted object MUST NOT be re-admitted
+(<<receive.redaction-ingest>>, <<model.redaction>>).
+--
+
+[role="requirement", id="gate.owner-mutation"]
+.Ownership Keys Mutation
+--
+Advancing a hash-identified entity's ref MUST be authorized only for
+the member whose signature its genesis carries — ownership intrinsic
+to the id, which is the genesis commit's oid — or for an
+admin-registered member; a review ref MUST advance only under the
+signature of the member its refname names (<<model.review>>).
+Creation stays provenance-keyed exactly as <<model.member-provenance>>
+routes it: a self-attested member creates and mutates through its own
+inbox, adopted onto the canonical ref by merge
+(<<gate.adoption-merge>>), which satisfies the parentless-roots walk
+because the contributor's genesis remains the history's sole root.
 --
 
 [role="requirement", id="gate.fast-forward"]

@@ -31,7 +31,9 @@ signed commit's authority ultimately traces back to a member entity.
 [role="requirement", id="model.member-identity"]
 .Member Identity and Enrollment
 --
-A Member entity MUST carry the member's public key.
+A Member entity MUST carry the member's public key, and its member id —
+the final segment of its refname, which binds to this field
+(<<meta-ref.identity-binding>>).
 Enrollment MUST occur as a signed commit written to the member's ref: the
 member becomes forge state the moment that commit lands, with no user
 database separate from the repository.
@@ -94,11 +96,12 @@ an anchor into content (<<anchor.definition>>), a context entity
 or any combination — a comment about nothing MUST be refused at creation
 by the writing tool, though never by the gate, which stays
 content-agnostic (<<model.extensibility>>).
-A comment's identity MUST be derived from a hash of its genesis content
-and MUST NEVER change afterward — edits advance the ref, they do not
-rename it.
+A comment's identity MUST be the oid of its genesis commit — git's own
+hash over the genesis tree, author, timestamp, and signature — and MUST
+NEVER change afterward: edits advance the ref, they do not rename it,
+and the refname binds to this genesis (<<meta-ref.identity-binding>>).
 Author and timestamp MUST come from the mutation commit chain, never from
-fields stored in the tree (<<meta-ref.trailers>>).
+fields stored in the tree (<<meta-ref.identity-binding>>).
 Anchor resolution, projection onto other revisions, and reachability are
 specified in `anchor.adoc` and apply to a Comment's anchor unchanged.
 --
@@ -114,7 +117,7 @@ stays auditable — and reopening MUST be supported the same way.
 Custom states beyond `open` and `resolved` are schema, not platform
 features, exactly as for issues (<<model.issue>>).
 Who changed a state, and when, MUST come from the mutation commit chain
-(<<meta-ref.trailers>>), never from stored fields.
+(<<meta-ref.identity-binding>>), never from stored fields.
 --
 
 [role="requirement", id="model.comment-context"]
@@ -149,6 +152,11 @@ in the thread; no comment stores a list of its replies.
 An Issue entity MUST be a typed tree under its own ref in
 `refs/meta/issues/*`, one ref per issue (<<meta-ref.granularity>>),
 written, gated, synced, and audited exactly like a comment.
+An issue's identity MUST be the oid of its genesis commit, exactly as a
+comment's (<<model.comment>>, <<meta-ref.identity-binding>>) — no
+sequential counter exists, because a counter is a coordination point
+and issues are created offline and concurrently; porcelain abbreviates
+ids the way git abbreviates commit oids.
 An Issue entity MUST carry a title, a body, a state, assignees, and
 labels as struct fields; multiple assignees and custom states are
 schema, not platform features.
@@ -161,15 +169,21 @@ typed-tree change, not a platform request (<<model.extensibility>>).
 [role="requirement", id="model.review"]
 .Review Is a Verdict Plus a Context
 --
-A Review entity MUST be a typed tree under its own ref in
-`refs/meta/reviews/<id>`, one ref per review (<<meta-ref.granularity>>),
-written, gated, synced, and audited exactly like a comment.
+A Review entity MUST be a typed tree under its own ref at
+`refs/meta/reviews/<target>/<member>`, where `<target>` is the oid of
+the first commit the review judged and `<member>` is the reviewer's
+member id — a composite natural key (<<meta-ref.identity-binding>>):
+one review thread per (target, reviewer), all reviews of a commit
+enumerable by ref prefix, no minted id anywhere.
 Every review MUST occupy exactly two refs: the entity ref above, and a
-retention pin at `refs/meta/pins/reviews/<id>` anchoring the reviewed
-content itself (<<model.review-pin>>).
-A Review MUST carry the id of the most recently reviewed commit as a
-plain data field, a verdict, and a body; reading the field MUST NOT
-require the pin ref — the pin anchors, the entity describes.
+retention pin at `refs/meta/pins/reviews/<target>/<member>` anchoring
+the reviewed content itself (<<model.review-pin>>).
+A Review MUST carry the oid of the most recently reviewed commit as a
+plain data field — at genesis this equals the refname's `<target>`
+segment and binds it; re-reviewing a descendant advances the field
+while the refname stays keyed by genesis — plus a verdict and a body;
+reading the field MUST NOT require the pin ref: the pin anchors, the
+entity describes.
 `approve` and `request-changes` are conventions, not an enum, because
 custom verdicts are schema, not platform features
 (<<model.extensibility>>).
@@ -178,14 +192,17 @@ their context (<<model.comment-context>>), anchored into the reviewed
 code where they concern specific lines (<<anchor.definition>>); the
 review itself MUST NOT store a list of its comments.
 Reviewer and timestamp MUST come from the mutation commit chain
-(<<meta-ref.trailers>>).
+(<<meta-ref.identity-binding>>); the reviewer needs no tree field,
+being both a refname segment and the signer the gate checks
+(<<gate.owner-mutation>>).
 --
 
 [role="requirement", id="model.review-pin"]
 .The Review Pin Anchors the Reviewed Content
 --
-A review's pin ref, `refs/meta/pins/reviews/<id>` — the entity's own
-canonical suffix prefixed the same way <<meta-ref.inbox>> prefixes one —
+A review's pin ref, `refs/meta/pins/reviews/<target>/<member>` — the
+entity's own canonical suffix prefixed the same way <<meta-ref.inbox>>
+prefixes one —
 MUST keep the reviewed content reachable: its tip is a signed commit
 authored by the reviewer whose parents include the reviewed commit, so
 that commit and its ancestry survive force-push, branch deletion, and gc
@@ -207,11 +224,12 @@ tree-is-the-entity shape.
 [role="requirement", id="model.effect-definition"]
 .Effect Definition
 --
-An Effect entity MUST carry: a trigger, a `CommitQuery` denoting the set
-of commits the effect fires for; the toolchains its run requires; and a
-run command.
+An Effect entity MUST carry: its own name, the final segment of its
+refname, which binds to this field (<<meta-ref.identity-binding>>); a
+trigger, a `CommitQuery` denoting the set of commits the effect fires
+for; the toolchains its run requires; and a run command.
 Its results refname is derived from the effect's own name
-(<<effect.results-writeback>>), never stored as a field.
+(<<effect.results-writeback>>), never stored as a separate field.
 It MUST NOT carry executor, sandbox, or retry fields; how an effect runs
 is a deployment property (<<effect.deployment-property>>).
 --
@@ -224,6 +242,23 @@ is a deployment property (<<effect.deployment-property>>).
 A Result's status MUST be one of `pass`, `fail`, or `error`.
 When each status is written — and when nothing is written at all — is
 run semantics, specified in <<effect.result-taxonomy>>.
+--
+
+[role="requirement", id="model.result-identity"]
+.A Result Names What It Judged
+--
+A Result entity MUST carry the effect's name and the full oid of the
+commit the run judged as tree fields, from which its refname's
+`<effect>` and `<short-oid>` segments derive
+(<<meta-ref.identity-binding>>).
+Without these fields the refname is the only thing tying a signed
+status to a run, and a signed `pass` could be replayed as the result
+of any effect on any commit; a result MUST mean something with the
+refname stripped away.
+The fields are not parent edges: a result ref's parents stay prior
+states of the same result (<<meta-ref.identity-binding>>'s
+one-meaning-per-edge rule), and a result MUST NOT retain the judged
+commit's ancestry the way a pin does (<<model.review-pin>>).
 --
 
 === Toolchain

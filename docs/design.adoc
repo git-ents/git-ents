@@ -27,7 +27,7 @@ Local and hosted do not share a push path; they share `receive`.
 Mutations are author-signed commits, not push certificates.
 A push cert signs a transition and evaporates at the transport layer; a commit signature replicates with the repo and verifies in every clone, forever.
 Verification evidence is repository state, like everything else.
-Refname binding lives in an `Advance-ref:` trailer; anti-replay is fast-forward-plus-CAS, with the parent hash as the freshness binding.
+Refname binding is recomputed from signed content — every meta-ref's name is a total function of what it holds (a genesis commit's oid, a natural-key tree field, a composite of fields and signer); anti-replay is fast-forward-plus-CAS, with the parent hash as the freshness binding.
 
 Because writing and verifying are separated, local is genuinely offline-first: the local store accepts any write and the gate merely annotates.
 You can author while unenrolled, work against an unfetched member list, and accumulate meta-refs the canonical store would reject.
