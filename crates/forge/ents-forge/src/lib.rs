@@ -1,9 +1,10 @@
-//! The forge domain: the [`Issue`] and [`comment::Comment`] entities, and
-//! the `comment` command's business logic — kernel-independent, unlike
-//! `ents-model`'s remaining entities, because a comment command needs
-//! `ents-anchor` (to capture and project a code anchor) and
-//! `ents-receive` (to propose the mutation), neither of which a purely
-//! declarative vocabulary crate like `ents-model` may depend on.
+//! The forge domain: the [`Issue`], [`comment::Comment`], and
+//! [`review::Review`] entities, and the command business logic driving
+//! each — kernel-independent, unlike `ents-model`'s remaining entities,
+//! because a comment or review command needs `ents-anchor` (to capture and
+//! project a code anchor) and `ents-receive` (to propose the mutation),
+//! neither of which a purely declarative vocabulary crate like
+//! `ents-model` may depend on.
 //!
 //! This crate sits *above* the kernel in the dependency graph, not inside
 //! it: `ents-model`, `ents-anchor`, `ents-gate`, `ents-query`,
@@ -11,7 +12,7 @@
 //! never depend on `ents-forge` (verified by `grep -rn ents-forge
 //! crates/kernel crates/substrate` finding nothing) — `ents-forge` depends
 //! on them, never the reverse. `git-ents` (the CLI) depends on this crate
-//! and mounts its comment command through a thin wrapper that only adds
+//! and mounts each command through a thin wrapper that only adds
 //! signer/actor construction and CLI-facing error rendering
 //! (`crate::mutate::outcome_to_result` on the CLI side).
 //!
@@ -19,18 +20,21 @@
 //!
 //! From `docs/spec/model.adoc` and `docs/spec/meta-ref.adoc`:
 //!
-//! - `model.issue` — [`Issue`].
+//! - `model.issue` — [`Issue`] and the command layer around it
+//!   ([`issue::new`], [`issue::edit`], [`issue::list`], [`issue::show`]).
 //! - `model.comment`, `model.comment-state`, `model.comment-context`,
 //!   `model.comment-thread` — [`comment::Comment`] and the command layer
 //!   around it ([`comment::add`], [`comment::reply`],
 //!   [`comment::resolve`]/[`comment::reopen`], [`comment::thread`]).
-//! - `meta-ref.migration` — pre-broadening comment trees still read back
-//!   through the legacy fallback, and any mutation rewrites them under
-//!   the current struct on top of the old tip.
-//! - `meta-ref.granularity` — one ref per issue/comment
-//!   (`refs/meta/issues/<id>`, `refs/meta/comments/<id>`); see
-//!   [`comment::add`] for how a comment's id is generated locally rather
-//!   than derived from the entity itself.
+//! - `model.review`, `model.review-pin` — [`review::Review`] and
+//!   [`review::new`] (writes both the entity ref and the retention pin),
+//!   [`review::list`], [`review::show`] (reusing [`comment::thread`] for
+//!   the review's discussion rather than a second aggregation).
+//! - `meta-ref.granularity` — one ref per issue/comment/review
+//!   (`refs/meta/issues/<id>`, `refs/meta/comments/<id>`,
+//!   `refs/meta/reviews/<id>`); see [`comment::add`] and [`review::new`]
+//!   for how an id is generated locally rather than derived from the
+//!   entity itself.
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.
 //! - `anchor.definition`, `anchor.projection`, `anchor.working-tree` —
 //!   [`comment::add`], [`comment::show`], and [`comment::list_projected`],
@@ -81,9 +85,10 @@
 //! ```
 
 mod error;
-mod issue;
 
 pub mod comment;
+pub mod issue;
+pub mod review;
 
 pub use error::{Error, Result};
 pub use issue::Issue;
@@ -95,13 +100,14 @@ mod tests {
 
     use super::*;
 
-    /// The two entities that moved from `ents-model` to this crate keep the
-    /// same `model.extensibility` guarantee `ents_model`'s own shape test
-    /// pins for its remaining entities: each type's reflected
-    /// [`facet::Shape::type_identifier`] is exactly its Rust struct name.
+    /// Every entity this crate owns keeps the same `model.extensibility`
+    /// guarantee `ents_model`'s own shape test pins for its remaining
+    /// entities: each type's reflected [`facet::Shape::type_identifier`]
+    /// is exactly its Rust struct name.
     #[rstest]
     #[case::comment(comment::Comment::SHAPE.type_identifier, "Comment")]
     #[case::issue(Issue::SHAPE.type_identifier, "Issue")]
+    #[case::review(review::Review::SHAPE.type_identifier, "Review")]
     // @relation(model.extensibility, scope=function, role=Verifies)
     fn every_entity_shape_name_tracks_its_struct_declaration(
         #[case] reflected: &str,
