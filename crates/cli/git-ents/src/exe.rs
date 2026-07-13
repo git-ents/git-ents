@@ -223,7 +223,9 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                     let _ = writeln!(
                         out,
                         "{}\t{}\t{}",
-                        row.id, row.comment.state, row.comment.body
+                        ents_forge::abbreviate_id(&row.id),
+                        row.comment.state,
+                        row.comment.body
                     );
                 }
             }
@@ -287,7 +289,13 @@ fn run_issue(action: IssueAction, out: &mut impl std::io::Write) -> Result<()> {
     match action {
         IssueAction::List => {
             for (id, issue) in commands::issue::list(&root)? {
-                let _ = writeln!(out, "{id}\t{}\t{}", issue.state, issue.title);
+                let _ = writeln!(
+                    out,
+                    "{}\t{}\t{}",
+                    ents_forge::abbreviate_id(&id),
+                    issue.state,
+                    issue.title
+                );
             }
         }
         IssueAction::Show { id } => {
@@ -342,24 +350,32 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
                 verdict,
                 body,
             };
-            let id = commands::review::new(&root, new, key)?;
-            let _ = writeln!(out, "reviewed {id}");
+            let target = commands::review::new(&root, new, key)?;
+            let _ = writeln!(out, "reviewed {}", ents_forge::abbreviate_id(&target));
         }
         ReviewAction::List { target } => {
-            for (id, review) in commands::review::list(&root, target)? {
-                let _ = writeln!(out, "{id}\t{}\t{}", review.commit(), review.verdict);
+            for ((review_target, member), review) in commands::review::list(&root, target)? {
+                let _ = writeln!(
+                    out,
+                    "{}\t{member}\t{}\t{}",
+                    ents_forge::abbreviate_id(&review_target),
+                    review.target(),
+                    review.verdict
+                );
             }
         }
-        ReviewAction::Show { id } => {
-            let (review, thread) = commands::review::show(&root, &id)?;
-            let _ = writeln!(out, "commit: {}", review.commit());
+        ReviewAction::Show { target, member } => {
+            let (review, thread) = commands::review::show(&root, &target, &member)?;
+            let _ = writeln!(out, "target: {}", review.target());
             let _ = writeln!(out, "verdict: {}", review.verdict);
             let _ = writeln!(out, "body: {}", review.body);
             for (comment_id, comment) in thread {
                 let _ = writeln!(
                     out,
-                    "comment {comment_id}\t{}\t{}",
-                    comment.state, comment.body
+                    "comment {}\t{}\t{}",
+                    ents_forge::abbreviate_id(&comment_id),
+                    comment.state,
+                    comment.body
                 );
             }
         }

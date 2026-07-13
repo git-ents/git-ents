@@ -52,7 +52,7 @@ where
         .route("/commit/{oid}", get(pages::commits::show::<O>))
         .route("/commit/{oid}/review", post(pages::commits::review::<O>))
         .route(
-            "/reviews/{id}/comment",
+            "/reviews/{target}/{member}/comment",
             post(pages::commits::review_comment::<O>),
         )
         .route("/files", get(pages::files::root::<O>))

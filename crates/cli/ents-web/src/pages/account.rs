@@ -157,7 +157,20 @@ fn read<O: Find>(state: &AppState<O>) -> Result<Option<Account>> {
     )?))
 }
 
-fn resolve_member_by_key<O: Find>(state: &AppState<O>, pubkey: &str) -> Result<MemberId> {
+/// Resolve `pubkey` to the enrolled member whose stored key matches it, or
+/// [`Error::NotFound`] when none does — shared with
+/// `crate::pages::commits::review`, which needs the same "which member is
+/// this session" lookup to key a review's composite
+/// `refs/meta/reviews/<target>/<member>` ref (`model.review`).
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if no enrolled member's key matches `pubkey`;
+/// otherwise propagates a ref-store or object read failure.
+pub(crate) fn resolve_member_by_key<O: Find>(
+    state: &AppState<O>,
+    pubkey: &str,
+) -> Result<MemberId> {
     for entry in state.refs.iter_prefix("refs/meta/member/")? {
         let (name, tip) = entry?;
         let path = name.as_bstr().to_string();

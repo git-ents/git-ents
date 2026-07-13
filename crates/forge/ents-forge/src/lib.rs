@@ -30,11 +30,13 @@
 //!   [`review::new`] (writes both the entity ref and the retention pin),
 //!   [`review::list`], [`review::show`] (reusing [`comment::thread`] for
 //!   the review's discussion rather than a second aggregation).
-//! - `meta-ref.granularity` — one ref per issue/comment/review
-//!   (`refs/meta/issues/<id>`, `refs/meta/comments/<id>`,
-//!   `refs/meta/reviews/<id>`); see [`comment::add`] and [`review::new`]
-//!   for how an id is generated locally rather than derived from the
-//!   entity itself.
+//! - `meta-ref.granularity`, `meta-ref.identity-binding` — one ref per
+//!   issue/comment (`refs/meta/issues/<id>`, `refs/meta/comments/<id>`,
+//!   `<id>` the oid of the entity's own genesis commit), and one ref per
+//!   `(target, reviewer)` composite key for a review
+//!   (`refs/meta/reviews/<target>/<member>`); see [`comment::add`],
+//!   [`issue::new`], and [`review::new`] for how each id derives from the
+//!   signed content itself rather than being minted.
 //! - `meta-ref.typed-tree` — every entity module's round-trip test.
 //! - `anchor.definition`, `anchor.projection`, `anchor.working-tree` —
 //!   [`comment::add`], [`comment::show`], and [`comment::list_projected`],
@@ -92,6 +94,47 @@ pub mod review;
 
 pub use error::{Error, Result};
 pub use issue::Issue;
+
+/// The genesis oid a comment or issue ref's name binds to — the final
+/// segment of `refs/meta/comments/<id>` or `refs/meta/issues/<id>`
+/// (`meta-ref.identity-binding`), read back from the
+/// [`gix::refs::FullName`] `ents_receive::propose_genesis` returns rather
+/// than tracked separately, since the ref name and the id are the same
+/// string by construction. Shared by [`comment::add`], [`comment::reply`],
+/// and [`issue::new`] rather than duplicated per module, unlike this
+/// crate's accepted small `commit_tree` copies: this one is a single
+/// one-liner with no domain logic to diverge per caller.
+pub(crate) fn genesis_id(ref_name: &gix::refs::FullName) -> String {
+    ref_name
+        .as_bstr()
+        .to_string()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Abbreviate a genesis-oid entity id (`model.comment`, `model.issue`) to a
+/// short prefix for display — the same seven-hex-character length git's own
+/// short object id uses (`model.issue`: "porcelain abbreviates ids the way
+/// git abbreviates commit oids"). The full id, never this, belongs in a
+/// refname or in machine-readable output (`lens.parity`).
+///
+/// # Examples
+///
+/// ```
+/// use ents_forge::abbreviate_id;
+///
+/// assert_eq!(
+///     abbreviate_id("0123456789abcdef0123456789abcdef01234567"),
+///     "0123456"
+/// );
+/// assert_eq!(abbreviate_id("abc"), "abc");
+/// ```
+#[must_use]
+pub fn abbreviate_id(id: &str) -> &str {
+    id.get(..7).unwrap_or(id)
+}
 
 #[cfg(test)]
 mod tests {

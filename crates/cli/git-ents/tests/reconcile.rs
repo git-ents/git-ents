@@ -18,7 +18,7 @@
 
 mod common;
 
-use ents_model::Effect;
+use ents_model::{Effect, ResultRecord, Status};
 use git_ents::root::HostedRoot;
 use gix_object::{Commit, Kind, Write as _};
 use gix_ref_store::{Expected, RefEdit, RefStore};
@@ -65,6 +65,7 @@ fn advance_branch(root: &HostedRoot, refname: &str, seconds: i64) -> gix_hash::O
 fn define_effect(root: &HostedRoot, name: &str, trigger: &str) {
     let tree = facet_git_tree::serialize_into(
         &Effect {
+            name: name.to_owned(),
             trigger: trigger.to_owned(),
             toolchains: vec![],
             run: "true".to_owned(),
@@ -158,10 +159,15 @@ fn reconciliation_excludes_already_resulted_commits() {
     let oid = advance_branch(&root, "refs/heads/main", 100);
 
     // Record a result directly (bypassing `write_result`'s signing
-    // requirement — this test only needs the ref to exist).
+    // requirement) — a full `ResultRecord`, not a bare `Status`, since
+    // `Evaluator::outstanding` strictly decodes the results tree as one
+    // (`model.result-identity`).
     let short = &oid.to_string()[..12];
-    let status_tree = facet_git_tree::serialize_into(&ents_model::Status::Pass, &root.objects)
-        .expect("serialize");
+    let status_tree = facet_git_tree::serialize_into(
+        &ResultRecord::new("unit", oid, Status::Pass),
+        &root.objects,
+    )
+    .expect("serialize");
     let commit = gix_object::Commit {
         tree: status_tree,
         parents: Default::default(),

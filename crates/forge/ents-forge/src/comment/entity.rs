@@ -17,7 +17,7 @@ use gix_object::Find;
 /// tool ([`Comment::is_about_nothing`], enforced in [`super::add`]), never
 /// by the gate, which stays content-agnostic. Author and timestamp come
 /// from the mutation commit chain rather than a stored field
-/// (`meta-ref.trailers`) — `Comment` therefore has no author or timestamp
+/// (`meta-ref.identity-binding`) — `Comment` therefore has no author or timestamp
 /// field, and no reviewer/resolver field either: who changed [`Comment::state`],
 /// and when, is the mutation chain's answer too (`model.comment-state`).
 ///
@@ -67,7 +67,7 @@ pub struct Comment {
     /// comment about a context entity or a parent comment only.
     pub anchor: Option<RawTree>,
     /// The canonical ref path below `refs/meta/` of the entity this
-    /// comment belongs to, such as `issues/<id>` or `reviews/<id>`
+    /// comment belongs to, such as `issues/<id>` or `reviews/<target>/<member>`
     /// (`model.comment-context`) — an entity's thread is an aggregation
     /// query over comments naming it, never a list the entity stores.
     pub context: Option<String>,

@@ -45,7 +45,7 @@ pub fn add(
 ) -> Result<()> {
     let signer = signer(root, key)?;
     let pubkey = pubkey.unwrap_or_else(|| signer.public_openssh());
-    let member = Member::new(pubkey, Provenance::AdminRegistered);
+    let member = Member::new(MemberId::new(username), pubkey, Provenance::AdminRegistered);
     let name = namespace::member_ref(&MemberId::new(username))?;
     let identity = Identity {
         actor: actor(&signer),

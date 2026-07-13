@@ -1,8 +1,9 @@
 //! The `review` command's business logic: review a commit (`model.review`),
 //! writing both the review's own entity ref and its retention pin
-//! (`model.review-pin`), list and read reviews back, and surface a
-//! review's discussion thread by reusing [`crate::comment::thread`] rather
-//! than duplicating context aggregation.
+//! (`model.review-pin`), advancing the same composite-keyed ref on
+//! re-review rather than minting a new one, list and read reviews back,
+//! and surface a review's discussion thread by reusing
+//! [`crate::comment::thread`] rather than duplicating context aggregation.
 //!
 //! Generalized over the same trait-object/generic seam
 //! `crate::comment::command` uses (`&dyn RefStore`/`RefStoreRead`,
@@ -10,6 +11,7 @@
 //! composition root wires the concrete types and calls these functions,
 //! never the other way around (`lens.parity`).
 
+use ents_model::MemberId;
 use ents_receive::{Identity, Mode, Outcome, propose_entity_with_pin};
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind, Write};
@@ -48,6 +50,13 @@ fn commit_tree(objects: &impl Find, oid: ObjectId) -> Result<ObjectId> {
 /// the repository at `repo_path`.
 fn resolve_commit(repo_path: &std::path::Path, rev: &str) -> Result<ObjectId> {
     let repo = gix::open(repo_path)?;
+    resolve_in(&repo, rev)
+}
+
+/// [`resolve_commit`], against an already-open `repo` — [`new`] already
+/// holds one open (to check re-review ancestry), so it resolves its target
+/// through this rather than opening the repository a second time.
+fn resolve_in(repo: &gix::Repository, rev: &str) -> Result<ObjectId> {
     let resolve = || Error::InvalidArgument(format!("cannot resolve {rev} to a commit"));
     let id = repo
         .rev_parse_single(rev)
@@ -60,13 +69,64 @@ fn resolve_commit(repo_path: &std::path::Path, rev: &str) -> Result<ObjectId> {
     Ok(id)
 }
 
-/// Read the [`Review`] at `id`'s ref tip, or [`Error::NotFound`] when no
-/// such ref exists.
-fn review_at(refs: &dyn RefStoreRead, objects: &impl Find, id: &str) -> Result<Review> {
-    let ref_name = ents_model::namespace::review_ref(id)?;
+/// Whether `ancestor` is `descendant` itself, or reachable from it by parent
+/// edges — checked via the open repository's own merge-base machinery
+/// rather than a bespoke walk. A `false` result on a lookup failure (no
+/// shared history at all) is the correct answer, not an error to propagate:
+/// it just means this is not the review [`new`] should advance.
+fn is_ancestor_or_self(repo: &gix::Repository, ancestor: ObjectId, descendant: ObjectId) -> bool {
+    ancestor == descendant
+        || repo
+            .merge_base(ancestor, descendant)
+            .is_ok_and(|base| base.detach() == ancestor)
+}
+
+/// This member's existing review, if any, whose recorded target
+/// ([`Review::target`]) is `reviewed` itself or one of its ancestors — the
+/// fast-forward re-review case `model.review-pin` describes: "re-reviewing
+/// after the target moves". Returns the found review's own genesis target
+/// segment (the refname's `<target>`, parsed back via
+/// [`ents_model::namespace::parse_review_ref`]) for [`new`] to advance the
+/// same two refs under, rather than minting fresh ones.
+fn find_review_to_advance(
+    refs: &dyn RefStoreRead,
+    objects: &impl Find,
+    repo: &gix::Repository,
+    member: &MemberId,
+    reviewed: ObjectId,
+) -> Result<Option<String>> {
+    for entry in refs.iter_prefix("refs/meta/reviews/")? {
+        let (name, tip) = entry?;
+        let Some((target, entry_member)) = ents_model::namespace::parse_review_ref(name.as_ref())
+        else {
+            continue;
+        };
+        if entry_member != *member {
+            continue;
+        }
+        let tree = commit_tree(objects, tip)?;
+        let Ok(review) = facet_git_tree::deserialize::<Review>(&tree, objects) else {
+            continue;
+        };
+        if is_ancestor_or_self(repo, review.target(), reviewed) {
+            return Ok(Some(target));
+        }
+    }
+    Ok(None)
+}
+
+/// Read the [`Review`] at `target`/`member`'s ref tip, or [`Error::NotFound`]
+/// when no such ref exists.
+fn review_at(
+    refs: &dyn RefStoreRead,
+    objects: &impl Find,
+    target: &str,
+    member: &MemberId,
+) -> Result<Review> {
+    let ref_name = ents_model::namespace::review_ref(target, member)?;
     let Some(tip) = refs.get(ref_name.as_ref())? else {
         return Err(Error::NotFound {
-            what: format!("review {id}"),
+            what: format!("review {target}/{member}"),
         });
     };
     let tree = commit_tree(objects, tip)?;
@@ -86,12 +146,21 @@ pub struct NewReview {
     pub body: String,
 }
 
-/// `git ents review new`: review `new.target`, writing both refs
-/// `model.review` requires — the review's own entity ref at
-/// `refs/meta/reviews/<id>`, and the retention pin at
-/// `refs/meta/pins/reviews/<id>` keeping the reviewed commit (and its
-/// ancestry) reachable (`model.review-pin`) — under one locally generated
-/// id shared by both.
+/// `git ents review new`: review `new.target` as `member`, writing both
+/// refs `model.review` requires — the review's own entity ref at
+/// `refs/meta/reviews/<target>/<member>`, and the retention pin at
+/// `refs/meta/pins/reviews/<target>/<member>` keeping the reviewed commit
+/// (and its ancestry) reachable (`model.review-pin`) — a composite natural
+/// key, no minted id anywhere (`meta-ref.identity-binding`).
+///
+/// When `member` already has a review whose own recorded target
+/// ([`Review::target`]) is `new.target` itself or one of its ancestors,
+/// this is a re-review: the *same* two refs advance fast-forward under the
+/// original genesis target segment, with [`Review::target`] updated to the
+/// newly reviewed commit, rather than a fresh pair being minted
+/// (`model.review-pin`: "re-reviewing after the target moves MUST advance
+/// the pin fast-forward"). Otherwise this is the review's genesis, keyed by
+/// the reviewed commit's own oid.
 ///
 /// The two refs travel in one atomic mutation via
 /// [`propose_entity_with_pin`] (`receive.multi-ref-atomicity`): the
@@ -99,68 +168,82 @@ pub struct NewReview {
 /// transitions together, so a review is never left with its entity written
 /// but its retention pin missing. One [`Outcome`] covers the whole batch.
 ///
+/// Returns the composite key's target segment (the review's genesis
+/// target, unchanged across re-reviews) alongside the reached [`Outcome`].
+///
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] if `new.target` does not resolve to a commit;
 /// otherwise propagates serialization or `receive` failures.
-// @relation(model.review, model.review-pin, receive.multi-ref-atomicity, lens.parity, scope=function)
+// @relation(model.review, model.review-pin, meta-ref.identity-binding, receive.multi-ref-atomicity, lens.parity, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one field per mutation shape (refs, objects, events, repo, the draft, the acting \
+              member, identity, mode), mirroring propose_entity_with_pin's identically-justified \
+              shape one layer down"
+)]
 pub fn new(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
     events: &dyn ents_receive::EventSink,
     repo_path: &std::path::Path,
     new: NewReview,
+    member: &MemberId,
     identity: &Identity<'_>,
     mode: Mode,
 ) -> Result<(String, Outcome)> {
-    let reviewed = resolve_commit(repo_path, &new.target)?;
+    let repo = gix::open(repo_path)?;
+    let reviewed = resolve_in(&repo, &new.target)?;
     let review = Review::new(reviewed, new.verdict, new.body);
 
-    // The review's id is derived locally, once, and shared by both refs
-    // (`meta-ref.granularity`: one ref per review, one ref per pin) —
-    // mirroring `crate::comment::command::add`'s own locally generated id.
-    let id = uuid::Uuid::new_v4().simple().to_string();
+    // Re-reviewing after the target moves advances the SAME ref rather than
+    // minting a new one (`model.review-pin`): find this member's existing
+    // review, if any, whose own recorded target is an ancestor of (or equal
+    // to) the commit reviewed now, and advance it in place.
+    let target_hex = find_review_to_advance(refs, objects, &repo, member, reviewed)?
+        .unwrap_or_else(|| reviewed.to_string());
 
     let outcome = propose_entity_with_pin(
         refs,
         objects,
         events,
-        ents_model::namespace::review_ref(&id)?,
+        ents_model::namespace::review_ref(&target_hex, member)?,
         &review,
-        ents_model::namespace::review_pin_ref(&id)?,
+        ents_model::namespace::review_pin_ref(&target_hex, member)?,
         reviewed,
         identity,
         &format!("Review {reviewed}"),
-        &format!("Pin review {id}"),
+        &format!("Pin review {target_hex}/{member}"),
         mode,
     )?;
 
-    Ok((id, outcome))
+    Ok((target_hex, outcome))
 }
 
 /// `git ents review list [--target rev]`: every review recorded in this
-/// repository, optionally filtered to those whose most recently reviewed
-/// commit ([`Review::commit`]) resolves to `target`.
+/// repository, keyed by its composite `(target, member)` segments
+/// (`model.review`), optionally filtered to those whose most recently
+/// reviewed commit ([`Review::target`]) resolves to `target`.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] if `target` is given but does not resolve;
 /// otherwise propagates a ref-store or object read failure.
-// @relation(model.review, scope=function)
+// @relation(model.review, meta-ref.identity-binding, scope=function)
 pub fn list(
     refs: &dyn RefStoreRead,
     objects: &impl Find,
     repo_path: &std::path::Path,
     target: Option<&str>,
-) -> Result<Vec<(String, Review)>> {
+) -> Result<Vec<((String, MemberId), Review)>> {
     let target_oid = target
         .map(|rev| resolve_commit(repo_path, rev))
         .transpose()?;
     let mut out = Vec::new();
     for entry in refs.iter_prefix("refs/meta/reviews/")? {
         let (name, tip) = entry?;
-        let path = name.as_bstr().to_string();
-        let Some(id) = path.strip_prefix("refs/meta/reviews/") else {
+        let Some((target_hex, member)) = ents_model::namespace::parse_review_ref(name.as_ref())
+        else {
             continue;
         };
         let tree = commit_tree(objects, tip)?;
@@ -168,33 +251,34 @@ pub fn list(
             continue;
         };
         if let Some(target_oid) = target_oid
-            && review.commit() != target_oid
+            && review.target() != target_oid
         {
             continue;
         }
-        out.push((id.to_owned(), review));
+        out.push(((target_hex, member), review));
     }
     Ok(out)
 }
 
-/// `git ents review show`: `id`'s review, plus its discussion thread —
-/// every [`Comment`] naming `reviews/<id>` as its context (or a reply into
-/// one), reusing [`crate::comment::thread`] rather than a second
-/// aggregation query (`model.comment-context`, `model.review`: "the review
-/// itself MUST NOT store a list of its comments").
+/// `git ents review show`: `target`/`member`'s review, plus its discussion
+/// thread — every [`Comment`] naming `reviews/<target>/<member>` as its
+/// context (or a reply into one), reusing [`crate::comment::thread`] rather
+/// than a second aggregation query (`model.comment-context`, `model.review`:
+/// "the review itself MUST NOT store a list of its comments").
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] if `id` has no review ref; otherwise propagates a
-/// ref-store or object read failure.
+/// [`Error::NotFound`] if `target`/`member` has no review ref; otherwise
+/// propagates a ref-store or object read failure.
 // @relation(model.review, model.comment-context, lens.parity, scope=function)
 pub fn show(
     refs: &dyn RefStoreRead,
     objects: &impl Find,
-    id: &str,
+    target: &str,
+    member: &MemberId,
 ) -> Result<(Review, Vec<(String, Comment)>)> {
-    let review = review_at(refs, objects, id)?;
-    let context = format!("reviews/{id}");
+    let review = review_at(refs, objects, target, member)?;
+    let context = format!("reviews/{target}/{member}");
     let thread = crate::comment::thread(refs, objects, &context)?;
     Ok((review, thread))
 }

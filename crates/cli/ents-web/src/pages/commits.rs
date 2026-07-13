@@ -307,8 +307,9 @@ where
 /// Every review targeting `commit_id` (`ents_forge::review::list` filtered
 /// to this commit, `model.review`), each rendering its verdict prominently,
 /// its body as AsciiDoc, and its reviewer (from the review ref's own tip
-/// commit chain, `meta-ref.trailers` -- a review stores no author field),
-/// followed by its discussion: the comments naming `reviews/<id>` as their
+/// commit chain, `meta-ref.identity-binding` -- a review stores no author
+/// field, only its composite `(target, member)` key), followed by its
+/// discussion: the comments naming `reviews/<target>/<member>` as their
 /// context (`ents_forge::comment::thread`, `model.comment-context`),
 /// rendered through the same shared `super::comments::thread_section` an
 /// issue's thread uses. A "start a review" form closes the section
@@ -330,16 +331,16 @@ fn reviews_section<O: Find + Write>(
     let return_to = format!("/commit/{oid}");
     html! {
         h2 { "reviews" }
-        @for (id, review) in &reviews {
+        @for ((target, member), review) in &reviews {
             div.card {
                 div.comment-meta {
                     span.verdict { (review.verdict) }
-                    @let reviewer = ents_model::namespace::review_ref(id)
+                    span.author { (member) }
+                    @let reviewer = ents_model::namespace::review_ref(target, member)
                         .ok()
                         .and_then(|ref_name| state.refs.get(ref_name.as_ref()).ok().flatten())
                         .and_then(|tip| super::commit_authorship(&*state.objects(), tip).ok());
-                    @if let Some((author, seconds)) = &reviewer {
-                        span.author { (author) }
+                    @if let Some((_author, seconds)) = &reviewer {
                         span { (super::ago(*seconds)) }
                     }
                 }
@@ -349,22 +350,28 @@ fn reviews_section<O: Find + Write>(
                 @let thread = ents_forge::comment::thread(
                     state.refs.as_ref(),
                     &*state.objects(),
-                    &format!("reviews/{id}"),
+                    &format!("reviews/{target}/{member}"),
                 ).unwrap_or_default();
                 (super::comments::thread_section(state, session, &thread, &return_to))
-                (review_comment_form(session, id, &return_to))
+                (review_comment_form(session, target, member, &return_to))
             }
         }
         (start_review_form(session, oid))
     }
 }
 
-/// The comment-on-this-review form (`POST /reviews/{id}/comment`): a
-/// contextual comment naming `reviews/<id>` (`model.comment-context`), so a
-/// review's discussion can start from the web and not only the CLI or lens.
-fn review_comment_form(session: &Session, id: &str, return_to: &str) -> Markup {
+/// The comment-on-this-review form (`POST /reviews/{target}/{member}/comment`):
+/// a contextual comment naming `reviews/<target>/<member>`
+/// (`model.comment-context`), so a review's discussion can start from the
+/// web and not only the CLI or lens.
+fn review_comment_form(
+    session: &Session,
+    target: &str,
+    member: &ents_model::MemberId,
+    return_to: &str,
+) -> Markup {
     html! {
-        form method="post" action=(format!("/reviews/{id}/comment")) {
+        form method="post" action=(format!("/reviews/{target}/{member}/comment")) {
             (super::csrf_input(session))
             input type="hidden" name="return_to" value=(return_to);
             label { "comment on this review" textarea name="body" {} }
@@ -373,7 +380,7 @@ fn review_comment_form(session: &Session, id: &str, return_to: &str) -> Markup {
     }
 }
 
-/// The form fields `POST /reviews/{id}/comment` accepts.
+/// The form fields `POST /reviews/{target}/{member}/comment` accepts.
 #[derive(Debug, Deserialize)]
 pub struct ReviewCommentForm {
     /// The comment's body text.
@@ -386,10 +393,10 @@ pub struct ReviewCommentForm {
     return_to: String,
 }
 
-/// `POST /reviews/{id}/comment`: a comment naming `reviews/<id>` as its
-/// context (`model.comment-context`) -- an ordinary
-/// [`ents_forge::comment::add`], contextual and unanchored, joining the
-/// review's discussion thread the moment it lands.
+/// `POST /reviews/{target}/{member}/comment`: a comment naming
+/// `reviews/<target>/<member>` as its context (`model.comment-context`) --
+/// an ordinary [`ents_forge::comment::add`], contextual and unanchored,
+/// joining the review's discussion thread the moment it lands.
 ///
 /// # Errors
 ///
@@ -399,7 +406,7 @@ pub struct ReviewCommentForm {
 pub async fn review_comment<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
-    Path(id): Path<String>,
+    Path((target, member)): Path<(String, String)>,
     Form(form): Form<ReviewCommentForm>,
 ) -> Result<impl IntoResponse>
 where
@@ -413,7 +420,7 @@ where
         lines: None,
         rev: "HEAD".to_owned(),
         worktree: false,
-        context: Some(format!("reviews/{id}")),
+        context: Some(format!("reviews/{target}/{member}")),
         parent: None,
     };
     let (_comment_id, outcome) = ents_forge::comment::add(
@@ -483,23 +490,55 @@ where
     O: Find + Write + Send + 'static,
 {
     super::require_csrf(&session, &form.csrf)?;
+    let member = reviewer_member_id(&state);
     let identity = state.identity.as_ref();
     let new = ents_forge::review::NewReview {
         target: oid.clone(),
         verdict: form.verdict,
         body: form.body,
     };
-    let (_id, outcome) = ents_forge::review::new(
+    let (_target, outcome) = ents_forge::review::new(
         state.refs.as_ref(),
         &*state.objects(),
         state.events.as_ref(),
         &state.path,
         new,
+        &member,
         &crate::receive_identity!(identity),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;
     Ok(Redirect::to(&format!("/commit/{oid}")))
+}
+
+/// The acting session's member id -- the composite review key's
+/// `<member>` segment -- resolved the same way
+/// [`super::account::resolve_member_by_key`] does, falling back to a short
+/// hash of the public key when no enrolled member matches: mirrors
+/// `git_ents::commands::serve::build_state`'s identical fallback
+/// (`roots.web-signing`: an unenrolled local identity may still review,
+/// exactly as it may still browse and comment).
+fn reviewer_member_id<O: Find>(state: &AppState<O>) -> ents_model::MemberId {
+    let pubkey = state.identity.public_openssh();
+    super::account::resolve_member_by_key(state, &pubkey)
+        .unwrap_or_else(|_source| ents_model::MemberId::new(short_key_fingerprint(&pubkey)))
+}
+
+/// The first twelve characters of `pubkey`'s key-material token -- mirrors
+/// `git_ents::commands::short_fingerprint`'s identical fallback label.
+fn short_key_fingerprint(pubkey: &str) -> String {
+    let hex: String = pubkey
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or(pubkey)
+        .chars()
+        .take(12)
+        .collect();
+    if hex.is_empty() {
+        "member".to_owned()
+    } else {
+        hex
+    }
 }
 
 /// Validate `text` as a full, well-formed object id -- hex characters only,

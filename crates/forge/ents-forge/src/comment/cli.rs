@@ -69,7 +69,7 @@ pub enum CommentAction {
         #[facet(args::named, default)]
         worktree: bool,
         /// Canonical ref path below refs/meta/ of the entity this comment
-        /// belongs to, e.g. `issues/<id>` or `reviews/<id>`.
+        /// belongs to, e.g. `issues/<id>` or `reviews/<target>/<member>`.
         #[facet(args::named)]
         context: Option<String>,
         /// Id of the comment this one replies to.

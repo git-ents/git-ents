@@ -99,9 +99,10 @@ pub enum Top {
         #[facet(args::subcommand)]
         action: IssueAction,
     },
-    /// Review a commit: a verdict plus a body at `refs/meta/reviews/<id>`,
-    /// with a retention pin at `refs/meta/pins/reviews/<id>` keeping the
-    /// reviewed commit reachable.
+    /// Review a commit: a verdict plus a body at
+    /// `refs/meta/reviews/<target>/<member>`, with a retention pin at
+    /// `refs/meta/pins/reviews/<target>/<member>` keeping the reviewed
+    /// commit reachable.
     Review {
         /// The review action to run.
         #[facet(args::subcommand)]

@@ -110,7 +110,6 @@ tokio = { version = "1", features = [
 tokio-postgres = { version = "0.7", default-features = false, features = [
     "runtime",
 ] }
-uuid = { version = "1", features = ["v4"] }
 
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/

@@ -40,12 +40,13 @@ pub type FieldRow = (&'static str, String);
 /// ```
 /// use ents_model::{Member, Provenance};
 ///
-/// let member = Member::new("ssh-ed25519 AAAA... jdc", Provenance::AdminRegistered);
+/// let member = Member::new("jdc", "ssh-ed25519 AAAA... jdc", Provenance::AdminRegistered);
 /// let rows = ents_web::render::fields(&member);
-/// assert_eq!(rows[0].0, "key");
-/// assert!(rows[0].1.contains("ssh-ed25519"));
-/// assert_eq!(rows[1].0, "state");
-/// assert_eq!(rows[1].1, "Active");
+/// assert_eq!(rows[0].0, "id");
+/// assert_eq!(rows[1].0, "key");
+/// assert!(rows[1].1.contains("ssh-ed25519"));
+/// assert_eq!(rows[2].0, "state");
+/// assert_eq!(rows[2].1, "Active");
 /// ```
 #[must_use]
 pub fn fields<T: Facet<'static>>(value: &T) -> Vec<FieldRow> {
@@ -134,7 +135,7 @@ pub fn view<T: Facet<'static>>(value: &T) -> Markup {
 /// use ents_model::{Member, Provenance};
 ///
 /// let rows = vec![
-///     ("jdc".to_owned(), Ok(Member::new("key-a", Provenance::AdminRegistered))),
+///     ("jdc".to_owned(), Ok(Member::new("jdc", "key-a", Provenance::AdminRegistered))),
 ///     ("legacy".to_owned(), Err("object ... is not a blob".to_owned())),
 /// ];
 /// let rendered = ents_web::render::list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
@@ -248,18 +249,22 @@ mod tests {
     #[rstest]
     // @relation(roots.web-agnostic, scope=function, role=Verifies)
     fn fields_walks_every_declared_field_in_order_for_any_kernel_entity() {
-        let member = Member::new("ssh-ed25519 AAAA... jdc", Provenance::AdminRegistered);
+        let member = Member::new(
+            "jdc",
+            "ssh-ed25519 AAAA... jdc",
+            Provenance::AdminRegistered,
+        );
         let rows = fields(&member);
         assert_eq!(
             rows.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            vec!["key", "state", "provenance"]
+            vec!["id", "key", "state", "provenance"]
         );
     }
 
     #[rstest]
     // @relation(roots.web-agnostic, scope=function, role=Verifies)
     fn an_enum_field_renders_its_variant_name_not_a_placeholder() {
-        let member = Member::new("key", Provenance::AdminRegistered);
+        let member = Member::new("jdc", "key", Provenance::AdminRegistered);
         let rows = fields(&member);
         let (_, state) = rows
             .iter()
@@ -270,7 +275,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::member(Member::new("k", Provenance::AdminRegistered))]
+    #[case::member(Member::new("jdc", "k", Provenance::AdminRegistered))]
     // @relation(roots.web-agnostic, scope=function, role=Verifies)
     fn the_same_generic_view_renders_every_entity_type(#[case] member: Member) {
         // Same call, no type-specific branch -- this is the whole point of
@@ -280,6 +285,7 @@ mod tests {
         assert!(view(&member).into_string().contains("provenance"));
         assert!(
             view(&Effect {
+                name: "unit".to_owned(),
                 trigger: "rev(refs/heads/main)".to_owned(),
                 toolchains: vec![],
                 run: "true".to_owned(),
@@ -310,7 +316,7 @@ mod tests {
     fn list_table_derives_its_columns_from_the_first_readable_rows_own_shape() {
         let rows = vec![(
             "jdc".to_owned(),
-            Ok(Member::new("key", Provenance::AdminRegistered)),
+            Ok(Member::new("jdc", "key", Provenance::AdminRegistered)),
         )];
         let markup = list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
         assert!(markup.contains("username"));
@@ -324,7 +330,7 @@ mod tests {
         let rows = vec![
             (
                 "jdc".to_owned(),
-                Ok(Member::new("key", Provenance::AdminRegistered)),
+                Ok(Member::new("jdc", "key", Provenance::AdminRegistered)),
             ),
             (
                 "legacy".to_owned(),

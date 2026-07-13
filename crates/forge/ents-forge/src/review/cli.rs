@@ -15,9 +15,11 @@ use figue as args;
 #[repr(u8)]
 pub enum ReviewAction {
     /// Review a commit: a verdict plus a body, occupying two refs — the
-    /// review's own entity ref at `refs/meta/reviews/<id>`, and a retention
-    /// pin at `refs/meta/pins/reviews/<id>` keeping the reviewed commit (and
-    /// its ancestry) reachable.
+    /// review's own entity ref at `refs/meta/reviews/<target>/<member>`, and
+    /// a retention pin at `refs/meta/pins/reviews/<target>/<member>` keeping
+    /// the reviewed commit (and its ancestry) reachable. Re-reviewing after
+    /// the target moves advances the same two refs fast-forward rather than
+    /// minting new ones.
     New {
         /// Revision to review.
         #[facet(args::named, default = "HEAD")]
@@ -42,8 +44,11 @@ pub enum ReviewAction {
     /// Show one review: its reviewed commit, verdict, body, and discussion
     /// thread (comments naming it as their context).
     Show {
-        /// The review's id.
+        /// The review's genesis target segment (`refs/meta/reviews/<target>/*`).
         #[facet(args::positional)]
-        id: String,
+        target: String,
+        /// The reviewer's member id (`refs/meta/reviews/*/<member>`).
+        #[facet(args::positional)]
+        member: String,
     },
 }

@@ -2,7 +2,7 @@
 //! (`model.effect-definition`, `effect.local-run`).
 
 use ents_effect::run::{run_effect, short_oid};
-use ents_model::{Effect, Status, namespace};
+use ents_model::{Effect, ResultRecord, Status, namespace};
 use ents_receive::{Identity, propose_entity};
 use gix_ref_store::RefStoreRead;
 
@@ -57,6 +57,7 @@ pub fn add(
 
     let signer = signer(root, key)?;
     let effect = Effect {
+        name: name.to_owned(),
         trigger: on,
         toolchains,
         run,
@@ -105,7 +106,9 @@ pub fn show(root: &LocalRoot, name: &str, at: Option<String>) -> Result<(Effect,
                 None => None,
                 Some(result_tip) => {
                     let tree = super::commit_tree(&root.objects, result_tip)?;
-                    facet_git_tree::deserialize::<Status>(&tree, &root.objects).ok()
+                    facet_git_tree::deserialize::<ResultRecord>(&tree, &root.objects)
+                        .ok()
+                        .map(|record| record.status)
                 }
             }
         }
@@ -216,8 +219,8 @@ pub fn log(root: &LocalRoot, name: &str) -> Result<Vec<(gix_hash::ObjectId, Stat
     for entry in root.refs.iter_prefix(&prefix)? {
         let (_, tip) = entry?;
         let tree = super::commit_tree(&root.objects, tip)?;
-        if let Ok(status) = facet_git_tree::deserialize::<Status>(&tree, &root.objects) {
-            out.push((tip, status));
+        if let Ok(record) = facet_git_tree::deserialize::<ResultRecord>(&tree, &root.objects) {
+            out.push((tip, record.status));
         }
     }
     Ok(out)

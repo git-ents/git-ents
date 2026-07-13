@@ -17,7 +17,6 @@ gix-hash = { workspace = true }
 gix-object = { workspace = true }
 gix-ref-store = { workspace = true }
 thiserror = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 ents-testutil = { workspace = true }

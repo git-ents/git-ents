@@ -14,7 +14,7 @@
 //! lens are three callers of exactly these functions.
 
 use ents_anchor::{Anchor, LineRange, Projection, project, project_worktree, snippet};
-use ents_receive::{Identity, Mode, Outcome, propose_entity};
+use ents_receive::{Identity, Mode, Outcome, propose_entity, propose_genesis};
 use facet_git_tree::RawTree;
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind, Write};
@@ -201,7 +201,8 @@ pub struct NewComment {
 
 /// `git ents comment add`: create a comment about something.
 ///
-/// Returns the generated comment id alongside the raw
+/// Returns the comment's id — its genesis commit's own oid
+/// (`model.comment`, `meta-ref.identity-binding`) — alongside the raw
 /// [`Outcome`] `receive` reached — callers interpret it themselves (the
 /// CLI's own `outcome_to_result`, for instance), the same shape
 /// `ents_effect::run::run_one` returns its own raw `Outcome` in.
@@ -215,7 +216,7 @@ pub struct NewComment {
 /// not form a valid ref path below `refs/meta/`; [`Error::NotFound`] if
 /// `parent` names no existing comment (`model.comment-thread`); otherwise
 /// propagates capture, serialization, or `receive` failures.
-// @relation(model.comment, model.comment-state, model.comment-context, model.comment-thread, lens.parity, scope=function)
+// @relation(model.comment, model.comment-state, model.comment-context, model.comment-thread, meta-ref.identity-binding, lens.parity, scope=function)
 pub fn add(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
@@ -274,21 +275,24 @@ pub fn add(
         parent: new.parent,
     };
 
-    // The comment's id is its own genesis tip's short oid, known only once
-    // the commit is built — `propose_entity` builds it internally, so this
-    // command derives the ref name from a locally generated id instead
-    // (`meta-ref.granularity`: one ref per comment).
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let ref_name = ents_model::namespace::comment_ref(&id)?;
     let subject = match &new.path {
         Some(path) => format!("Comment on {path}"),
         None => "Comment".to_owned(),
     };
 
-    let outcome = propose_entity(
-        refs, objects, events, ref_name, &comment, identity, &subject, mode,
+    // A comment's id is the oid of its own genesis commit — sign-then-name,
+    // never a locally minted id (`model.comment`, `meta-ref.identity-binding`).
+    let (ref_name, outcome) = propose_genesis(
+        refs,
+        objects,
+        events,
+        &comment,
+        |oid| ents_model::namespace::comment_ref(&oid.to_string()),
+        identity,
+        &subject,
+        mode,
     )?;
-    Ok((id, outcome))
+    Ok((crate::genesis_id(&ref_name), outcome))
 }
 
 /// `git ents comment reply`: a comment whose parent is `parent_id`
@@ -318,19 +322,17 @@ pub fn reply(
         context: None,
         parent: Some(parent_id.to_owned()),
     };
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let ref_name = ents_model::namespace::comment_ref(&id)?;
-    let outcome = propose_entity(
+    let (ref_name, outcome) = propose_genesis(
         refs,
         objects,
         events,
-        ref_name,
         &comment,
+        |oid| ents_model::namespace::comment_ref(&oid.to_string()),
         identity,
         &format!("Reply to comment {parent_id}"),
         mode,
     )?;
-    Ok((id, outcome))
+    Ok((crate::genesis_id(&ref_name), outcome))
 }
 
 /// `git ents comment resolve`: record state `resolved` as an ordinary

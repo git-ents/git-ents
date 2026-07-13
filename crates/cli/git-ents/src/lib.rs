@@ -63,7 +63,7 @@
 //! };
 //! let identity = Identity { actor, sign: &|payload| signer.sign(payload) };
 //!
-//! let member = ents_model::Member::new(signer.public_openssh(), Provenance::AdminRegistered);
+//! let member = ents_model::Member::new("jdc", signer.public_openssh(), Provenance::AdminRegistered);
 //! let name = ents_model::namespace::member_ref(&MemberId::new("jdc")).expect("valid");
 //! let outcome = propose_entity(
 //!     &root.refs, &root.objects, &root.events, name.clone(), &member,

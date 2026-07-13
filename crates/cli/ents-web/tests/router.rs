@@ -2211,6 +2211,7 @@ async fn members_effects_redactions_and_toolchains_list_and_show_a_real_entity_w
         &objects,
         effect_name,
         &Effect {
+            name: "ci".to_owned(),
             trigger: "rev(refs/heads/main)".to_owned(),
             toolchains: vec![],
             run: "true".to_owned(),

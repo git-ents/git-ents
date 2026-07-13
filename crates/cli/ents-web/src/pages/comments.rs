@@ -87,7 +87,10 @@ where
         html! {
             ul {
                 @for (id, comment) in &rows {
-                    li { a href=(format!("/comments/{id}")) { (id) } ": " (comment.body) }
+                    li {
+                        a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
+                        ": " (comment.body)
+                    }
                 }
             }
             h2 { "add a comment" }
@@ -143,7 +146,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Comments,
-        &id,
+        ents_forge::abbreviate_id(&id),
         html! {
             dl {
                 dt { "state" } dd { (comment.state) }

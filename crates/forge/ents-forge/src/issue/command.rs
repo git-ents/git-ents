@@ -13,7 +13,7 @@
 //! `crate::comment::command` never touches a terminal either.
 
 use ents_model::MemberId;
-use ents_receive::{Identity, Mode, Outcome, propose_entity};
+use ents_receive::{Identity, Mode, Outcome, propose_entity, propose_genesis};
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind};
 
@@ -75,13 +75,14 @@ pub struct NewIssue {
     pub labels: Vec<String>,
 }
 
-/// `git ents issue new`: create an issue at a freshly generated
-/// `refs/meta/issues/<id>`.
+/// `git ents issue new`: create an issue at `refs/meta/issues/<id>`, where
+/// `<id>` is the oid of the issue's own genesis commit — sign-then-name,
+/// never a locally minted id (`model.issue`, `meta-ref.identity-binding`).
 ///
 /// # Errors
 ///
 /// Propagates serialization or `receive` failures.
-// @relation(model.issue, lens.parity, scope=function)
+// @relation(model.issue, meta-ref.identity-binding, lens.parity, scope=function)
 pub fn new(
     refs: &dyn gix_ref_store::RefStore,
     objects: &(impl Find + gix_object::Write),
@@ -97,19 +98,18 @@ pub fn new(
         assignees: new.assignees,
         labels: new.labels,
     };
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let ref_name = ents_model::namespace::issue_ref(&id)?;
-    let outcome = propose_entity(
+    let subject = format!("Open issue: {}", issue.title);
+    let (ref_name, outcome) = propose_genesis(
         refs,
         objects,
         events,
-        ref_name,
         &issue,
+        |oid| ents_model::namespace::issue_ref(&oid.to_string()),
         identity,
-        &format!("Open issue: {}", issue.title),
+        &subject,
         mode,
     )?;
-    Ok((id, outcome))
+    Ok((crate::genesis_id(&ref_name), outcome))
 }
 
 /// What `git ents issue edit` changes; a field left `None` is left
