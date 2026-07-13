@@ -10,7 +10,7 @@
 //! composition root wires the concrete types and calls these functions,
 //! never the other way around (`lens.parity`).
 
-use ents_receive::{Identity, Mode, Outcome, propose_entity, propose_pin};
+use ents_receive::{Identity, Mode, Outcome, propose_entity_with_pin};
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind, Write};
 use gix_ref_store::{RefStore, RefStoreRead};
@@ -93,20 +93,17 @@ pub struct NewReview {
 /// ancestry) reachable (`model.review-pin`) — under one locally generated
 /// id shared by both.
 ///
-/// The two refs are written as two separate proposals to [`crate::comment::add`]'s
-/// sibling primitives, [`propose_entity`] and [`propose_pin`]: `receive`
-/// applies one `Proposal`'s transitions atomically, but a `Proposal` is not
-/// itself parameterized to mix an entity-tree transition with an
-/// empty-tree pin transition in one call, so this command reaches two
-/// separate, sequential outcomes rather than one atomic batch — this is
-/// the two-proposals shape the model accepts (`model.review`,
-/// `model.review-pin`), not a gap to close.
+/// The two refs travel in one atomic mutation via
+/// [`propose_entity_with_pin`] (`receive.multi-ref-atomicity`): the
+/// ref-store's atomic multi-ref compare-and-swap admits or refuses both
+/// transitions together, so a review is never left with its entity written
+/// but its retention pin missing. One [`Outcome`] covers the whole batch.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] if `new.target` does not resolve to a commit;
 /// otherwise propagates serialization or `receive` failures.
-// @relation(model.review, model.review-pin, lens.parity, scope=function)
+// @relation(model.review, model.review-pin, receive.multi-ref-atomicity, lens.parity, scope=function)
 pub fn new(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
@@ -115,7 +112,7 @@ pub fn new(
     new: NewReview,
     identity: &Identity<'_>,
     mode: Mode,
-) -> Result<(String, Outcome, Outcome)> {
+) -> Result<(String, Outcome)> {
     let reviewed = resolve_commit(repo_path, &new.target)?;
     let review = Review::new(reviewed, new.verdict, new.body);
 
@@ -124,31 +121,21 @@ pub fn new(
     // mirroring `crate::comment::command::add`'s own locally generated id.
     let id = uuid::Uuid::new_v4().simple().to_string();
 
-    let entity_ref = ents_model::namespace::review_ref(&id)?;
-    let entity_outcome = propose_entity(
+    let outcome = propose_entity_with_pin(
         refs,
         objects,
         events,
-        entity_ref,
+        ents_model::namespace::review_ref(&id)?,
         &review,
-        identity,
-        &format!("Review {reviewed}"),
-        mode,
-    )?;
-
-    let pin_ref = ents_model::namespace::review_pin_ref(&id)?;
-    let pin_outcome = propose_pin(
-        refs,
-        objects,
-        events,
-        pin_ref,
+        ents_model::namespace::review_pin_ref(&id)?,
         reviewed,
         identity,
+        &format!("Review {reviewed}"),
         &format!("Pin review {id}"),
         mode,
     )?;
 
-    Ok((id, entity_outcome, pin_outcome))
+    Ok((id, outcome))
 }
 
 /// `git ents review list [--target rev]`: every review recorded in this

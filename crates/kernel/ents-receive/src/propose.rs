@@ -108,21 +108,39 @@ pub fn propose_entity<T: for<'facet> facet::Facet<'facet>>(
     subject: &str,
     mode: Mode,
 ) -> Result<Outcome> {
-    let tree = facet_git_tree::serialize_into(entity, objects)?;
-    let old = refs.get(name.as_ref())?;
-    let parents: Vec<_> = old.into_iter().collect();
-    let tip = signed_commit(objects, &name, tree, parents, identity, subject)?;
-
+    let (transition, tip) = entity_transition(refs, objects, &name, entity, identity, subject)?;
     let proposal = Proposal {
-        transitions: vec![RefTransition {
-            name,
-            old,
-            new: Some(tip),
-        }],
+        transitions: vec![transition],
         objects: vec![tip],
         auth: None,
     };
     crate::receive::receive(refs, objects, events, &proposal, mode)
+}
+
+/// Build the entity-mutation [`RefTransition`] `propose_entity` and
+/// `propose_entity_with_pin` share: serialize `entity`, wrap it in a signed
+/// commit whose only parent is `name`'s current tip, and return that
+/// transition alongside the tip oid the [`Proposal`] must carry.
+fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    name: &FullName,
+    entity: &T,
+    identity: &Identity<'_>,
+    subject: &str,
+) -> Result<(RefTransition, gix_hash::ObjectId)> {
+    let tree = facet_git_tree::serialize_into(entity, objects)?;
+    let old = refs.get(name.as_ref())?;
+    let parents: Vec<_> = old.into_iter().collect();
+    let tip = signed_commit(objects, name, tree, parents, identity, subject)?;
+    Ok((
+        RefTransition {
+            name: name.clone(),
+            old,
+            new: Some(tip),
+        },
+        tip,
+    ))
 }
 
 /// Advance the retention pin at `name` to keep `retain` (and its ancestry)
@@ -198,18 +216,132 @@ pub fn propose_pin(
     subject: &str,
     mode: Mode,
 ) -> Result<Outcome> {
+    let (transition, tip) = pin_transition(refs, objects, &name, retain, identity, subject)?;
+    let proposal = Proposal {
+        transitions: vec![transition],
+        objects: vec![tip],
+        auth: None,
+    };
+    crate::receive::receive(refs, objects, events, &proposal, mode)
+}
+
+/// Build the retention-pin [`RefTransition`] `propose_pin` and
+/// `propose_entity_with_pin` share: an empty-tree, merge-shaped signed
+/// commit whose parents are `name`'s current tip (if any) followed by
+/// `retain` (`model.review-pin`), returned alongside the tip oid the
+/// [`Proposal`] must carry.
+fn pin_transition(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    name: &FullName,
+    retain: gix_hash::ObjectId,
+    identity: &Identity<'_>,
+    subject: &str,
+) -> Result<(RefTransition, gix_hash::ObjectId)> {
     let tree = objects.write(&gix_object::Tree { entries: vec![] })?;
     let old = refs.get(name.as_ref())?;
     let parents: Vec<_> = old.into_iter().chain(std::iter::once(retain)).collect();
-    let tip = signed_commit(objects, &name, tree, parents, identity, subject)?;
-
-    let proposal = Proposal {
-        transitions: vec![RefTransition {
-            name,
+    let tip = signed_commit(objects, name, tree, parents, identity, subject)?;
+    Ok((
+        RefTransition {
+            name: name.clone(),
             old,
             new: Some(tip),
-        }],
-        objects: vec![tip],
+        },
+        tip,
+    ))
+}
+
+/// Write an entity and its retention pin as one atomic mutation
+/// (`receive.multi-ref-atomicity`): the entity commit at `entity_name` and
+/// the empty-tree pin commit at `pin_name` (retaining `retain`) travel in a
+/// single [`Proposal`] through one [`crate::receive`] call, so the
+/// ref-store's atomic multi-ref compare-and-swap admits or refuses both
+/// together — a review is never observable with its entity written but its
+/// pin missing (`model.review`, `model.review-pin`).
+///
+/// # Errors
+///
+/// As [`propose_entity`] and [`propose_pin`], for either ref; a
+/// reached-but-negative [`Outcome`] on either transition refuses the whole
+/// batch and is returned as `Ok`.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{Provenance, namespace};
+/// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_entity_with_pin};
+/// use ents_testutil::{CommitSpec, Keypair, MemRefStore, ObjectStore, empty_tree, enroll_member};
+/// use facet::Facet;
+///
+/// # #[derive(Facet)]
+/// # struct Review { verdict: String }
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let admin = Keypair::from_seed(1);
+/// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
+///
+/// let tree = empty_tree(&objects);
+/// let reviewed = ents_testutil::write_commit(
+///     &objects,
+///     &CommitSpec { tree, parents: vec![], message: "reviewed work".into(), seconds: 200 },
+///     None,
+/// );
+///
+/// let identity = Identity {
+///     actor: gix::actor::Signature {
+///         name: "admin".into(),
+///         email: "admin@ents.test".into(),
+///         time: gix::date::Time { seconds: 300, offset: 0 },
+///     },
+///     sign: &|payload| admin.sign(payload),
+/// };
+///
+/// let outcome = propose_entity_with_pin(
+///     &refs, &objects, &NullEventSink,
+///     namespace::review_ref("7").expect("valid"), &Review { verdict: "approve".into() },
+///     namespace::review_pin_ref("7").expect("valid"), reviewed,
+///     &identity, "Review 7", "Pin review 7", Mode::Advisory,
+/// )
+/// .expect("reaches an outcome");
+/// assert_eq!(outcome.result, TxResult::Applied);
+/// // Both refs advanced together.
+/// assert!(refs.get(namespace::review_ref("7").expect("valid").as_ref()).expect("read").is_some());
+/// assert!(refs.get(namespace::review_pin_ref("7").expect("valid").as_ref()).expect("read").is_some());
+/// ```
+// @relation(receive.multi-ref-atomicity, model.review, model.review-pin, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one field per ref this entity spans (entity name+value, pin name+retained commit) \
+              plus the shared identity/subjects/mode; the atomic counterpart of propose_entity \
+              and propose_pin, which carry the same justification"
+)]
+pub fn propose_entity_with_pin<T: for<'facet> facet::Facet<'facet>>(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn EventSink,
+    entity_name: FullName,
+    entity: &T,
+    pin_name: FullName,
+    retain: gix_hash::ObjectId,
+    identity: &Identity<'_>,
+    entity_subject: &str,
+    pin_subject: &str,
+    mode: Mode,
+) -> Result<Outcome> {
+    let (entity_transition, entity_tip) = entity_transition(
+        refs,
+        objects,
+        &entity_name,
+        entity,
+        identity,
+        entity_subject,
+    )?;
+    let (pin_transition, pin_tip) =
+        pin_transition(refs, objects, &pin_name, retain, identity, pin_subject)?;
+    let proposal = Proposal {
+        transitions: vec![entity_transition, pin_transition],
+        objects: vec![entity_tip, pin_tip],
         auth: None,
     };
     crate::receive::receive(refs, objects, events, &proposal, mode)

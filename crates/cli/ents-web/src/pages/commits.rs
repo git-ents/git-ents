@@ -489,7 +489,7 @@ where
         verdict: form.verdict,
         body: form.body,
     };
-    let (_id, entity_outcome, pin_outcome) = ents_forge::review::new(
+    let (_id, outcome) = ents_forge::review::new(
         state.refs.as_ref(),
         &*state.objects(),
         state.events.as_ref(),
@@ -498,8 +498,7 @@ where
         &crate::receive_identity!(identity),
         state.mode,
     )?;
-    crate::error::outcome_to_result(entity_outcome)?;
-    crate::error::outcome_to_result(pin_outcome)?;
+    crate::error::outcome_to_result(outcome)?;
     Ok(Redirect::to(&format!("/commit/{oid}")))
 }
 

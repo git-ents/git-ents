@@ -29,7 +29,7 @@ pub fn new(root: &LocalRoot, new: NewReview, key: Option<std::path::PathBuf>) ->
         actor: actor(&signer),
         sign: &|payload| signer.sign(payload),
     };
-    let (id, entity_outcome, pin_outcome) = review::new(
+    let (id, outcome) = review::new(
         &root.refs,
         &root.objects,
         &root.events,
@@ -38,8 +38,7 @@ pub fn new(root: &LocalRoot, new: NewReview, key: Option<std::path::PathBuf>) ->
         &identity,
         root.mode(),
     )?;
-    outcome_to_result(entity_outcome, None)?;
-    outcome_to_result(pin_outcome, None)?;
+    outcome_to_result(outcome, None)?;
     Ok(id)
 }
 
