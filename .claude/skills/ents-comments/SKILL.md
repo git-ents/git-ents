@@ -9,6 +9,10 @@ A git-ents comment is a body anchored to exact content — a blob, an optional l
 Comments live on `refs/meta/comments/*`, one ref each, and carry a `state` (`open` or `resolved`).
 Editors, the web UI, and the CLI are three frontends of one mechanism, so a comment left in Zed is the same entity you resolve here.
 
+A comment's (and an issue's) `<id>` is the oid of its own genesis commit — never minted, always derivable from the signed content.
+The default (non-`--porcelain`) listing abbreviates it for display exactly as git abbreviates a commit oid; `--porcelain` and refnames always carry the full oid.
+Every `<id>` argument below needs the **full** id — copy it from `--porcelain` output (or the id an `add`/`new`/`reply` command just printed), not the abbreviated form a plain listing shows.
+
 Everything below is `git ents comment …`.
 Run it from inside the repo.
 There is no MCP server and no daemon — just the CLI.
@@ -99,7 +103,7 @@ Anchoring `--worktree` captures the current on-disk bytes, so a remark about unc
 ## Issues and reviews are made of comments
 
 Issues and reviews are their own entities, but their *discussion* is ordinary comments carrying the entity as a `context` — so the same loop above works on them.
-A context is the entity's ref path below `refs/meta/`, e.g. `issues/42` or `reviews/<id>`.
+A context is the entity's ref path below `refs/meta/`, e.g. `issues/42` or `reviews/<target>/<member>`.
 
 ### Issues
 
@@ -117,16 +121,19 @@ git ents comment list --context issues/42 --porcelain    # the issue's thread
 
 ### Reviews
 
-A review is a verdict plus a body about a commit, and it occupies **two refs**: the entity at `refs/meta/reviews/<id>` and a retention pin at `refs/meta/pins/reviews/<id>` that keeps the reviewed commit reachable.
-`review new` writes both.
+A review is a verdict plus a body about a commit, keyed by the composite pair `(target, member)` — no minted id anywhere.
+It occupies **two refs**: the entity at `refs/meta/reviews/<target>/<member>` and a retention pin at `refs/meta/pins/reviews/<target>/<member>` that keeps the reviewed commit reachable.
+`review new` writes both, keyed to the caller's own member id (the enrolled username matching the signing key, or a fingerprint-derived placeholder if unenrolled).
+
+Reviewing a commit an ancestor of which you already reviewed is a **re-review**: it advances the same two refs fast-forward (the composite key stays anchored at the original target) rather than opening a second, unrelated review — so re-reviewing after a branch moves forward is just `review new` again with the new target.
 
 ```text
 git ents review new --target HEAD --verdict approve --body "LGTM."
 git ents review new --target <rev> --verdict request-changes --body "..."
 git ents review list [--target <rev>]
-git ents review show <id>     # verdict, body, and its comment thread
+git ents review show <target> <member>     # verdict, body, and its comment thread
 # Line-level review notes are just anchored comments in the review's context:
-git ents comment add src/gate.rs --lines 40:52 --context reviews/<id> --body "..."
+git ents comment add src/gate.rs --lines 40:52 --context reviews/<target>/<member> --body "..."
 ```
 
 Verdicts are free-form strings; `approve` and `request-changes` are conventions, not a fixed set.
