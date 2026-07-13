@@ -45,9 +45,26 @@ fn help_names_every_subcommand_family() {
         "redact",
         "hook",
         "serve",
+        "lsp",
     ] {
         assert!(help.contains(name), "--help must mention {name:?}:\n{help}");
     }
+}
+
+/// `git ents lsp --help` documents the stdio-only, no-socket,
+/// no-git-transport contract `lens.serve` requires, not just a bare flag
+/// list.
+#[test]
+// @relation(lens.serve, scope=function, role=Verifies)
+fn lsp_help_documents_the_stdio_only_contract() {
+    let output = Command::new(common::bin_path())
+        .args(["lsp", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).expect("utf8");
+    assert!(text.contains("stdio") || text.contains("stdin"), "{text}");
+    assert!(text.contains("socket"), "{text}");
 }
 
 /// `--help` carries this crate's own one-line responsibility, not a

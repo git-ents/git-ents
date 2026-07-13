@@ -58,6 +58,14 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
             let root = LocalRoot::discover(".")?;
             commands::serve::run(root, port, key, out)
         }
+        Top::Lsp { key } => {
+            // The lens speaks LSP over stdin/stdout, so nothing may be
+            // written to `out` (the process's stdout) here — that stream is
+            // the protocol channel. It reuses the exact same local root
+            // `serve` does (`lens.serve`), adding only the LSP frontend.
+            let root = LocalRoot::discover(".")?;
+            commands::lsp::run(root, key)
+        }
     }
 }
 

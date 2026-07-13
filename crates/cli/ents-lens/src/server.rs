@@ -28,7 +28,7 @@ use lsp_types::request::{
     CodeActionRequest, CodeLensRequest, ExecuteCommand, HoverRequest, Request as _, ShowDocument,
 };
 use lsp_types::{
-    CodeActionOptions, CodeActionProviderCapability, CodeLensOptions, DidChangeTextDocumentParams,
+    CodeActionProviderCapability, CodeLensOptions, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     ExecuteCommandOptions, HoverProviderCapability, PublishDiagnosticsParams, ServerCapabilities,
     ShowDocumentParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
@@ -59,9 +59,7 @@ pub fn capabilities() -> ServerCapabilities {
             resolve_provider: Some(false),
         }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
-        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            ..CodeActionOptions::default()
-        })),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         execute_command_provider: Some(ExecuteCommandOptions {
             commands: vec![
                 render::CMD_VIEW.to_owned(),
@@ -93,6 +91,11 @@ pub fn serve_stdio<O: Find + Write>(lens: Lens<O>) -> std::io::Result<()> {
         .map_err(|source| std::io::Error::other(source.to_string()))?;
     let mut server = ServerLoop { connection, lens };
     server.run()?;
+    // Drop the connection (and with it the writer's channel sender) before
+    // joining: the IO writer thread only terminates once its sender is gone,
+    // so joining while `server` still holds the connection would hang here
+    // forever.
+    drop(server);
     io_threads.join()?;
     Ok(())
 }

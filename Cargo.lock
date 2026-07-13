@@ -1734,6 +1734,7 @@ dependencies = [
  "ents-forge",
  "ents-gate",
  "ents-kiln",
+ "ents-lens",
  "ents-model",
  "ents-query",
  "ents-receive",

@@ -28,7 +28,7 @@ pub struct Cli {
 }
 
 /// Every top-level `git ents` subcommand.
-// @relation(roots.local, roots.worktree-update, roots.single-node-hosted, scope=file)
+// @relation(roots.local, roots.worktree-update, roots.single-node-hosted, lens.serve, scope=file)
 #[derive(Facet)]
 #[repr(u8)]
 pub enum Top {
@@ -141,6 +141,25 @@ pub enum Top {
         #[facet(args::named)]
         port: Option<u16>,
         /// Key to sign web edits with; defaults to `user.signingkey`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
+    /// Serve the editor lens (`lens.serve`): a Language Server Protocol
+    /// server over stdin/stdout that projects this repository's comments
+    /// (`refs/meta/comments/*`) into whatever buffer an editor has open,
+    /// and composes new ones through the same signed path `git ents
+    /// comment` uses (`lens.parity`).
+    ///
+    /// Speaks LSP over stdio only: it binds no network socket and adds no
+    /// git-serving transport. It reuses the very same local composition
+    /// root `git ents serve` and every other porcelain command use (the
+    /// same loose-ref `RefStore`, odb, null `EventSink`, and advisory
+    /// gate), adding only the LSP frontend and signing with the user's own
+    /// key. Meant to be launched by an editor extension (e.g. `ents-zed`),
+    /// not run interactively.
+    Lsp {
+        /// Key to sign composed comments with; defaults to
+        /// `user.signingkey`.
         #[facet(args::named)]
         key: Option<PathBuf>,
     },

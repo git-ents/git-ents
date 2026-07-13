@@ -15,6 +15,7 @@ ents-effect = { workspace = true, features = ["docker", "sprite"] }
 ents-forge = { workspace = true }
 ents-gate = { workspace = true }
 ents-kiln = { workspace = true }
+ents-lens = { workspace = true }
 ents-model = { workspace = true }
 ents-query = { workspace = true }
 ents-receive = { workspace = true }
