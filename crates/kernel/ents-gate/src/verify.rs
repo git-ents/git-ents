@@ -3,8 +3,8 @@
 //! `gate.bootstrap`), identical at every call site (`gate.call-sites`).
 
 use ents_model::namespace::{self, Namespace};
-use ents_model::trailer::Trailers;
-use ents_model::{Member, MemberId, MemberState, Provenance};
+use ents_model::{Member, MemberId, MemberState, Provenance, ResultRecord};
+use facet::{Facet, Type, UserType};
 use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::Find;
@@ -12,8 +12,10 @@ use gix_ref_store::{Expected, RefStoreRead};
 
 use crate::config;
 use crate::error::Result;
-use crate::object::{CommitData, descends_from, read_commit};
-use crate::policy;
+use crate::object::{
+    CommitData, all_roots, descends_from, read_commit, read_tree_entry, tree_entry_names,
+};
+use crate::policy::{self, Enrolled};
 use crate::signature;
 use crate::verdict::{Admission, AdmissionKind, Refusal, Requirement, Verdict};
 
@@ -64,9 +66,18 @@ pub struct Update {
 ///    semantics — no commit-supplied timestamp participates) and whose
 ///    provenance authorizes this refname (`model.member-provenance`,
 ///    `effect.admin-only`).
-/// 2. `gate.refname-binding` — the commit's `Advance-ref:` trailer names
-///    exactly this ref.
-/// 3. `gate.fast-forward` — the new tip descends from the current tip.
+/// 2. `gate.identity-binding` — the refname is recomputed from the
+///    proposed tip's signed content, per namespace exactly as
+///    `meta-ref.identity-binding` tabulates (a natural-key tree field, a
+///    hash-identified genesis oid enforced by the all-roots walk, a
+///    composite review/result key, an inbox owner), and must match
+///    `update.name`; a hash-identified or composite genesis additionally
+///    strictly decodes as its entity type, an unknown tree entry
+///    refusing.
+/// 3. `gate.owner-mutation` — a hash-identified entity's ref advances
+///    only under its genesis signer (∪ admins); a review advances only
+///    under the member its refname names. Creation stays provenance-keyed.
+/// 4. `gate.fast-forward` — the new tip descends from the current tip.
 ///
 /// Refs outside `refs/meta/*` pass as [`AdmissionKind::CodeRef`]: branch
 /// refs keep transport-level authorization instead of the tip invariant
@@ -96,7 +107,7 @@ pub struct Update {
 /// let Verdict::Pass(admission) = verdict else { panic!("code refs pass") };
 /// assert_eq!(admission.kind, AdmissionKind::CodeRef);
 /// ```
-// @relation(gate.tip-signed, gate.refname-binding, gate.fast-forward, gate.atomic-cas, gate.epoch, gate.call-sites, gate.principled-split, scope=function)
+// @relation(gate.tip-signed, gate.identity-binding, gate.owner-mutation, gate.fast-forward, gate.atomic-cas, gate.epoch, gate.call-sites, gate.principled-split, scope=function)
 pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> Result<Verdict> {
     let old = refs.get(update.name.as_ref())?;
     let cas = old.map_or(Expected::MustNotExist, Expected::MustExistAndMatch);
@@ -221,23 +232,26 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
         return Ok(Verdict::Fail(refusal));
     }
 
-    // gate.refname-binding: without this, a signed commit could be
-    // replayed as the tip of a different meta-ref.
-    // @relation(gate.refname-binding, scope=function)
-    let trailers = Trailers::parse(&commit.message);
-    if trailers.ents_ref.as_ref() != Some(&update.name) {
-        let found = trailers
-            .ents_ref
-            .as_ref()
-            .map_or_else(|| "no Advance-ref trailer".to_owned(), |n| n.to_string());
-        return refuse(
-            Requirement::RefnameBinding,
-            format!(
-                "the commit was authored for {found}, not for {}",
-                update.name.as_bstr()
-            ),
-            false,
-        );
+    // gate.identity-binding: recompute the refname from the tip's signed
+    // content per namespace and refuse a mismatch — a signed commit
+    // cannot be replayed as the tip of a different meta-ref than the one
+    // its content names. This is what the retired Advance-ref trailer
+    // used to assert by side channel; now the refname is a total function
+    // of the tree, the genesis oid, and the signer.
+    // @relation(gate.identity-binding, scope=function)
+    if let Some(refusal) = identity_binding(objects, &update.name, new, &commit, &id)? {
+        return Ok(Verdict::Fail(refusal));
+    }
+
+    // gate.owner-mutation: a hash-identified entity's ref advances only
+    // under its genesis signer (∪ admins); a review advances only under
+    // the member its refname names. Creation stays provenance-keyed,
+    // already judged by `authorize` above.
+    // @relation(gate.owner-mutation, scope=function)
+    if let Some(refusal) =
+        owner_mutation(objects, &update.name, old, new, &members, &id, &member)?
+    {
+        return Ok(Verdict::Fail(refusal));
     }
 
     // gate.fast-forward: the parent hash is the anti-replay freshness
@@ -391,12 +405,23 @@ fn bootstrap(
     if !signature::verifies(&pushed.key, payload, sig) {
         return refuse("a first enrollment must be signed by the key it enrolls".into());
     }
-    let trailers = Trailers::parse(&commit.message);
-    if trailers.ents_ref.as_ref() != Some(&update.name) {
+    // The same natural-key identity binding as the ordinary path
+    // (`gate.identity-binding`, `model.member-identity`): the enrolled
+    // member's own id field must recompute the refname being written, so
+    // even a bootstrap write names its ref from signed content, not a
+    // trailer.
+    // @relation(gate.identity-binding, scope=function)
+    let bound = namespace::member_ref(&pushed.id).ok();
+    if bound.as_ref() != Some(&update.name) {
         return Ok(Verdict::Fail(Refusal {
-            requirement: Requirement::RefnameBinding,
+            requirement: Requirement::IdentityBinding,
             refname: update.name.clone(),
-            detail: "the enrollment commit's Advance-ref trailer does not name this ref".into(),
+            detail: format!(
+                "the enrollment's id field is {}, which names {}, not {}",
+                pushed.id,
+                bound.map_or_else(|| "an invalid ref".to_owned(), |n| n.as_bstr().to_string()),
+                update.name.as_bstr()
+            ),
             inbox_alternative: false,
         }));
     }
@@ -415,4 +440,378 @@ fn bootstrap(
         refname: update.name.clone(),
         cas: cas.clone(),
     }))
+}
+
+/// Build an [`Requirement::IdentityBinding`] refusal for `name`.
+fn binding_refusal(name: &FullName, detail: String) -> Option<Refusal> {
+    Some(Refusal {
+        requirement: Requirement::IdentityBinding,
+        refname: name.clone(),
+        detail,
+        inbox_alternative: false,
+    })
+}
+
+/// The value of a scalar tree field as UTF-8, or `None` if the entry is
+/// absent or not valid UTF-8.
+fn field_str(objects: &dyn Find, tree: ObjectId, field: &str) -> Result<Option<String>> {
+    Ok(read_tree_entry(objects, tree, field)?
+        .and_then(|bytes| String::from_utf8(bytes).ok()))
+}
+
+/// The hex form of a raw-oid (`[u8; 20]`) tree field, or `None` when the
+/// entry is absent or not 20 bytes.
+fn field_oid_hex(objects: &dyn Find, tree: ObjectId, field: &str) -> Result<Option<String>> {
+    Ok(read_tree_entry(objects, tree, field)?.and_then(|bytes| {
+        (bytes.len() == 20).then(|| ObjectId::from_bytes_or_panic(&bytes).to_string())
+    }))
+}
+
+/// The final `/`-delimited segment of a refname.
+fn final_segment(name: &FullName) -> String {
+    name.as_bstr()
+        .to_string()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A natural-key binding: the tree field `field` must equal `expected`
+/// (the refname's final segment).
+fn bind_natural_key(
+    objects: &dyn Find,
+    name: &FullName,
+    tree: ObjectId,
+    field: &str,
+    expected: &str,
+) -> Result<Option<Refusal>> {
+    match field_str(objects, tree, field)? {
+        Some(value) if value == expected => Ok(None),
+        Some(value) => Ok(binding_refusal(
+            name,
+            format!(
+                "the tree's `{field}` field is `{value}`, which names a different ref than {}",
+                name.as_bstr()
+            ),
+        )),
+        None => Ok(binding_refusal(
+            name,
+            format!("the tree carries no `{field}` field to bind {}", name.as_bstr()),
+        )),
+    }
+}
+
+/// A hash-identified binding: the refname's final segment must be the
+/// genesis commit's oid, and every parentless commit reachable from the
+/// proposed tip must be that genesis (`meta-ref.identity-binding`'s
+/// all-roots rule). This, not a creation-time-only check, is what refuses
+/// replaying a signed mutation commit as a doppelgänger genesis.
+fn bind_hash_identified(
+    objects: &dyn Find,
+    name: &FullName,
+    new: ObjectId,
+) -> Result<Option<Refusal>> {
+    let segment = final_segment(name);
+    let Ok(expected) = ObjectId::from_hex(segment.as_bytes()) else {
+        return Ok(binding_refusal(
+            name,
+            format!("`{segment}` is not a genesis commit oid"),
+        ));
+    };
+    let roots = all_roots(objects, new)?;
+    if roots.is_empty() {
+        return Ok(binding_refusal(
+            name,
+            "the proposed tip has no readable genesis root to bind its id".into(),
+        ));
+    }
+    for root in roots {
+        if root != expected {
+            return Ok(binding_refusal(
+                name,
+                format!(
+                    "a parentless commit {root} reachable from the proposed tip is not the \
+                     genesis {expected} the refname names — a signed mutation cannot be replayed \
+                     as a new entity's genesis"
+                ),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+/// Reject a genesis tree that carries an entry which is not a field of its
+/// namespace's entity type, or that does not decode as that type at all
+/// (`gate.identity-binding`: strict genesis decode — the pairwise-disjoint
+/// structs, held by test, are what let this stand in for a stored
+/// `.schema` marker).
+fn strict_decode<T: for<'facet> Facet<'facet>>(
+    objects: &dyn Find,
+    name: &FullName,
+    tree: ObjectId,
+) -> Result<Option<Refusal>> {
+    let Type::User(UserType::Struct(st)) = T::SHAPE.ty else {
+        return Ok(None);
+    };
+    let fields: Vec<&str> = st.fields.iter().map(|f| f.name).collect();
+    for entry in tree_entry_names(objects, tree)? {
+        if !fields.contains(&entry.as_str()) {
+            return Ok(binding_refusal(
+                name,
+                format!(
+                    "the genesis tree carries an unknown entry `{entry}` for a \
+                     {} entity; strict decode refuses it",
+                    T::SHAPE.type_identifier
+                ),
+            ));
+        }
+    }
+    if facet_git_tree::deserialize::<T>(&tree, objects).is_err() {
+        return Ok(binding_refusal(
+            name,
+            format!(
+                "the genesis tree does not decode as a {} entity",
+                T::SHAPE.type_identifier
+            ),
+        ));
+    }
+    Ok(None)
+}
+
+/// Recompute `name` from the proposed tip's signed content, per namespace
+/// exactly as `meta-ref.identity-binding` tabulates, returning a refusal
+/// on mismatch (`gate.identity-binding`). `None` means the binding holds.
+///
+/// The recomputation reads binding fields by tree-entry name generically
+/// (`read_tree_entry`), so it never depends on a non-kernel entity crate
+/// to bind a review's target or a toolchain's name; the one exception is
+/// strict genesis decode of a result, whose type this crate owns.
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function)
+fn identity_binding(
+    objects: &dyn Find,
+    name: &FullName,
+    new: ObjectId,
+    commit: &CommitData,
+    signer: &MemberId,
+) -> Result<Option<Refusal>> {
+    let Some(namespace) = namespace::classify(name.as_ref()) else {
+        return Ok(None);
+    };
+    let is_genesis = commit.parents.is_empty();
+    match namespace {
+        // Singleton state binds by its fixed name, which `classify`
+        // already established, and an unknown namespace cannot be bound by
+        // a vocabulary that does not know it (`model.extensibility`).
+        Namespace::Account | Namespace::Config | Namespace::Unknown => Ok(None),
+        Namespace::Member => {
+            bind_natural_key(objects, name, commit.tree, "id", &final_segment(name))
+        }
+        Namespace::Effect | Namespace::Toolchain => {
+            bind_natural_key(objects, name, commit.tree, "name", &final_segment(name))
+        }
+        Namespace::Comment | Namespace::Issue => bind_hash_identified(objects, name, new),
+        Namespace::Review => {
+            let Some((target, member)) = namespace::parse_review_ref(name.as_ref()) else {
+                return Ok(binding_refusal(
+                    name,
+                    "not a well-formed reviews/<target>/<member> refname".into(),
+                ));
+            };
+            match field_oid_hex(objects, commit.tree, "target")? {
+                Some(hex) if hex == target => {}
+                other => {
+                    return Ok(binding_refusal(
+                        name,
+                        format!(
+                            "the review's target field {} does not name the reviewed commit \
+                             {target} in its refname",
+                            other.unwrap_or_else(|| "(absent)".into())
+                        ),
+                    ));
+                }
+            }
+            if signer.as_str() != member.as_str() {
+                return Ok(binding_refusal(
+                    name,
+                    format!(
+                        "the review is signed by {signer}, not the reviewer {member} its \
+                         refname names"
+                    ),
+                ));
+            }
+            Ok(None)
+        }
+        Namespace::Result | Namespace::SelfRun => {
+            let Some((effect, short_oid)) = namespace::parse_result_ref(name.as_ref()) else {
+                return Ok(binding_refusal(
+                    name,
+                    "not a well-formed results/<effect>/<short-oid> refname".into(),
+                ));
+            };
+            match field_str(objects, commit.tree, "effect")? {
+                Some(value) if value == effect => {}
+                other => {
+                    return Ok(binding_refusal(
+                        name,
+                        format!(
+                            "the result's effect field {} does not name {effect} in its refname",
+                            other.unwrap_or_else(|| "(absent)".into())
+                        ),
+                    ));
+                }
+            }
+            match field_oid_hex(objects, commit.tree, "target")? {
+                Some(hex) if hex.starts_with(&short_oid) => {}
+                other => {
+                    return Ok(binding_refusal(
+                        name,
+                        format!(
+                            "the result's target field {} does not begin with the short oid \
+                             {short_oid} in its refname",
+                            other.unwrap_or_else(|| "(absent)".into())
+                        ),
+                    ));
+                }
+            }
+            if namespace == Namespace::SelfRun
+                && namespace::self_run_owner(name.as_ref()).as_ref() != Some(signer)
+            {
+                return Ok(binding_refusal(
+                    name,
+                    format!("a self-run result under refs/meta/self/* must be signed by {signer}"),
+                ));
+            }
+            if is_genesis
+                && let Some(refusal) = strict_decode::<ResultRecord>(objects, name, commit.tree)?
+            {
+                return Ok(Some(refusal));
+            }
+            Ok(None)
+        }
+        // A pin mirrors its entity's segments by construction and carries
+        // the empty tree; its ancestry deliberately reaches into code
+        // history, so the all-roots walk is NEVER applied to it
+        // (`meta-ref.identity-binding`).
+        Namespace::Pin => Ok(None),
+        // An inbox ref binds by its owner segment equal to the signer
+        // (already enforced by `authorize`), with the canonical suffix
+        // bound exactly as its canonical namespace binds — recurse on the
+        // synthesized canonical refname.
+        Namespace::Inbox => {
+            if namespace::inbox_owner(name.as_ref()).as_ref() != Some(signer) {
+                return Ok(binding_refusal(
+                    name,
+                    format!("an inbox ref's owner segment must equal its signer {signer}"),
+                ));
+            }
+            let path = name.as_bstr().to_string();
+            let Some(rest) = path.strip_prefix("refs/meta/inbox/") else {
+                return Ok(None);
+            };
+            let Some((_, suffix)) = rest.split_once('/') else {
+                return Ok(None);
+            };
+            let Ok(canonical) = FullName::try_from(format!("refs/meta/{suffix}")) else {
+                return Ok(None);
+            };
+            identity_binding(objects, &canonical, new, commit, signer)
+        }
+        // `Namespace` is `#[non_exhaustive]`; a variant this build does
+        // not know is treated like `Unknown` — unbindable by a vocabulary
+        // that cannot interpret it (`model.extensibility`).
+        _ => Ok(None),
+    }
+}
+
+/// Ownership keys mutation (`gate.owner-mutation`): a hash-identified
+/// entity's ref advances only under its genesis signer or an
+/// admin-registered member; a review advances only under the member its
+/// refname names. Creation stays provenance-keyed (judged by `authorize`),
+/// so this fires only on an advance.
+// @relation(gate.owner-mutation, scope=function)
+fn owner_mutation(
+    objects: &dyn Find,
+    name: &FullName,
+    old: Option<ObjectId>,
+    new: ObjectId,
+    members: &[Enrolled],
+    signer_id: &MemberId,
+    signer: &Member,
+) -> Result<Option<Refusal>> {
+    let Some(namespace) = namespace::classify(name.as_ref()) else {
+        return Ok(None);
+    };
+    let refuse = |detail: String| {
+        Some(Refusal {
+            requirement: Requirement::TipSigned,
+            refname: name.clone(),
+            detail,
+            inbox_alternative: false,
+        })
+    };
+    let is_admin = signer.provenance == Provenance::AdminRegistered;
+    match namespace {
+        Namespace::Comment | Namespace::Issue => {
+            // Creation is provenance-keyed; only an advance is owner-keyed.
+            if old.is_none() {
+                return Ok(None);
+            }
+            if is_admin {
+                return Ok(None);
+            }
+            let genesis = all_roots(objects, new)?;
+            let genesis_signer = match genesis.first() {
+                Some(root) => commit_signer(objects, members, *root)?,
+                None => None,
+            };
+            if genesis_signer.as_ref() == Some(signer_id) {
+                Ok(None)
+            } else {
+                Ok(refuse(format!(
+                    "{signer_id} is neither the member whose signature this entity's genesis \
+                     carries nor an admin-registered member, so may not advance {}",
+                    name.as_bstr()
+                )))
+            }
+        }
+        Namespace::Review => {
+            let Some((_, member)) = namespace::parse_review_ref(name.as_ref()) else {
+                return Ok(None);
+            };
+            if signer_id.as_str() == member.as_str() {
+                Ok(None)
+            } else {
+                Ok(refuse(format!(
+                    "a review advances only under the signature of {member}, the reviewer its \
+                     refname names, not {signer_id}"
+                )))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The enrolled member whose currently-in-force key signed `oid`, or
+/// `None` when the commit is unsigned or signed by no enrolled member —
+/// used to recover a hash-identified entity's genesis signer
+/// (`gate.owner-mutation`).
+fn commit_signer(
+    objects: &dyn Find,
+    members: &[Enrolled],
+    oid: ObjectId,
+) -> Result<Option<MemberId>> {
+    let Some(commit) = read_commit(objects, oid)? else {
+        return Ok(None);
+    };
+    let Some((payload, sig)) = signature::split_signed(&commit.raw) else {
+        return Ok(None);
+    };
+    for enrolled in members {
+        let member = policy::member_current(objects, enrolled.tip)?;
+        if signature::verifies(&member.key, &payload, &sig) {
+            return Ok(Some(enrolled.id.clone()));
+        }
+    }
+    Ok(None)
 }

@@ -16,8 +16,15 @@
 //!
 //! From `docs/spec/gate.sdoc`:
 //!
-//! - `gate.tip-signed`, `gate.refname-binding`, `gate.fast-forward` —
-//!   [`verify`].
+//! - `gate.tip-signed`, `gate.identity-binding`, `gate.owner-mutation`,
+//!   `gate.fast-forward` — [`verify`]. Identity binding recomputes each
+//!   refname from the tip's signed content per namespace
+//!   (`meta-ref.identity-binding`) — a natural-key tree field, a
+//!   hash-identified genesis oid enforced by the all-roots walk, a
+//!   composite review/result key, an inbox owner — and strictly decodes a
+//!   genesis tree, an unknown entry refusing; owner mutation keys an
+//!   advance to the genesis signer (∪ admins) or, for a review, the
+//!   member the refname names.
 //! - `gate.atomic-cas` — [`verify`] reads the old tip once and returns
 //!   it as [`Admission::cas`], the precondition the writer MUST hand to
 //!   `RefStore::transaction`; the CAS itself is the store's.

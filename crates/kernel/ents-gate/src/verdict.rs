@@ -27,9 +27,12 @@ pub enum Requirement {
     /// `gate.tip-signed`: the new tip must be signed by a member
     /// authorized for the refname.
     TipSigned,
-    /// `gate.refname-binding`: the commit's `Advance-ref:` trailer must
-    /// match the refname being updated.
-    RefnameBinding,
+    /// `gate.identity-binding`: the refname must be recomputable from the
+    /// proposed tip's signed content, per namespace
+    /// (`meta-ref.identity-binding`) — a mismatch, a doppelgänger genesis
+    /// (the all-roots walk), or a genesis tree with an unknown entry
+    /// (strict decode) all refuse here.
+    IdentityBinding,
     /// `gate.fast-forward`: the new tip must descend from the old tip.
     FastForward,
     /// `gate.atomic-cas`: the update must commit via compare-and-swap
@@ -43,7 +46,7 @@ impl Requirement {
     pub fn uid(&self) -> &'static str {
         match self {
             Self::TipSigned => "gate.tip-signed",
-            Self::RefnameBinding => "gate.refname-binding",
+            Self::IdentityBinding => "gate.identity-binding",
             Self::FastForward => "gate.fast-forward",
             Self::AtomicCas => "gate.atomic-cas",
         }
