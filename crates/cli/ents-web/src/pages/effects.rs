@@ -8,13 +8,17 @@
 
 use std::sync::Arc;
 
+use axum::Form;
 use axum::extract::{Path, State};
-use ents_model::Effect;
+use axum::response::{IntoResponse, Redirect};
+use ents_model::{Effect, namespace};
 use ents_query::Query;
 use gix_object::{Find, Write};
 use maud::html;
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::session::Session;
 use crate::state::AppState;
 
 /// `GET /effects`.
@@ -22,7 +26,10 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// Propagates a ref-store or object read failure.
-pub async fn list<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Markup>
+pub async fn list<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+) -> Result<maud::Markup>
 where
     O: Find + Write + Send + 'static,
 {
@@ -37,7 +44,7 @@ where
     let table = if rows.is_empty() {
         super::blankslate(
             "No effects yet",
-            html! { "Registered effects and their trigger queries appear here." },
+            html! { "Define one with the form below." },
         )
     } else {
         crate::render::list_table(&rows, "name", |id| format!("/effects/{id}"))
@@ -50,8 +57,101 @@ where
         html! {
             (crate::render::unreadable_disclosure(&failures))
             (table)
+            h2 { "Define an Effect" }
+            (add_form(&session))
         },
     ))
+}
+
+/// The define-effect form (`POST /effects`) -- `git ents effect add`'s
+/// own arguments as form fields.
+fn add_form(session: &Session) -> maud::Markup {
+    html! {
+        form method="post" action="/effects" {
+            (super::csrf_input(session))
+            label { "name" input type="text" name="name"; }
+            label {
+                "trigger"
+                input type="text" name="trigger" placeholder="query.grammar trigger";
+            }
+            label { "run" input type="text" name="run" placeholder="command to run"; }
+            label {
+                "toolchains"
+                input type="text" name="toolchains" placeholder="rust, node";
+            }
+            button type="submit" { "Define Effect" }
+        }
+    }
+}
+
+/// The form fields `POST /effects` accepts.
+#[derive(Debug, Deserialize)]
+pub struct AddForm {
+    /// Name to record the effect under (`refs/meta/effects/<name>`).
+    name: String,
+    /// The query the effect triggers on (`query.grammar`).
+    trigger: String,
+    /// The command the effect runs.
+    run: String,
+    /// Comma- or whitespace-separated toolchain names.
+    #[serde(default)]
+    toolchains: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+}
+
+/// `POST /effects`: define (or replace) an effect as a signed mutation on
+/// `refs/meta/effects/<name>` -- the web counterpart of
+/// `git ents effect add`, sharing its pre-write rule that the trigger must
+/// parse (`ents_receive::reconcile`'s tolerance rule would otherwise
+/// silently skip a malformed one on every future scan).
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match;
+/// [`Error::InvalidArgument`] on an unparsable trigger or an empty name;
+/// otherwise propagates the `receive` proposal's own failures.
+// @relation(roots.web-signing, roots.web-session, scope=function)
+pub async fn create<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Form(form): Form<AddForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let _: Query = form.trigger.parse().map_err(|_source| {
+        Error::InvalidArgument(format!("unparsable trigger: {}", form.trigger))
+    })?;
+    let name = form.name.trim();
+    let ref_name = namespace::effect_ref(name)
+        .map_err(|_invalid| Error::InvalidArgument(format!("invalid effect name: {name}")))?;
+    let effect = Effect {
+        name: name.to_owned(),
+        trigger: form.trigger,
+        toolchains: form
+            .toolchains
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        run: form.run,
+    };
+    let identity = state.identity.as_ref();
+    let outcome = ents_receive::propose_entity(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        ref_name,
+        &effect,
+        &crate::receive_identity!(identity),
+        &format!("Define effect {name}"),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(Redirect::to(&format!("/effects/{name}")))
 }
 
 /// `GET /effects/{name}`.

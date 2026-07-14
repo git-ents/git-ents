@@ -46,7 +46,10 @@ where
             "/account",
             get(pages::account::show::<O>).post(pages::account::update::<O>),
         )
-        .route("/effects", get(pages::effects::list::<O>))
+        .route(
+            "/effects",
+            get(pages::effects::list::<O>).post(pages::effects::create::<O>),
+        )
         .route("/effects/{name}", get(pages::effects::show::<O>))
         .route("/commits", get(pages::commits::list::<O>))
         .route("/commit/{oid}", get(pages::commits::show::<O>))
@@ -61,7 +64,10 @@ where
         .route("/redactions", get(pages::redactions::list::<O>))
         .route("/redactions/{id}", get(pages::redactions::show::<O>))
         .route("/search", get(pages::search::show::<O>))
-        .route("/toolchains", get(pages::toolchains::list::<O>))
+        .route(
+            "/toolchains",
+            get(pages::toolchains::list::<O>).post(pages::toolchains::register::<O>),
+        )
         .route("/toolchains/{name}", get(pages::toolchains::show::<O>))
         .route(
             "/comments",

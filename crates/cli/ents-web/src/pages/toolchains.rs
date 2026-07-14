@@ -3,19 +3,26 @@
 //! [`ents_kiln::Recipe`] needs domain-specific rendering (`Embedded` vs
 //! `Downloaded`, each with its own provenance shape) that would otherwise
 //! push a `match Recipe::Embedded { .. } => ...` into the generic
-//! reflection walk [`crate::render`] exists to keep type-agnostic. Import
-//! is not wired here: it stays a `git ents toolchain import` operation,
-//! since it takes a local directory path, not form data a browser can
-//! supply.
+//! reflection walk [`crate::render`] exists to keep type-agnostic.
+//! Directory import stays a `git ents toolchain import` operation (it
+//! takes a local directory path, not form data a browser can supply);
+//! what `POST /toolchains` wires instead is [`toolchain::register`],
+//! taking a recipe as text ([`ents_kiln::Recipe::parse`]'s own format)
+//! -- an `embedded <tree-oid>` line or a `downloaded` component list is
+//! exactly form data.
 
 use std::sync::Arc;
 
+use axum::Form;
 use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Redirect};
 use ents_kiln::toolchain;
 use gix_object::{Find, Write};
 use maud::html;
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::session::Session;
 use crate::state::AppState;
 
 /// `GET /toolchains`.
@@ -33,7 +40,10 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// Propagates a ref-store read failure.
-pub async fn list<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Markup>
+pub async fn list<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+) -> Result<maud::Markup>
 where
     O: Find + Write + Send + 'static,
 {
@@ -70,8 +80,83 @@ where
         html! {
             (crate::render::unreadable_disclosure(&failures))
             (listing)
+            h2 { "Import a Toolchain" }
+            (import_form(&session))
         },
     ))
+}
+
+/// The import-toolchain form (`POST /toolchains`): a name and a recipe in
+/// [`ents_kiln::Recipe::parse`]'s own text format.
+fn import_form(session: &Session) -> maud::Markup {
+    html! {
+        form method="post" action="/toolchains" {
+            (super::csrf_input(session))
+            label { "name" input type="text" name="name"; }
+            label {
+                "recipe"
+                textarea name="recipe"
+                    placeholder="embedded <tree-oid>\nor:\ndownloaded\n<url> <sha256> <strip> [dest]" {}
+            }
+            button type="submit" { "Import Toolchain" }
+        }
+    }
+}
+
+/// The form fields `POST /toolchains` accepts.
+#[derive(Debug, Deserialize)]
+pub struct ImportForm {
+    /// Name to record the toolchain under (`refs/meta/toolchains/<name>`).
+    name: String,
+    /// The recipe text ([`ents_kiln::Recipe::parse`]).
+    recipe: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+}
+
+/// `POST /toolchains`: record a toolchain from a recipe given as text
+/// ([`toolchain::register`]) as a signed mutation on
+/// `refs/meta/toolchains/<name>` -- the recipe-flow counterpart of
+/// `git ents toolchain import`, whose directory walk cannot arrive as
+/// form data (this module's own top-level doc).
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match;
+/// [`Error::InvalidArgument`] on a recipe that does not parse or a name
+/// that cannot form a ref; otherwise propagates the `receive` proposal's
+/// own failures.
+// @relation(roots.web-signing, roots.web-session, scope=function)
+pub async fn register<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Form(form): Form<ImportForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let recipe = ents_kiln::Recipe::parse(&form.recipe)
+        .map_err(|source| Error::InvalidArgument(format!("invalid recipe: {source}")))?;
+    let name = form.name.trim();
+    let identity = state.identity.as_ref();
+    let outcome = toolchain::register(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        name,
+        &recipe,
+        &crate::receive_identity!(identity),
+        state.mode,
+    )
+    .map_err(|source| match source {
+        ents_effect::Error::InvalidToolchainName(bad) => {
+            Error::InvalidArgument(format!("invalid toolchain name: {bad}"))
+        }
+        other => Error::from(other),
+    })?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(Redirect::to(&format!("/toolchains/{name}")))
 }
 
 /// `GET /toolchains/{name}`: the toolchain's recorded recipe and import

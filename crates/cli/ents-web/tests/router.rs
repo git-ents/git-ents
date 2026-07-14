@@ -2221,6 +2221,95 @@ async fn comments_surface_an_unreadable_ref_in_the_list_and_on_its_own_page() {
     );
 }
 
+/// `POST /effects` defines an effect as a signed mutation on
+/// `refs/meta/effects/<name>` and redirects to its show page; the list
+/// page then names it -- the web counterpart of `git ents effect add`.
+#[tokio::test]
+async fn effect_form_defines_an_effect() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/effects").await;
+
+    let form = format!(
+        "name=unit&trigger=rev(refs/heads/main)&run=cargo+nextest+run&toolchains=rust&csrf={csrf}"
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/effects")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "effect write did not succeed: {:?}",
+        response.status()
+    );
+
+    let list = get_body(&router, "/effects").await;
+    assert!(list.contains("unit"), "the new effect lists: {list}");
+    let show = get_body(&router, "/effects/unit").await;
+    assert!(
+        show.contains("rev(refs/heads/main)") && show.contains("parses"),
+        "the show page renders the trigger and its parse check: {show}"
+    );
+}
+
+/// `POST /toolchains` records a toolchain from a recipe given as text
+/// (`ents_kiln::toolchain::register`) and redirects to its show page --
+/// the recipe-flow counterpart of `git ents toolchain import`.
+#[tokio::test]
+async fn toolchain_form_registers_a_recipe() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/toolchains").await;
+
+    let form =
+        format!("name=empty&recipe=embedded+4b825dc642cb6eb9a060e54bf8d69288fbee4904&csrf={csrf}");
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/toolchains")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "toolchain write did not succeed: {:?}",
+        response.status()
+    );
+
+    let list = get_body(&router, "/toolchains").await;
+    assert!(list.contains("empty"), "the new toolchain lists: {list}");
+    let show = get_body(&router, "/toolchains/empty").await;
+    assert!(
+        show.contains("Embedded"),
+        "the show page renders the recorded recipe: {show}"
+    );
+}
+
 /// `GET /toolchains` surfaces a toolchain written by an older schema
 /// (piece 1's bug: this repository's own
 /// `refs/meta/toolchains/{rust,sccache,zig}` still carry it) through the
