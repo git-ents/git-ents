@@ -24,11 +24,6 @@ it twice.
 
 * *Design settlement* — pick/refine the workbench shell in Claude
   Design; Phase C starts after.
-* *Verdict vocabulary* — `model.review` documents verdict/state as open
-  vocabularies ("conventions, not enums"). Options: (a) hard enum in
-  the model, (b) configured vocabulary under `refs/meta/config`
-  rendered as a strict `select` while the gate stays content-agnostic.
-  Middle path (b) recommended.
 * *Merge* — `web-ui-polish` (six commits, gates green) into the phase
   branch; the agent worktree and the two dev servers (ports 4880/4881)
   are cleaned up then.
@@ -59,11 +54,13 @@ successor branch.
   lens comment list paths still skip unreadables silently; forge
   `NotFound` on web detail pages still maps to HTTP 500.
 
-== Phase B: verdict vocabulary
+== Phase B: verdict enum
 
-After the decision gate: implement (a) or (b); update the review form
-from datalist to strict select fed by the vocabulary; spec + gate tests
-if (b) adds a config entity.
+Decided 2026-07-13: reviews get a *hard enum* verdict in the model
+(unlike issue/comment `state`, which stays an open vocabulary). Replace
+the review form's datalist with a strict `select` over the variants;
+update `model.review` docs/spec accordingly; migrate any existing
+review data forward manually (no legacy read path, per repo policy).
 
 == Phase C: workbench shell (after design settlement)
 
@@ -86,10 +83,21 @@ if (b) adds a config entity.
 
 == Phase D: tool-not-app verbs
 
-* `git ents desk` / `review <oid> --web` / `ticket <id> --web`:
-  spawn-or-reuse serve, open the browser at that exact object
-  (`gh pr view --web` shape).
-* Mutating CLI commands print the localhost URL of what they created.
+Decided 2026-07-13: `--web` is a *global* `git ents` option, not a
+per-subcommand verb.
+
+* `git ents --web` standalone opens the homepage — the Desk.
+* Any read operation with `--web` (`commits`, `issue show 42`,
+  `members list`, ...) opens the corresponding page instead of printing.
+* Any mutating operation with `--web` performs the mutation exactly as
+  the CLI does (same signing, same gate), then opens the resulting
+  entity's page — `--web` never moves a mutation into the browser.
+* Serve lifecycle: reuse a running instance if one answers for this
+  repo on the expected port; otherwise spawn detached. A
+  `--web`-spawned serve exits after an idle timeout (a foreground
+  `git ents serve` never does), keeping the view-command promise.
+* Mutating CLI commands print the localhost URL of what they created
+  even without `--web`.
 * `--app` flag: open in the browser's chromeless app-mode window.
 * Deep links both ways: web line numbers link `zed://` (or `zed
   path:line`); `ents-lens` gains an "open in browser" code action per
