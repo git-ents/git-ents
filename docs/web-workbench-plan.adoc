@@ -1,0 +1,109 @@
+= Web Workbench Plan
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[abstract]
+Redesign and feature plan for `ents-web` (and its seams into `serve`,
+the CLI, and `ents-lens`), agreed 2026-07-13. Direction: the "workbench"
+(Proposal C) — `git ents serve` is `git status` for review and
+ticketing, a view command, not a place. The editor (Zed via
+`ents-lens`) is the primary surface; the web page is a one-click
+escalation, and the two deep-link at each other. Features that only
+make sense in "a place" (presence, notifications, out-of-repo state)
+are off-thesis.
+
+Visual iteration happens in the owner's claude.ai/design project
+("Design System"), seeded from the real `ents.css` with three shell
+proposals and two full-page workbench mocks
+(`pages/workbench-desk.html`, `pages/workbench-code.html`; sources
+under `/tmp/ents-design`). Implementation of Phase C waits for that
+iteration to settle, because the rail-and-panes shell restructures
+`pages::layout` enough that landing page-level work first means doing
+it twice.
+
+== Decision gates (owner)
+
+* *Design settlement* — pick/refine the workbench shell in Claude
+  Design; Phase C starts after.
+* *Verdict vocabulary* — `model.review` documents verdict/state as open
+  vocabularies ("conventions, not enums"). Options: (a) hard enum in
+  the model, (b) configured vocabulary under `refs/meta/config`
+  rendered as a strict `select` while the gate stays content-agnostic.
+  Middle path (b) recommended.
+* *Merge* — `web-ui-polish` (six commits, gates green) into the phase
+  branch; the agent worktree and the two dev servers (ports 4880/4881)
+  are cleaned up then.
+
+== Phase A: independent substance (no shell dependency)
+
+Parallel-safe, each its own commit; land on `web-ui-polish` or a
+successor branch.
+
+* `serve` prints and opens `http://<repo-dir>.localhost:<port>` instead
+  of `127.0.0.1` — `*.localhost` resolves in-browser (RFC 6761) and is
+  a secure context, so no hosts file, no DNS, no "Not secure" chip.
+  Verified live 2026-07-13. Safari caveat documented (system resolver;
+  one `/etc/hosts` line).
+* Fix the commit diff view repeating every subdirectory as its own
+  entry in the changed-file list.
+* Effect adder: form + POST route (there is currently no way to add an
+  effect from the web).
+* Toolchain importer: form + POST route mirroring the CLI recipe flow.
+* `Key-for-<member-id>: <oid>` trailer written by comment-resolve
+  mutations, binding the resolver's member id to their key blob oid at
+  resolve time (provenance in the chain). Receive/model work + spec
+  rule + Tracey coverage; surfaces later in the UI as provenance
+  display.
+* Member autocomplete: a datalist/endpoint over `refs/meta/member/*`
+  usable by forms now and the palette later (complete by id or name).
+* Parity fixes deferred from the unreadable-entities work: CLI and
+  lens comment list paths still skip unreadables silently; forge
+  `NotFound` on web detail pages still maps to HTTP 500.
+
+== Phase B: verdict vocabulary
+
+After the decision gate: implement (a) or (b); update the review form
+from datalist to strict select fed by the vocabulary; spec + gate tests
+if (b) adds a config entity.
+
+== Phase C: workbench shell (after design settlement)
+
+* Replace the tab shell in `pages::layout` with the icon rail
+  (Desk / Code / Review / Tickets / Threads; governance and account at
+  the rail's bottom) plus top bar: repo name, branch pill, search box
+  (palette placeholder), identity chip.
+* Master–detail panes, SSR-friendly (every selection is a real URL;
+  the list pane always renders): file tree left / padded blob right;
+  commits list left / diff right; tickets list left / ticket + in-pane
+  composer right (replaces the separate new-issue page).
+* Desk (home): working-tree lane (changed files with +/− stats via
+  gix status, snapshot action), needs-attention feed (unresolved
+  threads, reviews awaiting the signer's verdict), open tickets,
+  history with Scoped-Commits scope chips colored per scope.
+* Theme pass: brighter surfaces both schemes (per the mocks'
+  `proposal-c.css`), content padding on blob/diff panes, SSH keys as
+  an identity card (key type badge, fingerprint, truncated middle)
+  instead of a table row.
+
+== Phase D: tool-not-app verbs
+
+* `git ents desk` / `review <oid> --web` / `ticket <id> --web`:
+  spawn-or-reuse serve, open the browser at that exact object
+  (`gh pr view --web` shape).
+* Mutating CLI commands print the localhost URL of what they created.
+* `--app` flag: open in the browser's chromeless app-mode window.
+* Deep links both ways: web line numbers link `zed://` (or `zed
+  path:line`); `ents-lens` gains an "open in browser" code action per
+  thread.
+
+== Phase E: palette
+
+`⌘K` jump-to endpoint over files, commits, tickets, members (reuses
+Phase A autocomplete); progressive enhancement over the search box —
+the real "menu" of the workbench.
+
+== Gates
+
+Per repo convention: `cargo nextest run` (workspace), clippy clean,
+fmt, Tracey coverage for any spec-rule additions (Phase A trailer,
+Phase B vocabulary), visual verification via headless Firefox
+screenshots against a running `serve` before commit.
