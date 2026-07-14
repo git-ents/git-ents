@@ -39,6 +39,15 @@ pub(crate) fn is_asciidoc(name: &str) -> bool {
 /// which hit the same gap: without this, a README's own `= Title` line
 /// would silently vanish from the rendered page.
 ///
+/// The header's own attribute entries (`:name: value`) surface above the
+/// document as a key-value properties table
+/// ([`crate::render::properties_table`], the same component
+/// [`crate::markdown`] renders frontmatter through), read by
+/// [`header_attribute_entries`]'s own line scan of the source header --
+/// deliberately not `acdc`'s parsed `doc.attributes`, which folds the
+/// explicitly-written entries in with its ~80 defaults and exposes no
+/// explicit-only view to read back.
+///
 /// No sanitization is applied beyond what `acdc`'s HTML converter itself
 /// guarantees -- the pre-redo version did the same, emitting the
 /// converter's output unescaped via `maud::PreEscaped`.
@@ -51,6 +60,7 @@ pub(crate) fn to_html(source: &str) -> Result<Markup> {
         .map_err(|err| Error::Asciidoc(err.to_string()))?;
     let doc = parsed.document();
 
+    let attributes = header_attribute_entries(source);
     let heading = doc
         .header
         .as_ref()
@@ -74,10 +84,46 @@ pub(crate) fn to_html(source: &str) -> Result<Markup> {
     let body = processor
         .convert_to_string(doc, &options)
         .map_err(|err| Error::Asciidoc(err.to_string()))?;
-    Ok(match heading {
-        Some(heading) => html! { (heading) (PreEscaped(body)) },
-        None => PreEscaped(body),
+    Ok(html! {
+        (crate::render::properties_table(&attributes))
+        @if let Some(heading) = heading { (heading) }
+        (PreEscaped(body))
     })
+}
+
+/// The attribute entries (`:name: value`, or a bare/unset `:name:` /
+/// `:!name:`) written in `source`'s own document header -- the lines from
+/// the top of the document to its first blank line, where AsciiDoc allows
+/// attribute entries at all. A minimal line scan, for the reason
+/// [`to_html`]'s own doc gives: `acdc`'s parsed attribute map cannot say
+/// which entries the document actually wrote. Non-attribute header lines
+/// (the title, an author line, a `//` comment) are skipped; a bare
+/// `:name:` renders with an empty value and an unsetting `:name!:` (or
+/// `:!name:`) keeps its `!`, both verbatim -- this is a display of what
+/// the header says, not an evaluation of it.
+pub(crate) fn header_attribute_entries(source: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            break;
+        }
+        let Some(rest) = trimmed.strip_prefix(':') else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once(':') else {
+            continue;
+        };
+        let bare = name.trim_matches('!');
+        let is_name = !bare.is_empty()
+            && bare
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'));
+        if is_name {
+            entries.push((name.to_owned(), value.trim().to_owned()));
+        }
+    }
+    entries
 }
 
 #[cfg(test)]
@@ -116,5 +162,45 @@ mod tests {
         assert!(rendered.contains("<h1>Title</h1>"));
         assert!(rendered.contains(r#"class="doc-subtitle""#));
         assert!(rendered.contains("Subtitle"));
+    }
+
+    #[test]
+    fn to_html_surfaces_header_attributes_without_regressing_the_doctitle() {
+        let rendered = to_html("= Title\n:toc: left\n:experimental:\n\nBody.\n")
+            .expect("valid asciidoc")
+            .into_string();
+        assert!(
+            rendered.contains("doc-props"),
+            "the properties table renders"
+        );
+        assert!(rendered.contains("toc"));
+        assert!(rendered.contains("left"));
+        assert!(
+            rendered.contains("<h1>Title</h1>"),
+            "the reconstructed doctitle stays: {rendered}"
+        );
+    }
+
+    #[test]
+    fn header_attribute_entries_reads_only_the_header_block() {
+        let entries = header_attribute_entries(
+            "= Title\nAn Author <author@ents.test>\n:toc: left\n:experimental:\n:sectnums!:\n\n:not-header: too late\n",
+        );
+        assert_eq!(
+            entries,
+            vec![
+                ("toc".to_owned(), "left".to_owned()),
+                ("experimental".to_owned(), String::new()),
+                ("sectnums!".to_owned(), String::new()),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::no_header_at_all("Just a paragraph.\n")]
+    #[case::title_only("= Title\n\nBody.\n")]
+    #[case::prose_colon_line("= Title\nnote: this is an author line, not an attribute\n\nBody.\n")]
+    fn header_attribute_entries_finds_none_where_none_are_written(#[case] source: &str) {
+        assert!(header_attribute_entries(source).is_empty());
     }
 }

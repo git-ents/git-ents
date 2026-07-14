@@ -221,6 +221,42 @@ pub fn unreadable(detail: &str) -> Markup {
     }
 }
 
+/// A key-value properties table for a rendered document's own metadata --
+/// Markdown frontmatter ([`crate::markdown`]) and an AsciiDoc header's
+/// attribute entries ([`crate::asciidoc`]) both render through this one
+/// component, above the document body, styled by `ents.css`'s
+/// `.doc-props` rules on top of the same `.entity-view` definition-list
+/// look every generic entity view already has. Values are plain text
+/// (maud-escaped as any interpolation is); a nested structure the caller
+/// chose not to parse arrives here as its raw text and renders verbatim
+/// (`.doc-props dd` preserves its line breaks). Renders nothing at all
+/// when `entries` is empty, so a document with no metadata carries no
+/// empty table.
+///
+/// # Examples
+///
+/// ```
+/// let entries = vec![("title".to_owned(), "Design Notes".to_owned())];
+/// let rendered = ents_web::render::properties_table(&entries).into_string();
+/// assert!(rendered.contains("doc-props"));
+/// assert!(rendered.contains("Design Notes"));
+/// assert!(ents_web::render::properties_table(&[]).into_string().is_empty());
+/// ```
+#[must_use]
+pub fn properties_table(entries: &[(String, String)]) -> Markup {
+    if entries.is_empty() {
+        return html! {};
+    }
+    html! {
+        dl.entity-view.doc-props {
+            @for (key, value) in entries {
+                dt { (key) }
+                dd { (value) }
+            }
+        }
+    }
+}
+
 /// A list of plain strings with no reflected entity behind them (inbox
 /// entries, toolchain names) -- deliberately not the [`fields`] mechanism,
 /// since there is no struct to reflect over, only a bare list of ids.

@@ -408,6 +408,14 @@ form button:hover { background: var(--color-link-hover); }
 .diff .meta { color: var(--color-text-muted); }
 .diff .file { color: var(--color-text); font-weight: 600; background: var(--color-code-bg); padding-top: .3rem; padding-bottom: .3rem; }
 
+/* A rendered document's own metadata -- Markdown frontmatter and AsciiDoc
+ * header attributes (`crate::render::properties_table`) -- as a bordered
+ * definition list above the document body, reusing `.entity-view`'s own
+ * dt/dd rhythm. `pre-wrap` on the value cell keeps an unparsed nested
+ * structure's raw text readable line by line. */
+.doc-props { border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-code-bg); padding: .35rem 0; margin: 0 0 1.5rem; }
+.doc-props dd { white-space: pre-wrap; }
+
 /* Rendered Markdown/AsciiDoc documents (`crate::markdown`, `crate::asciidoc`). */
 .doc-body { padding: 40px 48px 52px; max-width: 44rem; overflow-wrap: break-word; }
 .doc-body > :first-child { margin-top: 0; }
