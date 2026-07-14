@@ -427,8 +427,8 @@ async fn dashboard_renders_in_process_with_no_socket_bound() {
         .expect("body")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("members"));
-    assert!(body.contains("toolchains"));
+    assert!(body.contains("Working tree"));
+    assert!(body.contains("Tickets"));
     // The shell chrome renders on every page: the icon rail, the sticky
     // top bar, and the bar's palette search form.
     assert!(body.contains("class=\"rail\""));
@@ -497,59 +497,26 @@ async fn the_top_bar_names_the_served_repo_and_its_head_branch() {
     );
 }
 
-/// `roots.web-agnostic`: the overview (`GET /`) renders the served
-/// repository's `README` as HTML in its main column and a language
-/// breakdown of the `HEAD` tree in its aside -- both read off `state.path`
-/// with `gix`, so the dashboard reflects real repository content, not just
-/// the meta-ref counts.
+/// `roots.web-agnostic`: the workbench dashboard (`GET /`) renders its
+/// four sections -- Working tree, Needs attention, Tickets, History --
+/// against a real repository, with real content in each: the dirty file
+/// shows up as a working-tree row, the seeded open comment as a
+/// needs-attention row (naming its anchored path), the seeded open issue
+/// as a ticket, and the `HEAD` commit in the History card with its
+/// Scoped-Commits scope chip.
 #[tokio::test]
-async fn dashboard_renders_the_readme_and_a_languages_card() {
-    let dir = seed_repo(&[
-        ("README.md", "# Welcome\n\nThe project overview.\n"),
-        ("src/main.rs", "fn main() {}\n"),
-        ("src/lib.rs", "pub fn f() {}\n"),
-    ]);
-    let state = build_state_at(
-        FixtureIdentity {
-            name: "local-user",
-            key: Keypair::from_seed(1),
-        },
-        dir.path().to_owned(),
+async fn dashboard_renders_the_four_sections_with_real_content() {
+    let dir = seed_repo(&[("src/main.rs", "line 1\nline 2\nline 3\n")]);
+    // Commit a scoped subject so the History card has a chip to parse.
+    commit_change(
+        dir.path(),
+        "src/main.rs",
+        "line 1\nline 2\nline 3\nline 4\n",
+        "model: grow main by a line",
     );
-    let router = ents_web::router(state);
-
-    let response = router
-        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
-        .await
-        .expect("in-process call");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
-    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(
-        body.contains("class=\"overview\""),
-        "the overview grid renders"
-    );
-    assert!(
-        body.contains("<h1>Welcome</h1>"),
-        "the README renders as HTML, not raw markdown"
-    );
-    assert!(
-        body.contains("lang-bar") && body.contains("Rust"),
-        "the language breakdown names the tree's languages"
-    );
-}
-
-/// `GET /` shows a freshness strip above the `README` card: the `HEAD`
-/// commit's own subject and a link into its `/commit/{oid}` page.
-#[tokio::test]
-async fn dashboard_shows_a_freshness_strip_linking_to_the_latest_commit() {
-    let dir = seed_repo(&[("README.md", "# hi\n")]);
     let oid = head_oid(dir.path());
+    // Dirty the working tree after the commit, for the Working tree lane.
+    std::fs::write(dir.path().join("src/main.rs"), "changed\n").expect("dirty the tree");
     let state = build_state_at(
         FixtureIdentity {
             name: "local-user",
@@ -557,30 +524,42 @@ async fn dashboard_shows_a_freshness_strip_linking_to_the_latest_commit() {
         },
         dir.path().to_owned(),
     );
-    let router = ents_web::router(state);
+    let router = ents_web::router(state.clone());
+    let comment_id =
+        seed_comment(&router, &state, "src/main.rs", "worth a look", "2:2", &oid).await;
+    seed_issue(&router, &state, "Ship the desk", "open", "", "").await;
 
-    let response = router
-        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
-        .await
-        .expect("in-process call");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
-    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("class=\"card freshness\""));
-    assert!(body.contains(&format!("/commit/{oid}")));
-    assert!(body.contains("seed"), "the HEAD commit's subject renders");
+    let body = get_body(&router, "/").await;
+    for header in ["Working tree", "Needs attention", "Tickets", "History"] {
+        assert!(body.contains(header), "the {header} section renders");
+    }
+    assert!(
+        body.contains("href=\"/files/src/main.rs\"") && body.contains("modified"),
+        "the dirty file lists as a working-tree change"
+    );
+    assert!(
+        body.contains(&format!("/comments/{comment_id}")) && body.contains("src/main.rs:2"),
+        "the open comment links out and names its anchored path"
+    );
+    assert!(
+        body.contains("Ship the desk"),
+        "the open issue lists as a ticket"
+    );
+    assert!(
+        body.contains(&format!("/commit/{oid}")),
+        "the History card links the HEAD commit"
+    );
+    assert!(
+        body.contains("class=\"scope scope-c") && body.contains(">model</span>"),
+        "the scoped subject chips its scope"
+    );
 }
 
 /// `GET /` on an unborn `HEAD` (a freshly initialized, still-empty
-/// repository) omits the freshness strip entirely, rather than rendering
-/// a placeholder for a commit that does not exist.
+/// repository) still renders all four sections, each degrading to its own
+/// empty-state row rather than a placeholder commit or a 500.
 #[tokio::test]
-async fn dashboard_omits_the_freshness_strip_on_an_unborn_head() {
+async fn dashboard_degrades_every_section_on_an_unborn_head() {
     let dir = tempfile::tempdir().expect("tempdir");
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -598,19 +577,12 @@ async fn dashboard_omits_the_freshness_strip_on_an_unborn_head() {
     );
     let router = ents_web::router(state);
 
-    let response = router
-        .oneshot(Request::get("/").body(Body::empty()).expect("request"))
-        .await
-        .expect("in-process call");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
-    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(!body.contains("class=\"card freshness\""));
+    let body = get_body(&router, "/").await;
+    for header in ["Working tree", "Needs attention", "Tickets", "History"] {
+        assert!(body.contains(header), "the {header} section renders");
+    }
+    assert!(!body.contains("/commit/"), "no placeholder commit links");
+    assert!(body.contains("No commits yet."));
 }
 
 /// `roots.web-session`: a state-changing request with no CSRF token at
@@ -893,6 +865,34 @@ async fn files_root_lists_the_repository_root() {
     assert!(body.contains("README.adoc"));
     assert!(body.contains("docs"));
     assert!(body.contains("src"));
+}
+
+/// `GET /files` renders the root `README` as a document card below the
+/// listing -- re-homed from the old overview dashboard, so the repository
+/// still introduces itself somewhere.
+#[tokio::test]
+async fn files_root_renders_the_readme_below_the_listing() {
+    let dir = seed_repo(&[
+        ("README.md", "# Welcome\n\nThe project overview.\n"),
+        ("src/main.rs", "fn main() {}\n"),
+    ]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let body = get_body(&router, "/files").await;
+    assert!(
+        body.contains("<h1>Welcome</h1>"),
+        "the README renders as HTML, not raw markdown"
+    );
+    let listing = body.find("href=\"/files/src\"").expect("listing renders");
+    let readme = body.find("<h1>Welcome</h1>").expect("README renders");
+    assert!(listing < readme, "the README card sits below the listing");
 }
 
 /// `GET /files/<path>` on a plain-text blob with no recognized grammar

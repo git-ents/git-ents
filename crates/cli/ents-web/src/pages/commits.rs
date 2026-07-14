@@ -61,18 +61,20 @@ pub struct ListQuery {
     from: Option<String>,
 }
 
-/// One row of `GET /commits`.
-struct CommitRow {
+/// One row of `GET /commits` -- also what [`super::dashboard`]'s History
+/// card renders, at its own smaller limit, so the two pages share one
+/// history read.
+pub(crate) struct CommitRow {
     /// The full commit id, the `/commit/{oid}` link target.
-    oid: ObjectId,
+    pub(crate) oid: ObjectId,
     /// [`super::short_oid`] of `oid`, the row's displayed, mono id.
-    short: String,
+    pub(crate) short: String,
     /// The commit message's title line.
-    subject: String,
+    pub(crate) subject: String,
     /// The commit author's display name.
-    author: String,
+    pub(crate) author: String,
     /// [`super::ago`] of the commit author's time.
-    ago: String,
+    pub(crate) ago: String,
 }
 
 /// `GET /commits`: the repository's commit history, newest first, 50 per
@@ -89,7 +91,7 @@ pub async fn list<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let (rows, older) = commit_rows(&state, params.from.as_deref());
+    let (rows, older) = commit_rows(&state, params.from.as_deref(), PAGE_SIZE);
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -127,12 +129,18 @@ where
     ))
 }
 
-/// Up to [`PAGE_SIZE`] rows starting at `from` (or `HEAD` when `from` is
+/// Up to `limit` rows starting at `from` (or `HEAD` when `from` is
 /// `None`), newest first, plus the oid to continue from for an "older"
-/// link when more commits remain. Best-effort: an unopenable repository,
-/// an unborn `HEAD`, or an unparsable/unresolvable `from` all degrade to
-/// an empty page rather than an error.
-fn commit_rows<O>(state: &AppState<O>, from: Option<&str>) -> (Vec<CommitRow>, Option<String>) {
+/// link when more commits remain -- [`list`] passes [`PAGE_SIZE`],
+/// [`super::dashboard`]'s History card its own smaller cap. Best-effort:
+/// an unopenable repository, an unborn `HEAD`, or an
+/// unparsable/unresolvable `from` all degrade to an empty page rather
+/// than an error.
+pub(crate) fn commit_rows<O>(
+    state: &AppState<O>,
+    from: Option<&str>,
+    limit: usize,
+) -> (Vec<CommitRow>, Option<String>) {
     let Ok(repo) = gix::open(&state.path) else {
         return (Vec::new(), None);
     };
@@ -161,7 +169,7 @@ fn commit_rows<O>(state: &AppState<O>, from: Option<&str>) -> (Vec<CommitRow>, O
     let mut has_more = false;
     for info in walk.skip(skip) {
         let Ok(info) = info else { break };
-        if rows.len() == PAGE_SIZE {
+        if rows.len() == limit {
             has_more = true;
             break;
         }

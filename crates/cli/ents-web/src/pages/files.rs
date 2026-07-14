@@ -145,6 +145,7 @@ where
             "Files",
             html! {
                 (dir_listing(path, entries))
+                (readme_card(&head_tree))
             },
         ));
     }
@@ -218,10 +219,9 @@ fn is_safe_path(path: &str) -> bool {
 /// One `(name, is_directory, size)` triple per direct child of `tree`, in
 /// tree order (not yet sorted -- [`dir_listing`] sorts for display). `size`
 /// is a blob entry's byte length, read from its odb header
-/// ([`gix::Repository::find_header`], the same header-only read
-/// `crate::pages::dashboard::languages` weighs its language breakdown
-/// by -- never a full blob read just to size it) and best-effort (`None`
-/// on a header-read failure, same as that function's own stance); always
+/// ([`gix::Repository::find_header`], a header-only lookup -- never a
+/// full blob read just to size it) and best-effort (`None`
+/// on a header-read failure); always
 /// `None` for a directory entry, which [`dir_listing`] renders with no
 /// size cell at all.
 fn tree_entries(tree: &gix::Tree<'_>) -> Result<Vec<(String, bool, Option<u64>)>> {
@@ -277,6 +277,65 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool, Option<u64>)>) -> Mark
     }
 }
 
+/// The rendered `README` card below the root listing -- re-homed here
+/// from the old overview dashboard (`crate::pages::dashboard` is a work
+/// surface now; the Code root is where the repository introduces itself).
+/// Renders nothing at all when the root holds no renderable `README`.
+fn readme_card(tree: &gix::Tree<'_>) -> Markup {
+    let Some((name, rendered)) = readme(tree) else {
+        return html! {};
+    };
+    html! {
+        div.card {
+            div.card-header { (assets::icon_file()) (name) }
+            div.doc-body { (rendered) }
+        }
+    }
+}
+
+/// The first root-tree blob whose stem is `README` and whose extension
+/// this crate renders (Markdown or AsciiDoc), converted to HTML and paired
+/// with its filename; `None` when there is none or it fails to render
+/// (mirrors `pre-redo:.../pages.rs`'s `readme`).
+fn readme(tree: &gix::Tree<'_>) -> Option<(String, Markup)> {
+    let name = root_readme_name(tree)?;
+    let entry = tree.lookup_entry_by_path(&name).ok()??;
+    let blob = entry.object().ok()?.try_into_blob().ok()?;
+    let text = String::from_utf8_lossy(&blob.data);
+    render_doc(&name, &text).map(|rendered| (name, rendered))
+}
+
+/// The filename of the root's `README`, if it has a renderable one.
+fn root_readme_name(tree: &gix::Tree<'_>) -> Option<String> {
+    for entry in tree.iter() {
+        let Ok(entry) = entry else { continue };
+        if !entry.mode().is_blob() {
+            continue;
+        }
+        let name = entry.filename().to_str_lossy();
+        let is_readme = name
+            .rsplit_once('.')
+            .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"));
+        if is_readme && (crate::markdown::is_markdown(&name) || crate::asciidoc::is_asciidoc(&name))
+        {
+            return Some(name.into_owned());
+        }
+    }
+    None
+}
+
+/// `text` rendered as its prose format (Markdown or AsciiDoc), or `None`
+/// when it is neither or AsciiDoc rendering fails.
+fn render_doc(name: &str, text: &str) -> Option<Markup> {
+    if crate::markdown::is_markdown(name) {
+        Some(crate::markdown::to_html(text))
+    } else if crate::asciidoc::is_asciidoc(name) {
+        crate::asciidoc::to_html(text).ok()
+    } else {
+        None
+    }
+}
+
 /// Breadcrumb navigation from the repository's files root down through
 /// `path`, `chevron-right` icons separating segments -- pure navigation,
 /// no trailing actions. The history/comment links that used to trail this
@@ -315,8 +374,7 @@ fn crumbs(path: &str) -> Markup {
 /// Format a byte count the way [`blob_header`] and [`dir_listing`] both
 /// show a file's size: whole bytes under 1 KB, otherwise one decimal place
 /// of KB or MB -- integer-only throughout (`checked_div`/`checked_rem`/
-/// `saturating_mul`, this crate's own arithmetic idiom, e.g.
-/// `crate::pages::dashboard::languages`'s percentage math) rather than a
+/// `saturating_mul`, this crate's own arithmetic idiom) rather than a
 /// float division, so there is no rounding-mode or precision question to
 /// answer.
 fn human_size(bytes: u64) -> String {

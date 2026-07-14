@@ -171,39 +171,47 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
  * entry. */
 .entry-size { margin-left: auto; font-family: var(--font-mono); font-size: .82rem; color: var(--color-text-muted); white-space: nowrap; }
 
-/* Repository overview (`GET /`): the rendered README beside a sticky aside
- * of a contents rail and a language breakdown (pre-redo:.../style.css's
- * `.overview`/`.aside`/`.lang`). */
-.overview { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 34px; align-items: start; }
-.aside { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.aside .card { margin-bottom: 0; }
-.aside-row { display: flex; align-items: center; gap: .5rem; padding: .55rem 1.1rem; font-size: .82rem; }
-.aside-row + .aside-row { border-top: 1px solid var(--color-border); }
-.aside-row a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
-.aside-row a:hover { color: var(--color-accent); }
-.aside-row .count { margin-left: auto; font-family: var(--font-mono); font-weight: 600; color: var(--color-accent); }
-.lang { padding: .8rem 1.1rem; }
-.lang-bar { display: flex; height: 8px; border-radius: var(--radius-pill); overflow: hidden; background: var(--color-code-bg); }
-.lang-bar span { display: block; height: 100%; }
-.lang-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-.lang-legend { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; font-size: .78rem; }
-.lang-legend li { display: flex; align-items: center; gap: .45rem; }
-.lang-legend .pct { margin-left: auto; font-family: var(--font-mono); color: var(--color-text-muted); }
-.freshness .card-row { flex-wrap: nowrap; }
-.freshness .card-row a { flex: none; text-decoration: none; }
-.freshness .card-row a:hover { text-decoration: underline; }
-.freshness-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.freshness-meta { flex: none; white-space: nowrap; color: var(--color-text-muted); }
-.freshness-history { margin-left: auto; color: var(--color-text-muted); }
-.freshness-history:hover { color: var(--color-accent); }
+/* The workbench dashboard (`GET /`, `crate::pages::dashboard`): three
+ * cards on a `.desk` grid (working tree, needs attention, tickets), then
+ * a full-width `.desk-wide` History card. `.content` already pads the
+ * column, so the desk itself only spaces its cards. */
+.desk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem; align-items: start; margin-bottom: 1.25rem; }
+.desk .card, .desk-wide .card { margin-bottom: 0; }
+.card-header .btn-ghost { margin-left: auto; }
+.card-row.muted { color: var(--color-text-muted); }
+.btn { display: inline-block; font-size: .78rem; font-weight: 600; color: var(--color-bg); background: var(--color-accent); border: none; border-radius: 8px; padding: .3rem .8rem; cursor: pointer; text-decoration: none; }
+.btn-ghost { color: var(--color-accent); background: transparent; border: 1px solid var(--color-border); text-transform: none; letter-spacing: 0; }
+.btn-ghost:hover { border-color: var(--color-accent); color: var(--color-accent); }
+/* Needs-attention / ticket rows: a block link pairing a `.what` line with
+ * a muted, mono `.where` locator. */
+.attention-row { display: block; padding: .7rem 1.1rem; color: inherit; text-decoration: none; }
+.attention-row:hover { background: var(--color-code-bg); text-decoration: none; }
+.attention-row + .attention-row { border-top: 1px solid var(--color-border); }
+.attention-row .what { display: block; font-size: .88rem; }
+.attention-row .where { display: block; font-family: var(--font-mono); font-size: .74rem; color: var(--color-text-muted); margin-top: .15rem; }
+/* Scoped-Commits scope chips (`crate::pages::dashboard::scope_class`):
+ * `.scope-c{0..5}` maps a stable hash of the scope name onto the six
+ * `--s-*` syntax-token colors. */
+.scope { font-family: var(--font-mono); font-size: .68rem; font-weight: 600; border-radius: var(--radius-pill); padding: 0 .55rem; white-space: nowrap; }
+.scope-c0 { color: var(--s-prop); background: color-mix(in srgb, var(--s-prop) 12%, transparent); }
+.scope-c1 { color: var(--s-func); background: color-mix(in srgb, var(--s-func) 12%, transparent); }
+.scope-c2 { color: var(--s-const); background: color-mix(in srgb, var(--s-const) 12%, transparent); }
+.scope-c3 { color: var(--s-type); background: color-mix(in srgb, var(--s-type) 14%, transparent); }
+.scope-c4 { color: var(--s-keyword); background: color-mix(in srgb, var(--s-keyword) 12%, transparent); }
+.scope-c5 { color: var(--s-string); background: color-mix(in srgb, var(--s-string) 14%, transparent); }
+/* History rows: the oid link stays its own width; only the subject cell
+ * flexes and ellipsizes. */
+.history .card-row { flex-wrap: nowrap; }
+.history .card-row a { flex: none; text-decoration: none; }
+.history .card-row a:hover { text-decoration: underline; }
+.desk-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-sans); font-size: .88rem; }
 .blankslate { text-align: center; padding: 3rem 1.5rem; }
 .blankslate h2 { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700; margin-bottom: .5rem; }
 .blankslate p { color: var(--color-text-muted); }
 .blankslate code { font-family: var(--font-mono); background: var(--color-code-bg); padding: .15rem .45rem; border-radius: 5px; font-size: .85rem; }
 
-@media (max-width: 900px) {
-  .overview { grid-template-columns: minmax(0, 1fr); }
-  .aside { position: static; }
+@media (max-width: 1100px) {
+  .desk { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* The generic reflection-driven views (`crate::render`): a definition list

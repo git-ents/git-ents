@@ -1,257 +1,139 @@
-//! `GET /`: the repository overview -- a latest-commit freshness strip
-//! above the rendered `README`, beside a sticky aside of a contents rail
-//! (one live count per page family, which doubles as a smoke test that
-//! every seam in [`crate::state::AppState`] actually reads) and a
-//! language breakdown of the `HEAD` tree (`pre-redo:crates/git-ents-server/src/web/pages.rs`'s
-//! `repo_page`, trimmed to the cards this single-repo, local crate has a
-//! data surface for -- no clone URL, homepage, releases, or topics).
+//! `GET /`: the workbench dashboard -- `git status` for review and
+//! ticketing (`docs/web-workbench-plan.adoc`'s Phase C home page). Four
+//! sections on a `.desk` grid: the working tree's changed files (a live
+//! `gix` status of the repository at `state.path`), a needs-attention
+//! feed of open comment threads, the open tickets, and a full-width
+//! History card of recent commits with their Scoped-Commits scope chips.
+//! The `README` this page used to render moved to `crate::pages::files`'s
+//! root listing -- the dashboard is a work surface, not a document viewer.
 //!
-//! The `README`, freshness-strip, and language reads browse the
-//! repository's `HEAD` commit/tree through `gix`'s high-level
-//! `Repository`/`Commit`/`Tree` types, opened fresh per request from
+//! The status and history reads browse the repository through `gix`'s
+//! high-level `Repository` types, opened fresh per request from
 //! `state.path`, exactly as [`crate::pages::files`]/[`crate::pages::commits`]
 //! do (and for the same reason: browsing arbitrary repository content is
 //! not the `facet-git-tree` meta-ref convention the generic pages use).
+//! Every repository read here is best-effort: an unopenable repository or
+//! a failed status walk degrades to an in-card note, never an error.
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use gix::bstr::ByteSlice as _;
-use gix_hash::ObjectId;
 use gix_object::{Find, Write};
 use maud::{Markup, html};
 
-use crate::assets;
 use crate::error::Result;
 use crate::state::AppState;
 
-/// A detected language's display name, swatch color (a literal CSS color,
-/// since the pre-redo `--s-*` syntax palette those colors referenced was
-/// not ported), and its share of the classified `HEAD` tree, as a
-/// whole-number percentage.
-type Lang = (&'static str, &'static str, u8);
+/// How many commits the History card shows -- a dashboard lane, not the
+/// full pager `crate::pages::commits::list` already is.
+const HISTORY_LIMIT: usize = 8;
+
+/// How many characters of a comment's or issue's first line a `.what`
+/// row shows before ellipsizing.
+const WHAT_LIMIT: usize = 90;
 
 /// `GET /`.
 ///
 /// # Errors
 ///
-/// Propagates a ref-store read failure.
+/// Propagates a ref-store or object read failure on the comment and issue
+/// listings; every repository read degrades in-card instead (see this
+/// module's own doc).
 pub async fn show<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Markup>
 where
     O: Find + Write + Send + 'static,
 {
-    let members = state.refs.iter_prefix("refs/meta/member/")?.count();
-    let effects = state.refs.iter_prefix("refs/meta/effects/")?.count();
-    let redactions = state.refs.iter_prefix("refs/meta/redactions/")?.count();
-    let comments = state.refs.iter_prefix("refs/meta/comments/")?.count();
-    let toolchains = state.refs.iter_prefix("refs/meta/toolchains/")?.count();
+    let changes = worktree_changes(&state);
+    let (comments, _unreadable) =
+        ents_forge::comment::list_all(state.refs.as_ref(), &*state.objects())?;
+    let open_comments: Vec<(String, ents_forge::comment::Comment)> = comments
+        .into_iter()
+        .filter(|(_, comment)| comment.state == "open")
+        .collect();
+    let (issues, _unreadable) =
+        ents_forge::issue::list_all(state.refs.as_ref(), &*state.objects())?;
+    let open_issues: Vec<(String, ents_forge::Issue)> = issues
+        .into_iter()
+        .filter(|(_, issue)| issue.state == "open")
+        .collect();
+    let (history, _older) = super::commits::commit_rows(&state, None, HISTORY_LIMIT);
 
-    let (main, langs) = repo_overview(&state);
+    let repo = super::RepoHeader::from_state(&state);
+    let history_title = repo.branch.as_ref().map_or_else(
+        || "History".to_owned(),
+        |branch| format!("History \u{2014} {branch}"),
+    );
 
+    let attention = attention_card(&state, &open_comments, open_issues.len());
     Ok(super::layout(
-        &super::RepoHeader::from_state(&state),
+        &repo,
         &super::identity_label(&state),
         super::Tab::Overview,
-        "Overview",
+        "Dashboard",
         html! {
-            div.overview {
-                div { (main) }
-                aside.aside {
-                    div.card {
-                        div.card-header { "contents" }
-                        (contents_row("members", "/members", Some(members)))
-                        (contents_row("account", "/account", None))
-                        (contents_row("effects", "/effects", Some(effects)))
-                        (contents_row("redactions", "/redactions", Some(redactions)))
-                        (contents_row("toolchains", "/toolchains", Some(toolchains)))
-                        (contents_row("comments", "/comments", Some(comments)))
-                        (contents_row("inbox", "/inbox", None))
-                    }
-                    @if !langs.is_empty() {
-                        div.card {
-                            div.card-header { "languages" }
-                            div.lang {
-                                div.lang-bar {
-                                    @for (_, color, pct) in &langs {
-                                        span style={ "width:" (pct) "%;background:" (color) } {}
-                                    }
-                                }
-                                ul.lang-legend {
-                                    @for (lang, color, pct) in &langs {
-                                        li {
-                                            span.lang-dot style={ "background:" (color) } {}
-                                            span { (lang) }
-                                            span.pct { (pct) "%" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            div.desk {
+                (working_tree_card(changes.as_deref()))
+                (attention)
+                (tickets_card(&open_issues))
+            }
+            div.desk-wide {
+                (history_card(&history_title, &history))
             }
         },
     ))
 }
 
-/// One row of the contents card: a link to a page family, with its live
-/// count when the family is one this crate counts.
-fn contents_row(label: &str, href: &str, count: Option<usize>) -> Markup {
+/// The "Working tree" card: every changed file [`worktree_changes`] found,
+/// each linking into the Files browser with its change kind right-aligned.
+/// `None` (the status walk itself failed) renders a note row; an empty
+/// list renders a "clean" row -- either way the card itself always
+/// renders, so the desk's shape is stable.
+fn working_tree_card(changes: Option<&[(String, &'static str)]>) -> Markup {
     html! {
-        div.aside-row {
-            a href=(href) { (label) }
-            @if let Some(count) = count {
-                span.count { (count) }
+        section.card {
+            div.card-header { "Working tree" }
+            @match changes {
+                None => { div.card-row.muted { "Working-tree status unavailable." } },
+                Some([]) => { div.card-row.muted { "Clean \u{2014} no uncommitted changes." } },
+                Some(changes) => {
+                    @for (path, kind) in changes {
+                        div.card-row {
+                            a href={ "/files/" (path) } { (path) }
+                            span.entry-size { (kind) }
+                        }
+                    }
+                },
             }
         }
     }
 }
 
-/// The overview's main column and the language breakdown of its `HEAD`
-/// tree: the rendered `README` when the root holds one, else a listing of
-/// the root, else an empty-repository blankslate. Best-effort -- an
-/// unopenable repository or an unborn `HEAD` degrades to the blankslate
-/// with no languages, never an error (the page's contents card still
-/// renders).
-fn repo_overview<O>(state: &AppState<O>) -> (Markup, Vec<Lang>) {
-    let Ok(repo) = gix::open(&state.path) else {
-        return (blankslate(), Vec::new());
-    };
-    let Ok(tree) = repo.head_tree() else {
-        return (blankslate(), Vec::new());
-    };
-    let langs = languages(&repo, &tree);
-    let strip = freshness_strip(&repo);
-    let content = if let Some((name, rendered)) = readme(&tree) {
-        html! {
-            div.card {
-                div.card-header { (assets::icon_file()) (name) }
-                div.doc-body { (rendered) }
-            }
-        }
-    } else {
-        let entries = root_entries(&tree);
-        if entries.is_empty() {
-            blankslate()
-        } else {
-            files_card(&entries)
-        }
-    };
-    (html! { (strip) (content) }, langs)
-}
-
-/// The overview's latest-commit freshness strip, above the `README` card, a
-/// single non-wrapping flex row: `HEAD`'s short oid linking to
-/// `crate::pages::commits::show`, its subject (ellipsized on overflow, the
-/// row's only flexible cell), the author and [`super::ago`] time (muted,
-/// never wrapping), and a link into `crate::pages::commits::list`'s full
-/// history. Renders nothing at all on an unborn `HEAD` or any other read
-/// failure -- best-effort chrome, not a reason to fail the page.
-fn freshness_strip(repo: &gix::Repository) -> Markup {
-    let Ok(commit) = repo.head_commit() else {
-        return html! {};
-    };
-    let Ok(message) = commit.message() else {
-        return html! {};
-    };
-    let Ok(author) = commit.author() else {
-        return html! {};
-    };
-    let seconds = author.time().map(|time| time.seconds).unwrap_or(0);
-    let oid = commit.id().detach();
+/// The "Needs attention" card: every open comment thread, each linking to
+/// its own page and naming where its anchor lands ([`comment_where`]),
+/// closed by an open-tickets count line when any tickets are open.
+fn attention_card<O: Find>(
+    state: &AppState<O>,
+    open_comments: &[(String, ents_forge::comment::Comment)],
+    open_issue_count: usize,
+) -> Markup {
     html! {
-        div.card.freshness {
-            div.card-row {
-                a href={ "/commit/" (oid) } { code { (super::short_oid(&oid)) } }
-                span.freshness-subject { (message.title.to_str_lossy()) }
-                span.freshness-meta { (author.name.to_str_lossy()) " \u{b7} " (super::ago(seconds)) }
-                a.freshness-history href="/commits" { "history \u{2192}" }
+        section.card {
+            div.card-header { "Needs attention" }
+            @if open_comments.is_empty() && open_issue_count == 0 {
+                div.card-row.muted { "Nothing waiting on you." }
             }
-        }
-    }
-}
-
-/// The empty-column placeholder ([`super::blankslate`]) shown when the
-/// repository has no `README`, no readable root, or no `HEAD` at all.
-fn blankslate() -> Markup {
-    super::blankslate(
-        "Nothing to show yet",
-        html! { "Add a " code { "README" } " or browse the repository in " a href="/files" { "Files" } "." },
-    )
-}
-
-/// The first root-tree blob whose stem is `README` and whose extension
-/// this crate renders (Markdown or AsciiDoc), converted to HTML and paired
-/// with its filename; `None` when there is none or it fails to render
-/// (mirrors `pre-redo:.../pages.rs`'s `readme`).
-fn readme(tree: &gix::Tree<'_>) -> Option<(String, Markup)> {
-    let name = root_readme_name(tree)?;
-    let entry = tree.lookup_entry_by_path(&name).ok()??;
-    let blob = entry.object().ok()?.try_into_blob().ok()?;
-    let text = String::from_utf8_lossy(&blob.data);
-    render_doc(&name, &text).map(|rendered| (name, rendered))
-}
-
-/// The filename of the root's `README`, if it has a renderable one.
-fn root_readme_name(tree: &gix::Tree<'_>) -> Option<String> {
-    for entry in tree.iter() {
-        let Ok(entry) = entry else { continue };
-        if !entry.mode().is_blob() {
-            continue;
-        }
-        let name = entry.filename().to_str_lossy();
-        let is_readme = name
-            .rsplit_once('.')
-            .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("readme"));
-        if is_readme && (crate::markdown::is_markdown(&name) || crate::asciidoc::is_asciidoc(&name))
-        {
-            return Some(name.into_owned());
-        }
-    }
-    None
-}
-
-/// `text` rendered as its prose format (Markdown or AsciiDoc), or `None`
-/// when it is neither or AsciiDoc rendering fails.
-fn render_doc(name: &str, text: &str) -> Option<Markup> {
-    if crate::markdown::is_markdown(name) {
-        Some(crate::markdown::to_html(text))
-    } else if crate::asciidoc::is_asciidoc(name) {
-        crate::asciidoc::to_html(text).ok()
-    } else {
-        None
-    }
-}
-
-/// The `(name, is_directory)` of each direct child of the root tree, in
-/// tree order.
-fn root_entries(tree: &gix::Tree<'_>) -> Vec<(String, bool)> {
-    tree.iter()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            Some((
-                entry.filename().to_str_lossy().into_owned(),
-                entry.mode().is_tree(),
-            ))
-        })
-        .collect()
-}
-
-/// A root listing shown when there is no `README`: directories first, then
-/// files, each linking into the Files browser.
-fn files_card(entries: &[(String, bool)]) -> Markup {
-    let mut entries = entries.to_vec();
-    entries.sort_by(|(a_name, a_is_dir), (b_name, b_is_dir)| {
-        b_is_dir.cmp(a_is_dir).then_with(|| a_name.cmp(b_name))
-    });
-    html! {
-        div.card {
-            div.card-header { "files" }
-            @for (name, is_dir) in &entries {
-                div.card-row.is-dir[*is_dir] {
-                    a.row-link href={ "/files/" (name) } {
-                        @if *is_dir { (assets::icon_folder()) } @else { (assets::icon_file()) }
-                        (name)
+            @for (id, comment) in open_comments {
+                a.attention-row href={ "/comments/" (id) } {
+                    span.what { "open thread \u{2014} \u{201c}" (what_line(&comment.body)) "\u{201d}" }
+                    span class="where" { (comment_where(state, comment)) }
+                }
+            }
+            @if open_issue_count > 0 {
+                a.attention-row href="/issues" {
+                    span.what {
+                        (open_issue_count)
+                        @if open_issue_count == 1 { " open ticket" } @else { " open tickets" }
                     }
                 }
             }
@@ -259,91 +141,206 @@ fn files_card(entries: &[(String, bool)]) -> Markup {
     }
 }
 
-/// The language breakdown of the whole `HEAD` tree: the top four languages
-/// by total blob byte size, as `(name, color, percent)`, largest first --
-/// byte-weighted like `pre-redo:.../git.rs`'s own `languages` (which shelled
-/// out to `git ls-tree -l` for the sizes), except every size here comes
-/// from [`gix::Repository::find_header`], an odb header lookup that never
-/// reads a blob's full content. The shape and the top-four cap match
-/// pre-redo's own.
-fn languages(repo: &gix::Repository, tree: &gix::Tree<'_>) -> Vec<Lang> {
-    let mut blobs = Vec::new();
-    collect_blobs(repo, tree, &mut blobs);
-    let mut totals: Vec<(&'static str, &'static str, u64)> = Vec::new();
-    let mut grand: u64 = 0;
-    for (name, oid) in &blobs {
-        let Some((lang, color)) = classify(name) else {
+/// The "Tickets" card: every open issue linking to its own page, with a
+/// ghost "New" button into the Tickets page's own composer.
+fn tickets_card(open_issues: &[(String, ents_forge::Issue)]) -> Markup {
+    html! {
+        section.card {
+            div.card-header {
+                "Tickets"
+                a.btn.btn-ghost href="/issues" { "New" }
+            }
+            @if open_issues.is_empty() {
+                div.card-row.muted { "No open tickets." }
+            }
+            @for (id, issue) in open_issues {
+                a.attention-row href={ "/issues/" (id) } {
+                    span.what { (what_line(&issue.title)) }
+                    span class="where" { "#" (ents_forge::abbreviate_id(id)) " \u{b7} " (issue.state) }
+                }
+            }
+        }
+    }
+}
+
+/// The full-width "History" card: the most recent commits, each with its
+/// Scoped-Commits scope chip ([`split_scope`], [`scope_class`]) when its
+/// subject carries one.
+fn history_card(title: &str, rows: &[super::commits::CommitRow]) -> Markup {
+    html! {
+        section.card.history {
+            div.card-header { (title) }
+            @if rows.is_empty() {
+                div.card-row.muted { "No commits yet." }
+            }
+            @for row in rows {
+                div.card-row {
+                    a href={ "/commit/" (row.oid) } { code { (row.short) } }
+                    @match split_scope(&row.subject) {
+                        Some((scope, rest)) => {
+                            span class={ "scope " (scope_class(scope)) } { (scope) }
+                            span.desk-subject { (rest) }
+                        },
+                        None => { span.desk-subject { (row.subject) } },
+                    }
+                    span.entry-size { (row.ago) }
+                }
+            }
+        }
+    }
+}
+
+/// A body's first line, ellipsized past [`WHAT_LIMIT`] characters -- what
+/// a `.what` row shows of a comment or ticket.
+fn what_line(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("");
+    let mut shown: String = line.chars().take(WHAT_LIMIT).collect();
+    if shown.len() < line.len() {
+        shown.push('\u{2026}');
+    }
+    shown
+}
+
+/// Where an open comment lives, for its `.where` line: its anchor's
+/// `path:line` when it carries one this build can read back, else the
+/// context entity it names, else a bare "unanchored".
+fn comment_where<O: Find>(state: &AppState<O>, comment: &ents_forge::comment::Comment) -> String {
+    if let Some(raw) = &comment.anchor {
+        let objects = state.objects();
+        if let Ok(anchor) =
+            facet_git_tree::deserialize::<ents_anchor::Anchor>(&raw.oid(), &*objects)
+        {
+            return match anchor.lines {
+                Some(range) => format!("{}:{}", anchor.path, range.start),
+                None => anchor.path,
+            };
+        }
+    }
+    comment
+        .context
+        .clone()
+        .unwrap_or_else(|| "unanchored".to_owned())
+}
+
+/// Split a Scoped-Commits subject (`<scope>: <description>`,
+/// scopedcommits.com) into its scope and description -- `None` when the
+/// subject carries no `^[a-z-]+:` prefix, in which case the whole subject
+/// renders unchipped.
+fn split_scope(subject: &str) -> Option<(&str, &str)> {
+    let (scope, rest) = subject.split_once(':')?;
+    if scope.is_empty() || !scope.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return None;
+    }
+    Some((scope, rest.trim_start()))
+}
+
+/// The `.scope-c{n}` color class for `scope`: a stable hash of the scope
+/// name onto the stylesheet's six `--s-*` syntax-token colors, so the same
+/// scope always chips the same color across pages and requests.
+fn scope_class(scope: &str) -> String {
+    let hash = scope.bytes().fold(0u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(byte))
+    });
+    format!("scope-c{}", hash.checked_rem(6).unwrap_or(0))
+}
+
+/// Every changed path in the working tree against `HEAD` and the index --
+/// `gix`'s own status walk (`gix::Repository::status`), deduplicated by
+/// path (a file both staged and modified appears in the head-to-index and
+/// index-to-worktree halves; the first classification wins) and sorted for
+/// a stable render. `None` when the repository cannot be opened or the
+/// walk cannot start at all -- [`working_tree_card`] renders a note row
+/// then, never an error.
+fn worktree_changes<O>(state: &AppState<O>) -> Option<Vec<(String, &'static str)>> {
+    let repo = gix::open(&state.path).ok()?;
+    let iter = repo
+        .status(gix::progress::Discard)
+        .ok()?
+        .into_iter(None)
+        .ok()?;
+    let mut by_path: std::collections::BTreeMap<String, &'static str> =
+        std::collections::BTreeMap::new();
+    for item in iter.flatten() {
+        let Some(kind) = change_kind(&item) else {
             continue;
         };
-        let size = repo
-            .find_header(*oid)
-            .map(|header| header.size())
-            .unwrap_or(0);
-        grand = grand.saturating_add(size);
-        match totals.iter_mut().find(|(existing, _, _)| *existing == lang) {
-            Some(entry) => entry.2 = entry.2.saturating_add(size),
-            None => totals.push((lang, color, size)),
-        }
+        by_path
+            .entry(item.location().to_str_lossy().into_owned())
+            .or_insert(kind);
     }
-    if grand == 0 {
-        return Vec::new();
-    }
-    totals.sort_by_key(|entry| std::cmp::Reverse(entry.2));
-    totals.truncate(4);
-    totals
-        .into_iter()
-        .map(|(lang, color, size)| {
-            let pct = size.saturating_mul(100).checked_div(grand).unwrap_or(0);
-            (lang, color, u8::try_from(pct).unwrap_or(100))
-        })
-        .filter(|(_, _, pct)| *pct > 0)
-        .collect()
+    Some(by_path.into_iter().collect())
 }
 
-/// Recurse `tree`, pushing every blob's `(filename, oid)` onto `out`
-/// -- [`languages`] weighs each by its odb header size, not by count.
-/// Subtree reads that fail are skipped rather than propagated -- a
-/// language bar is advisory chrome, not a reason to fail the whole page.
-fn collect_blobs(repo: &gix::Repository, tree: &gix::Tree<'_>, out: &mut Vec<(String, ObjectId)>) {
-    for entry in tree.iter() {
-        let Ok(entry) = entry else { continue };
-        if entry.mode().is_tree() {
-            if let Ok(object) = repo.find_object(entry.oid().to_owned())
-                && let Ok(subtree) = object.try_into_tree()
-            {
-                collect_blobs(repo, &subtree, out);
+/// A status item's display kind, or `None` for one that is not a change a
+/// reader acts on (a stat-only refresh, an ignored entry).
+fn change_kind(item: &gix::status::Item) -> Option<&'static str> {
+    use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
+    match item {
+        gix::status::Item::TreeIndex(change) => Some(match change {
+            gix::diff::index::ChangeRef::Addition { .. } => "added",
+            gix::diff::index::ChangeRef::Deletion { .. } => "deleted",
+            gix::diff::index::ChangeRef::Modification { .. } => "modified",
+            gix::diff::index::ChangeRef::Rewrite { .. } => "renamed",
+        }),
+        gix::status::Item::IndexWorktree(change) => match change {
+            gix::status::index_worktree::Item::Modification { status, .. } => match status {
+                EntryStatus::Conflict { .. } => Some("conflict"),
+                EntryStatus::Change(change) => Some(match change {
+                    Change::Removed => "deleted",
+                    Change::Type { .. } => "type changed",
+                    Change::Modification { .. } | Change::SubmoduleModification(_) => "modified",
+                }),
+                EntryStatus::NeedsUpdate(_) => None,
+                EntryStatus::IntentToAdd => Some("added"),
+            },
+            gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
+                matches!(entry.status, gix::dir::entry::Status::Untracked).then_some("untracked")
             }
-        } else if entry.mode().is_blob() {
-            out.push((
-                entry.filename().to_str_lossy().into_owned(),
-                entry.oid().to_owned(),
-            ));
-        }
+            gix::status::index_worktree::Item::Rewrite { .. } => Some("renamed"),
+        },
     }
 }
 
-/// Map a filename to a language name and swatch color by its extension, or
-/// `None` when the extension is not one this breakdown names (ported from
-/// `pre-redo:.../git.rs`'s `classify_language`, its `var(--s-*)` colors
-/// replaced with literals since that palette was not ported).
-fn classify(name: &str) -> Option<(&'static str, &'static str)> {
-    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
-    let lang = match ext.as_str() {
-        "rs" => ("Rust", "#dea584"),
-        "html" | "htm" => ("HTML", "#e34c26"),
-        "css" => ("CSS", "#563d7c"),
-        "js" | "mjs" | "cjs" => ("JavaScript", "#f1e05a"),
-        "ts" | "tsx" => ("TypeScript", "#3178c6"),
-        "py" => ("Python", "#3572a5"),
-        "go" => ("Go", "#00add8"),
-        "c" | "h" => ("C", "#555555"),
-        "cpp" | "cc" | "hpp" | "cxx" => ("C++", "#f34b7d"),
-        "sh" | "bash" => ("Shell", "#89e051"),
-        "toml" => ("TOML", "#9c4221"),
-        "yaml" | "yml" => ("YAML", "#cb171e"),
-        "json" => ("JSON", "#cbcb41"),
-        "md" | "adoc" | "asciidoc" => ("Prose", "#a0a0a0"),
-        _ => return None,
-    };
-    Some(lang)
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, reason = "unit test")]
+
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::scoped("model: fix stale rustdoc", Some(("model", "fix stale rustdoc")))]
+    #[case::hyphenated("web-ui: polish", Some(("web-ui", "polish")))]
+    #[case::unscoped("Fix stale rustdoc", None)]
+    #[case::uppercase_prefix("Model: fix", None)]
+    #[case::no_colon("just a subject", None)]
+    #[case::empty_scope(": odd", None)]
+    fn split_scope_takes_only_a_lowercase_scope_prefix(
+        #[case] subject: &str,
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        assert_eq!(split_scope(subject), expected);
+    }
+
+    #[test]
+    fn scope_class_is_stable_and_within_the_token_palette() {
+        let class = scope_class("model");
+        assert_eq!(class, scope_class("model"), "same scope, same color");
+        let index: usize = class
+            .strip_prefix("scope-c")
+            .expect("prefixed class")
+            .parse()
+            .expect("numeric suffix");
+        assert!(index < 6, "always one of the six --s-* token colors");
+    }
+
+    #[test]
+    fn what_line_takes_the_first_line_and_ellipsizes_long_ones() {
+        assert_eq!(what_line("short\nrest"), "short");
+        let long = "x".repeat(200);
+        let shown = what_line(&long);
+        assert!(shown.chars().count() <= WHAT_LIMIT.saturating_add(1));
+        assert!(shown.ends_with('\u{2026}'));
+    }
 }
