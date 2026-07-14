@@ -87,6 +87,10 @@ fn loopback_addr(port: u16) -> SocketAddr {
 /// the system resolver and needs an `/etc/hosts` line, which is why
 /// the raw bound address is still printed alongside.
 fn host_label(path: &std::path::Path) -> String {
+    // `LocalRoot::discover(".")` hands this a relative path whose
+    // file_name is `.`; canonicalize first so the label is the repo
+    // directory's real name, not the fallback.
+    let path = path.canonicalize().unwrap_or_else(|_io| path.to_path_buf());
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
@@ -211,6 +215,14 @@ mod tests {
     #[case::nothing_survives("...", "repo")]
     fn host_label_folds_to_a_dns_label(#[case] dir: &str, #[case] expected: &str) {
         assert_eq!(host_label(std::path::Path::new(dir)), expected);
+    }
+
+    /// `discover(".")` hands serve a relative path; the label must be the
+    /// directory's real name, never the `repo` fallback `.`'s empty
+    /// file_name would fold to.
+    #[rstest]
+    fn host_label_canonicalizes_a_relative_path() {
+        assert_ne!(host_label(std::path::Path::new(".")), "repo");
     }
 
     #[rstest]
