@@ -14,7 +14,7 @@ are off-thesis.
 Visual iteration happens in the owner's claude.ai/design project
 ("Design System"), seeded from the real `ents.css` with three shell
 proposals and two full-page workbench mocks
-(`pages/workbench-desk.html`, `pages/workbench-code.html`; sources
+(`pages/workbench-dashboard.html`, `pages/workbench-code.html`; sources
 under `/tmp/ents-design`). Implementation of Phase C waits for that
 iteration to settle, because the rail-and-panes shell restructures
 `pages::layout` enough that landing page-level work first means doing
@@ -65,14 +65,14 @@ review data forward manually (no legacy read path, per repo policy).
 == Phase C: workbench shell (after design settlement)
 
 * Replace the tab shell in `pages::layout` with the icon rail
-  (Desk / Code / Review / Tickets / Threads; governance and account at
+  (Dashboard / Code / Review / Tickets / Threads; governance and account at
   the rail's bottom) plus top bar: repo name, branch pill, search box
   (palette placeholder), identity chip.
 * Master–detail panes, SSR-friendly (every selection is a real URL;
   the list pane always renders): file tree left / padded blob right;
   commits list left / diff right; tickets list left / ticket + in-pane
   composer right (replaces the separate new-issue page).
-* Desk (home): working-tree lane (changed files with +/− stats via
+* Dashboard (home): working-tree lane (changed files with +/− stats via
   gix status, snapshot action), needs-attention feed (unresolved
   threads, reviews awaiting the signer's verdict), open tickets,
   history with Scoped-Commits scope chips colored per scope.
@@ -86,7 +86,7 @@ review data forward manually (no legacy read path, per repo policy).
 Decided 2026-07-13: `--web` is a *global* `git ents` option, not a
 per-subcommand verb.
 
-* `git ents --web` standalone opens the homepage — the Desk.
+* `git ents --web` standalone opens the homepage — the Dashboard.
 * Any read operation with `--web` (`commits`, `issue show 42`,
   `members list`, ...) opens the corresponding page instead of printing.
 * Any mutating operation with `--web` performs the mutation exactly as
