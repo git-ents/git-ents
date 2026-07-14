@@ -85,16 +85,18 @@ where
         super::Tab::Comments,
         "comments",
         html! {
-            ul {
-                @for (id, comment) in &rows {
-                    li {
-                        a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
-                        ": " (comment.body)
+            div.readable {
+                ul {
+                    @for (id, comment) in &rows {
+                        li {
+                            a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
+                            ": " (comment.body)
+                        }
                     }
                 }
+                h2 { "add a comment" }
+                (add_form(&query.rev, &session, &query.file, &query.lines))
             }
-            h2 { "add a comment" }
-            (add_form(&query.rev, &session, &query.file, &query.lines))
         },
     ))
 }
@@ -149,22 +151,24 @@ where
         ents_forge::abbreviate_id(&id),
         html! {
             (super::child_crumbs("comments", "/comments", ents_forge::abbreviate_id(&id)))
-            dl {
-                dt { "state" } dd { (comment.state) }
-                @if let Some(context) = &comment.context {
-                    dt { "context" } dd { (context) }
+            div.readable {
+                dl {
+                    dt { "state" } dd { (comment.state) }
+                    @if let Some(context) = &comment.context {
+                        dt { "context" } dd { (context) }
+                    }
+                    @if let Some(parent) = &comment.parent {
+                        dt { "parent" } dd { (parent) }
+                    }
+                    @if let Some((anchor, projection)) = &projected {
+                        dt { "path" } dd { (anchor.path) }
+                        dt { "lines" } dd { (format!("{:?}", anchor.lines)) }
+                        dt { "projection at " (query.rev) } dd { (format!("{projection:?}")) }
+                    }
+                    dt { "body" } dd { (comment.body) }
                 }
-                @if let Some(parent) = &comment.parent {
-                    dt { "parent" } dd { (parent) }
-                }
-                @if let Some((anchor, projection)) = &projected {
-                    dt { "path" } dd { (anchor.path) }
-                    dt { "lines" } dd { (format!("{:?}", anchor.lines)) }
-                    dt { "projection at " (query.rev) } dd { (format!("{projection:?}")) }
-                }
-                dt { "body" } dd { (comment.body) }
+                (action_forms(&session, &id, resolved, &return_to))
             }
-            (action_forms(&session, &id, resolved, &return_to))
         },
     ))
 }

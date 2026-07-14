@@ -263,42 +263,50 @@ where
         &subject,
         html! {
             (super::child_crumbs("commits", "/commits", &super::short_oid(&object_id)))
-            div.card {
-                div.card-header { "commit " code { (super::short_oid(&object_id)) } }
-                div.commit {
-                    div.commit-subject { (subject) }
-                    @if let Some(body) = &body {
-                        div.commit-msg { (body) }
-                    }
-                    div.commit-meta {
-                        (author_name)
-                        @if let Some(ago) = &ago { " \u{b7} " (ago) }
-                    }
-                    div.commit-meta {
-                        "tree " a href={ "/files" } { "browse at HEAD" }
-                        @if !parents.is_empty() {
-                            " \u{b7} parents: "
-                            @for (index, parent) in parents.iter().enumerate() {
-                                @if index > 0 { ", " }
-                                a href={ "/commit/" (parent) } { code { (super::short_oid(parent)) } }
-                            }
-                        } @else {
-                            " \u{b7} root commit"
+            // The commit card, its reviews, and the conversation are
+            // single-column reading content, capped at `.readable`'s
+            // narrow width; only the diff sections between them keep the
+            // shell's full width (see `ents.css`'s own `.readable` note).
+            div.readable {
+                div.card {
+                    div.card-header { "commit " code { (super::short_oid(&object_id)) } }
+                    div.commit {
+                        div.commit-subject { (subject) }
+                        @if let Some(body) = &body {
+                            div.commit-msg { (body) }
                         }
-                        " \u{b7} "
-                        a href={ "/comments?rev=" (object_id) } { "comment on this commit" }
+                        div.commit-meta {
+                            (author_name)
+                            @if let Some(ago) = &ago { " \u{b7} " (ago) }
+                        }
+                        div.commit-meta {
+                            "tree " a href={ "/files" } { "browse at HEAD" }
+                            @if !parents.is_empty() {
+                                " \u{b7} parents: "
+                                @for (index, parent) in parents.iter().enumerate() {
+                                    @if index > 0 { ", " }
+                                    a href={ "/commit/" (parent) } { code { (super::short_oid(parent)) } }
+                                }
+                            } @else {
+                                " \u{b7} root commit"
+                            }
+                            " \u{b7} "
+                            a href={ "/comments?rev=" (object_id) } { "comment on this commit" }
+                        }
                     }
                 }
+                (reviews)
             }
-            (reviews)
             (diff)
             @if truncated {
                 div.card { div.binary { "Diff truncated (over " (MAX_DIFF_BYTES / (1024 * 1024)) " MiB)." } }
             }
             @if !comments.is_empty() {
-                h2 { "conversation" }
-                @for (index, comment) in comments.iter().enumerate() {
-                    (super::comments::comment_card(index, comment, super::comments::LinkMode::CrossFile))
+                div.readable {
+                    h2 { "conversation" }
+                    @for (index, comment) in comments.iter().enumerate() {
+                        (super::comments::comment_card(index, comment, super::comments::LinkMode::CrossFile))
+                    }
                 }
             }
         },
@@ -444,12 +452,21 @@ where
 
 /// The start-a-review form (`POST /commit/{oid}/review`): a verdict
 /// (`approve`, `request-changes`, or any custom value -- `model.review`
-/// makes these conventions, not an enum) and a body.
+/// makes these conventions, not an enum, which is exactly why the verdict
+/// field is a free text input with a `datalist` of the conventional
+/// values, never a closed `select`) and a body.
 fn start_review_form(session: &Session, oid: &str) -> Markup {
     html! {
         form method="post" action=(format!("/commit/{oid}/review")) {
             (super::csrf_input(session))
-            label { "verdict" input type="text" name="verdict" value="approve"; }
+            label {
+                "verdict"
+                input type="text" name="verdict" value="approve" list="verdict-values";
+            }
+            datalist id="verdict-values" {
+                option value="approve" {}
+                option value="request-changes" {}
+            }
             label { "body" textarea name="body" {} }
             button type="submit" { "start a review" }
         }

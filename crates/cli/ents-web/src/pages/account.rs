@@ -57,13 +57,15 @@ where
         super::Tab::Account,
         "account",
         html! {
-            (view)
-            h2 { "create or update" }
-            form method="post" action="/account" {
-                (super::csrf_input(&session))
-                label { "member" input type="text" name="member" value=(member_value); }
-                label { "login" input type="text" name="login" value=(login_value); }
-                button type="submit" { "save" }
+            div.readable {
+                (view)
+                h2 { "create or update" }
+                form method="post" action="/account" {
+                    (super::csrf_input(&session))
+                    label { "member" input type="text" name="member" value=(member_value); }
+                    label { "login" input type="text" name="login" value=(login_value); }
+                    button type="submit" { "save" }
+                }
             }
         },
     ))

@@ -51,27 +51,29 @@ where
         super::Tab::Issues,
         "issues",
         html! {
-            @if rows.is_empty() {
-                p { "No issues yet." }
-            } @else {
-                table.entity-list {
-                    thead {
-                        tr { th { "issue" } th { "state" } th { "assignees" } th { "labels" } }
-                    }
-                    tbody {
-                        @for (id, issue) in &rows {
-                            tr {
-                                td { a href=(format!("/issues/{id}")) { (issue.title) } }
-                                td { span.comment-state { (issue.state) } }
-                                td { (join_members(&issue.assignees)) }
-                                td { (issue.labels.join(", ")) }
+            div.readable {
+                @if rows.is_empty() {
+                    p { "No issues yet." }
+                } @else {
+                    table.entity-list {
+                        thead {
+                            tr { th { "issue" } th { "state" } th { "assignees" } th { "labels" } }
+                        }
+                        tbody {
+                            @for (id, issue) in &rows {
+                                tr {
+                                    td { a href=(format!("/issues/{id}")) { (issue.title) } }
+                                    td { span.comment-state { (issue.state) } }
+                                    td { (join_members(&issue.assignees)) }
+                                    td { (issue.labels.join(", ")) }
+                                }
                             }
                         }
                     }
                 }
+                h2 { "open an issue" }
+                (new_form(&session))
             }
-            h2 { "open an issue" }
-            (new_form(&session))
         },
     ))
 }
@@ -109,22 +111,24 @@ where
         &issue.title,
         html! {
             (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))
-            div.card {
-                dl {
-                    dt { "state" } dd { span.comment-state { (issue.state) } }
-                    dt { "assignees" } dd { (join_members(&issue.assignees)) }
-                    dt { "labels" } dd { (issue.labels.join(", ")) }
+            div.readable {
+                div.card {
+                    dl {
+                        dt { "state" } dd { span.comment-state { (issue.state) } }
+                        dt { "assignees" } dd { (join_members(&issue.assignees)) }
+                        dt { "labels" } dd { (issue.labels.join(", ")) }
+                    }
+                    div.doc-body { (body) }
                 }
-                div.doc-body { (body) }
+                details {
+                    summary { "edit" }
+                    (edit_form(&session, &issue))
+                }
+                h2 { "discussion" }
+                (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
+                h2 { "add a comment" }
+                (comment_form(&session, &id))
             }
-            details {
-                summary { "edit" }
-                (edit_form(&session, &issue))
-            }
-            h2 { "discussion" }
-            (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
-            h2 { "add a comment" }
-            (comment_form(&session, &id))
         },
     ))
 }
@@ -304,13 +308,21 @@ where
     Ok(Redirect::to(&format!("/issues/{id}")))
 }
 
-/// The open-an-issue form (`POST /issues`).
+/// The open-an-issue form (`POST /issues`). The `state` field is a free
+/// text input with a [`state_datalist`] of the conventional values, never
+/// a closed `select` -- `model.issue` keeps states an open vocabulary
+/// ("custom states are schema, not platform features"; see
+/// [`ents_forge::Issue`]'s own doc).
 fn new_form(session: &Session) -> Markup {
     html! {
         form method="post" action="/issues" {
             (super::csrf_input(session))
             label { "title" input type="text" name="title"; }
-            label { "state" input type="text" name="state" value="open"; }
+            label {
+                "state"
+                input type="text" name="state" value="open" list="issue-states";
+            }
+            (state_datalist())
             label { "assignees" input type="text" name="assignees" placeholder="alice, bob"; }
             label { "labels" input type="text" name="labels" placeholder="bug, gate"; }
             label { "body" textarea name="body" {} }
@@ -320,18 +332,37 @@ fn new_form(session: &Session) -> Markup {
 }
 
 /// The edit-issue form (`POST /issues/{id}`), its fields pre-filled from
-/// the current issue.
+/// the current issue. Its `state` field carries the same [`state_datalist`]
+/// as [`new_form`]'s, for the same open-vocabulary reason.
 fn edit_form(session: &Session, issue: &ents_forge::Issue) -> Markup {
     html! {
         form method="post" action="" {
             (super::csrf_input(session))
-            label { "state" input type="text" name="state" value=(issue.state); }
+            label {
+                "state"
+                input type="text" name="state" value=(issue.state) list="issue-states";
+            }
+            (state_datalist())
             label {
                 "assignees"
                 input type="text" name="assignees" value=(join_members(&issue.assignees));
             }
             label { "labels" input type="text" name="labels" value=(issue.labels.join(", ")); }
             button type="submit" { "save" }
+        }
+    }
+}
+
+/// The `datalist` of conventional issue states both forms above attach to
+/// their `state` input -- suggestions only, since `model.issue`'s state is
+/// an open string vocabulary, not an enum a `select` could close over.
+/// Rendered once per form; the two forms never share a page, so the id
+/// never collides.
+fn state_datalist() -> Markup {
+    html! {
+        datalist id="issue-states" {
+            option value="open" {}
+            option value="closed" {}
         }
     }
 }
