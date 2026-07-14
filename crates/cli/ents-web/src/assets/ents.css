@@ -220,24 +220,27 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .entity-view dt + dt { padding-top: .1rem; }
 
 .entity-list { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: .85rem; }
-.entity-list th, .entity-list td { padding: .6rem 1.1rem; text-align: left; word-break: break-all; }
+.entity-list th, .entity-list td { padding: .6rem 1.1rem; text-align: left; }
+.entity-list th { white-space: nowrap; }
+/* `render::list_table` marks a cell `.long-token` when one whitespace-free
+ * token (an ssh key's base64 body, an unbroken hash) is too long to wrap
+ * at word boundaries; only those cells may break mid-token, so a short
+ * value like a variant name never shreds. */
+.entity-list td.long-token { word-break: break-all; }
 .entity-list thead { background: var(--color-code-bg); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-muted); }
 .entity-list tbody tr + tr { border-top: 1px solid var(--color-border); }
 .entity-list td a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .entity-list td a:hover { color: var(--color-accent); }
 
 /* The commits list (`crate::pages::commits::list`) reuses `.entity-list`,
- * but its oid/author/when columns are short tokens that should never
- * shred mid-word the way a long unbroken key (`.entity-list`'s own
- * break-all, correctly used by the members list's `key` column) needs to;
- * only the subject column -- ordinary prose -- wraps at word boundaries. */
+ * but its oid/author/when columns are short tokens that should stay on
+ * one line however narrow the table gets; only the subject column --
+ * ordinary prose -- wraps at word boundaries. */
 .commits-table th:nth-child(1), .commits-table td:nth-child(1),
 .commits-table th:nth-child(3), .commits-table td:nth-child(3),
 .commits-table th:nth-child(4), .commits-table td:nth-child(4) {
   white-space: nowrap;
-  word-break: normal;
 }
-.commits-table td:nth-child(2) { word-break: normal; }
 
 .string-list { list-style: none; font-family: var(--font-mono); font-size: .9rem; }
 .string-list li { display: flex; align-items: center; gap: .65rem; padding: .7rem 1.1rem; }

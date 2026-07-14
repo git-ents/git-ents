@@ -164,7 +164,7 @@ pub fn list_table<T: Facet<'static>>(
                         tr {
                             td { a href=(href_for(id)) { (id) } }
                             @for (_, rendered) in fields(entity) {
-                                td { (rendered) }
+                                td.long-token[has_long_token(&rendered)] { (rendered) }
                             }
                         }
                     }
@@ -172,6 +172,16 @@ pub fn list_table<T: Facet<'static>>(
             }
         }
     }
+}
+
+/// Whether `value` holds a token no wrap opportunity ever splits -- an ssh
+/// key's base64 body, an unbroken hash -- long enough (over 40 characters)
+/// that its cell must be allowed to break mid-token (`.long-token`'s
+/// `break-all`) or it starves every other column of the table's width.
+/// Ordinary short values keep word-boundary wrapping so a variant name
+/// like `AdminRegistered` never shreds.
+fn has_long_token(value: &str) -> bool {
+    value.split_whitespace().any(|token| token.len() > 40)
 }
 
 /// A muted marker card for one entity this crate could not reflect -- the
@@ -386,6 +396,20 @@ mod tests {
         assert!(markup.contains("username"));
         assert!(markup.contains("key"));
         assert!(markup.contains("jdc"));
+    }
+
+    #[rstest]
+    // @relation(roots.web-agnostic, scope=function, role=Verifies)
+    fn list_table_breaks_only_the_cell_holding_a_long_unbroken_token() {
+        let key = format!("ssh-ed25519 {} jdc@host", "A".repeat(68));
+        let rows = vec![(
+            "jdc".to_owned(),
+            Member::new("jdc", key, Provenance::AdminRegistered),
+        )];
+        let markup = list_table(&rows, "username", |id| format!("/members/{id}")).into_string();
+        // Exactly one cell carries the class: the key's; `AdminRegistered`
+        // and the short id stay word-boundary-wrapped.
+        assert_eq!(markup.matches("class=\"long-token\"").count(), 1);
     }
 
     #[rstest]
