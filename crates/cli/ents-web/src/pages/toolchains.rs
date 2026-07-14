@@ -22,13 +22,13 @@ use crate::state::AppState;
 ///
 /// Every name resolves its own recipe (`toolchain::view`) so a name whose
 /// stored tree does not match this build's [`ents_kiln::Toolchain`]/
-/// [`ents_kiln::Recipe`] shape (written by an older schema) renders here as
-/// a muted marker rather than a working link -- the same per-entity
-/// graceful-degradation stance [`crate::render::list_table`] takes for the
-/// other meta families, hand-rolled here since [`toolchain::list`] itself
-/// only enumerates ref names, with no reflected entity for
-/// [`crate::render`]'s generic machinery to walk (this page family's own
-/// top-level doc).
+/// [`ents_kiln::Recipe`] shape (written by an older schema) surfaces in
+/// the same [`crate::render::unreadable_disclosure`] every other entity
+/// family's list page renders, while its name stays linked in the listing
+/// (its show page renders the unreadable marker card) -- hand-rolled here
+/// since [`toolchain::list`] itself only enumerates ref names, with no
+/// reflected entity for [`crate::render`]'s generic machinery to walk
+/// (this page family's own top-level doc).
 ///
 /// # Errors
 ///
@@ -38,16 +38,13 @@ where
     O: Find + Write + Send + 'static,
 {
     let names = toolchain::list(state.refs.as_ref())?;
-    let rows: Vec<(String, Option<String>)> = names
-        .into_iter()
-        .map(|name| {
-            let detail = toolchain::view(state.refs.as_ref(), &*state.objects(), &name)
-                .err()
-                .map(|error| error.to_string());
-            (name, detail)
-        })
-        .collect();
-    let body = if rows.is_empty() {
+    let mut failures = Vec::new();
+    for name in &names {
+        if let Err(error) = toolchain::view(state.refs.as_ref(), &*state.objects(), name) {
+            failures.push((format!("refs/meta/toolchains/{name}"), error.to_string()));
+        }
+    }
+    let listing = if names.is_empty() {
         super::blankslate(
             "No toolchains yet",
             html! { "Import one with " code { "git ents toolchain import" } "." },
@@ -56,12 +53,9 @@ where
         html! {
             div.card {
                 ul.string-list {
-                    @for (name, detail) in &rows {
+                    @for name in &names {
                         li {
                             a href=(format!("/toolchains/{name}")) { (name) }
-                            @if detail.is_some() {
-                                span.unreadable { "unreadable \u{2014} written by an older schema" }
-                            }
                         }
                     }
                 }
@@ -73,7 +67,10 @@ where
         &super::identity_label(&state),
         "/toolchains",
         "Toolchains",
-        body,
+        html! {
+            (crate::render::unreadable_disclosure(&failures))
+            (listing)
+        },
     ))
 }
 

@@ -78,7 +78,11 @@ pub async fn list<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let rows = comment::list(state.refs.as_ref(), &*state.objects())?;
+    let (rows, unreadable) = comment::list_all(state.refs.as_ref(), &*state.objects())?;
+    let failures: Vec<(String, String)> = unreadable
+        .into_iter()
+        .map(|entry| (entry.refname, entry.error))
+        .collect();
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -86,6 +90,7 @@ where
         "Comments",
         html! {
             div.readable {
+                (crate::render::unreadable_disclosure(&failures))
                 @if rows.is_empty() {
                     (super::blankslate(
                         "No comments yet",
@@ -131,7 +136,9 @@ fn default_rev_field() -> String {
 /// # Errors
 ///
 /// [`crate::Error::Forge`] (wrapping [`ents_forge::Error::NotFound`]) if
-/// `id` has no comment ref.
+/// `id` has no comment ref at all; a comment ref whose stored tree this
+/// build cannot read back degrades to [`crate::render::unreadable`]'s
+/// marker card instead of erroring.
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
@@ -141,14 +148,33 @@ pub async fn show<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let (comment, projected) = comment::show(
+    let (comment, projected) = match comment::show(
         state.refs.as_ref(),
         &*state.objects(),
         &state.path,
         &id,
         &query.rev,
         false,
-    )?;
+    ) {
+        Ok(read) => read,
+        // No ref at all stays a real 404; any other failure (a tree this
+        // build's shape cannot read back, written by an older schema) is
+        // an existing entity this page degrades to the plain unreadable
+        // card for, never a 404 or a 500.
+        Err(source @ ents_forge::Error::NotFound { .. }) => return Err(source.into()),
+        Err(source) => {
+            return Ok(super::layout(
+                &super::RepoHeader::from_state(&state),
+                &super::identity_label(&state),
+                super::Tab::Comments,
+                &format!("Comment {}", ents_forge::abbreviate_id(&id)),
+                html! {
+                    (super::child_crumbs("comments", "/comments", ents_forge::abbreviate_id(&id)))
+                    div.readable { (crate::render::unreadable(&source.to_string())) }
+                },
+            ));
+        }
+    };
     let resolved = comment.state == "resolved";
     let return_to = format!("/comments/{id}");
     Ok(super::layout(

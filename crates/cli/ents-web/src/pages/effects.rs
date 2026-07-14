@@ -26,8 +26,15 @@ pub async fn list<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Mark
 where
     O: Find + Write + Send + 'static,
 {
-    let rows = read_all(&state)?;
-    let body = if rows.is_empty() {
+    let mut rows = Vec::new();
+    let mut failures = Vec::new();
+    for (name, effect) in read_all(&state)? {
+        match effect {
+            Ok(effect) => rows.push((name, effect)),
+            Err(error) => failures.push((format!("refs/meta/effects/{name}"), error)),
+        }
+    }
+    let table = if rows.is_empty() {
         super::blankslate(
             "No effects yet",
             html! { "Registered effects and their trigger queries appear here." },
@@ -40,7 +47,10 @@ where
         &super::identity_label(&state),
         "/effects",
         "Effects",
-        body,
+        html! {
+            (crate::render::unreadable_disclosure(&failures))
+            (table)
+        },
     ))
 }
 

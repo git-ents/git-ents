@@ -10,5 +10,5 @@ mod command;
 mod entity;
 
 pub use cli::IssueAction;
-pub use command::{EditIssue, NewIssue, edit, list, new, show};
+pub use command::{EditIssue, NewIssue, edit, list, list_all, new, show};
 pub use entity::Issue;

@@ -245,10 +245,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .string-list a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 25%, transparent); }
 .string-list a:hover { color: var(--color-accent); }
 
-/* A per-entity read failure (an older or unrelated schema's tree shape),
- * on a list row (`entity-list`/`string-list`) or a show page's own card
- * (`crate::render::unreadable`) -- graceful degradation, never a 500. */
-.entity-list tr.unreadable td, .string-list .unreadable, .card-row.unreadable span {
+/* A per-entity read failure (an older or unrelated schema's tree shape)
+ * on a show page's own card (`crate::render::unreadable`) -- graceful
+ * degradation, never a 500. */
+.card-row.unreadable span {
   color: var(--color-text-muted);
   font-style: italic;
 }
@@ -261,6 +261,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
   font-size: .78rem;
   word-break: break-all;
 }
+
+/* The subtle unreadable-entities disclosure a list page renders when refs
+ * under its prefix failed to read back (`crate::render::unreadable_disclosure`):
+ * a muted, badge-shaped `<details>` summary that must never dominate the
+ * page, expanding -- the element's own no-JS toggle -- to a small card of
+ * refname/error pairs. */
+.unreadable-note { margin-bottom: 1.25rem; }
+.unreadable-note summary { display: inline-flex; align-items: center; gap: .35rem; font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: .1rem .6rem; cursor: pointer; list-style: none; user-select: none; -webkit-user-select: none; }
+.unreadable-note summary::-webkit-details-marker { display: none; }
+.unreadable-note summary:hover { color: var(--color-text); }
+.unreadable-note[open] summary { margin-bottom: .6rem; }
+.unreadable-note .card { margin-bottom: 0; }
+.unreadable-note dd { color: var(--color-text-muted); font-size: .78rem; }
 
 /* Bare `dl`/`ul`/`form` markup a custom page (toolchains, comments) emits
  * directly, styled the same as the generic views above so a page needs no

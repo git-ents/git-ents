@@ -2132,10 +2132,61 @@ async fn search_with_no_query_renders_a_blankslate() {
     );
 }
 
-/// `GET /toolchains` lists a toolchain written by an older schema (piece
-/// 1's bug: this repository's own `refs/meta/toolchains/{rust,sccache,zig}`
-/// still carry it) as a muted marker row, never a 500 -- and a good
-/// toolchain alongside it still lists and links normally.
+/// `GET /comments` surfaces a comment ref written by an older schema
+/// through the shared unreadable disclosure instead of silently dropping
+/// it, and its own `GET /comments/{id}` page renders the plain unreadable
+/// marker card rather than erroring.
+#[tokio::test]
+async fn comments_surface_an_unreadable_ref_in_the_list_and_on_its_own_page() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let tip = write_commit(
+        &objects,
+        &CommitSpec {
+            tree: ents_testutil::empty_tree(&objects),
+            parents: Vec::new(),
+            message: "legacy comment".to_owned(),
+            seconds: 100,
+        },
+        None,
+    );
+    let refname: gix::refs::FullName = "refs/meta/comments/legacy"
+        .try_into()
+        .expect("valid refname");
+    refs.set(refname.as_ref(), tip);
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let list = get_body(&router, "/comments").await;
+    assert!(
+        list.contains("unreadable-note") && list.contains("1 unreadable"),
+        "the list page carries the subtle disclosure: {list}"
+    );
+    assert!(
+        list.contains("refs/meta/comments/legacy"),
+        "the disclosure names the failed ref"
+    );
+
+    let detail = get_body(&router, "/comments/legacy").await;
+    assert!(
+        detail.contains("unreadable"),
+        "the detail page shows the error state plainly instead of erroring: {detail}"
+    );
+}
+
+/// `GET /toolchains` surfaces a toolchain written by an older schema
+/// (piece 1's bug: this repository's own
+/// `refs/meta/toolchains/{rust,sccache,zig}` still carry it) through the
+/// shared unreadable disclosure, never a 500 -- and a good toolchain
+/// alongside it still lists and links normally.
 #[tokio::test]
 async fn toolchains_list_marks_a_legacy_entry_but_still_lists_a_good_one() {
     let refs = MemRefStore::default();
@@ -2182,7 +2233,14 @@ async fn toolchains_list_marks_a_legacy_entry_but_still_lists_a_good_one() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains(r#"href="/toolchains/good""#));
     assert!(body.contains(r#"href="/toolchains/legacy""#));
-    assert!(body.contains("unreadable"));
+    assert!(
+        body.contains("unreadable-note") && body.contains("1 unreadable"),
+        "the legacy entry surfaces through the shared disclosure: {body}"
+    );
+    assert!(
+        body.contains("refs/meta/toolchains/legacy"),
+        "the disclosure names the failed ref"
+    );
 }
 
 /// `GET /toolchains/{name}` on a legacy-schema entry renders the marker

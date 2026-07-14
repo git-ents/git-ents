@@ -167,6 +167,11 @@ pub fn edit(
 
 /// `git ents issue list`: every issue recorded in this repository.
 ///
+/// A ref whose tip this build cannot read back as an [`Issue`] is
+/// silently absent here — a caller that must surface those refs instead
+/// of dropping them (`ents-web`'s issues page) uses [`list_all`], which
+/// this is the readable-rows-only view of.
+///
 /// # Errors
 ///
 /// Propagates a ref-store or object read failure.
@@ -185,19 +190,55 @@ pub fn list(
     refs: &dyn gix_ref_store::RefStoreRead,
     objects: &impl Find,
 ) -> Result<Vec<(String, Issue)>> {
+    Ok(list_all(refs, objects)?.0)
+}
+
+/// [`list`] plus the refs it could not read: every readable issue, and
+/// one [`crate::Unreadable`] per `refs/meta/issues/*` ref whose tip this
+/// build's [`Issue`] shape could not read back — the issue counterpart to
+/// [`crate::comment::list_all`], with the same never-silently-dropped
+/// contract (see [`crate::Unreadable`]'s own doc).
+///
+/// # Errors
+///
+/// Propagates a ref-store read failure — a per-ref *entity* read failure
+/// is a row in the second vec, never an error.
+///
+/// # Examples
+///
+/// ```
+/// use ents_forge::issue::list_all;
+/// use ents_testutil::{MemRefStore, ObjectStore};
+///
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let (rows, unreadable) = list_all(&refs, &objects).expect("reads");
+/// assert!(rows.is_empty());
+/// assert!(unreadable.is_empty());
+/// ```
+pub fn list_all(
+    refs: &dyn gix_ref_store::RefStoreRead,
+    objects: &impl Find,
+) -> Result<crate::Listing<Issue>> {
     let mut out = Vec::new();
+    let mut unreadable = Vec::new();
     for entry in refs.iter_prefix("refs/meta/issues/")? {
         let (name, tip) = entry?;
         let path = name.as_bstr().to_string();
         let Some(id) = path.strip_prefix("refs/meta/issues/") else {
             continue;
         };
-        let tree = commit_tree(objects, tip)?;
-        if let Ok(issue) = facet_git_tree::deserialize::<Issue>(&tree, objects) {
-            out.push((id.to_owned(), issue));
+        match commit_tree(objects, tip)
+            .and_then(|tree| Ok(facet_git_tree::deserialize::<Issue>(&tree, objects)?))
+        {
+            Ok(issue) => out.push((id.to_owned(), issue)),
+            Err(error) => unreadable.push(crate::Unreadable {
+                refname: path.clone(),
+                error: error.to_string(),
+            }),
         }
     }
-    Ok(out)
+    Ok((out, unreadable))
 }
 
 /// `git ents issue show`: `id`'s issue.

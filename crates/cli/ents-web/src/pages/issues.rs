@@ -44,7 +44,11 @@ pub async fn list<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let rows = issue::list(state.refs.as_ref(), &*state.objects())?;
+    let (rows, unreadable) = issue::list_all(state.refs.as_ref(), &*state.objects())?;
+    let failures: Vec<(String, String)> = unreadable
+        .into_iter()
+        .map(|entry| (entry.refname, entry.error))
+        .collect();
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -52,6 +56,7 @@ where
         "Issues",
         html! {
             div.readable {
+                (crate::render::unreadable_disclosure(&failures))
                 @if rows.is_empty() {
                     (super::blankslate(
                         "No issues yet",
@@ -90,8 +95,10 @@ where
 /// # Errors
 ///
 /// [`crate::Error::Forge`] (wrapping [`ents_forge::Error::NotFound`]) if
-/// `id` has no issue ref; otherwise propagates a ref-store or object read
-/// failure.
+/// `id` has no issue ref at all; an issue ref whose stored tree this
+/// build cannot read back degrades to [`crate::render::unreadable`]'s
+/// marker card instead of erroring. Otherwise propagates a ref-store or
+/// object read failure.
 // @relation(model.issue, model.comment-context, scope=function)
 pub async fn show<O>(
     State(state): State<Arc<AppState<O>>>,
@@ -101,7 +108,25 @@ pub async fn show<O>(
 where
     O: Find + Write + Send + 'static,
 {
-    let issue = issue::show(state.refs.as_ref(), &*state.objects(), &id)?;
+    let issue = match issue::show(state.refs.as_ref(), &*state.objects(), &id) {
+        Ok(issue) => issue,
+        // No ref at all stays a real not-found; any other failure (a tree
+        // this build's shape cannot read back) is an existing entity this
+        // page degrades to the plain unreadable card for.
+        Err(source @ ents_forge::Error::NotFound { .. }) => return Err(source.into()),
+        Err(source) => {
+            return Ok(super::layout(
+                &super::RepoHeader::from_state(&state),
+                &super::identity_label(&state),
+                super::Tab::Issues,
+                &format!("Issue {}", ents_forge::abbreviate_id(&id)),
+                html! {
+                    (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))
+                    div.readable { (crate::render::unreadable(&source.to_string())) }
+                },
+            ));
+        }
+    };
     let context = format!("issues/{id}");
     let thread = ents_forge::comment::thread(state.refs.as_ref(), &*state.objects(), &context)?;
     let body =

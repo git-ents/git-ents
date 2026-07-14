@@ -114,6 +114,48 @@ pub(crate) fn genesis_id(ref_name: &gix::refs::FullName) -> String {
         .to_owned()
 }
 
+/// One meta ref a listing could not read back as this build's own entity
+/// shape — its tip's tree was written by an older or unrelated schema (or
+/// the ref does not even point at a commit), so deserialization failed.
+/// [`comment::list_all`] and [`issue::list_all`] return these alongside
+/// their readable rows rather than dropping them on the floor: a reader
+/// surfaces a marker, never a silent gap, for an entity this build can no
+/// longer speak the schema of (the same graceful-degradation stance
+/// `ents-web`'s per-entity "unreadable" rendering takes).
+///
+/// # Examples
+///
+/// ```
+/// use ents_forge::Unreadable;
+///
+/// let unreadable = Unreadable {
+///     refname: "refs/meta/comments/deadbeef".to_owned(),
+///     error: "object ... is not a blob".to_owned(),
+/// };
+/// assert!(unreadable.refname.starts_with("refs/meta/"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    /// The full refname whose tip could not be read back.
+    pub refname: String,
+    /// The underlying read/deserialization error, rendered as text — a
+    /// diagnostic for an operator, not a value to match on.
+    pub error: String,
+}
+
+/// A listing's readable `(id, entity)` rows alongside the refs it could
+/// not read — [`comment::list_all`] and [`issue::list_all`]'s shared
+/// return shape (see [`Unreadable`]'s own doc).
+///
+/// # Examples
+///
+/// ```
+/// let listing: ents_forge::Listing<ents_forge::Issue> = (Vec::new(), Vec::new());
+/// let (rows, unreadable) = listing;
+/// assert!(rows.is_empty() && unreadable.is_empty());
+/// ```
+pub type Listing<T> = (Vec<(String, T)>, Vec<Unreadable>);
+
 /// Abbreviate a genesis-oid entity id (`model.comment`, `model.issue`) to a
 /// short prefix for display — the same seven-hex-character length git's own
 /// short object id uses (`model.issue`: "porcelain abbreviates ids the way

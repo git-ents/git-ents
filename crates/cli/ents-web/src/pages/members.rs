@@ -22,8 +22,15 @@ pub async fn list<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Mark
 where
     O: Find + Write + Send + 'static,
 {
-    let rows = read_all(&state)?;
-    let body = if rows.is_empty() {
+    let mut rows = Vec::new();
+    let mut failures = Vec::new();
+    for (username, member) in read_all(&state)? {
+        match member {
+            Ok(member) => rows.push((username, member)),
+            Err(error) => failures.push((format!("refs/meta/member/{username}"), error)),
+        }
+    }
+    let table = if rows.is_empty() {
         super::blankslate(
             "No members yet",
             maud::html! { "Enroll one with " code { "git ents members add" } "." },
@@ -36,7 +43,10 @@ where
         &super::identity_label(&state),
         "/members",
         "Members",
-        body,
+        maud::html! {
+            (crate::render::unreadable_disclosure(&failures))
+            (table)
+        },
     ))
 }
 
@@ -80,7 +90,9 @@ where
 /// Every `refs/meta/member/*` ref, with its tip's tree deserialized as a
 /// [`Member`] -- `Err(detail)` for a ref this build's `#[derive(Facet)]`
 /// shape could not read back, kept in the listing (not dropped) so
-/// [`list`]/[`show`] can render it as a marker rather than silently
+/// [`list`] can surface it through
+/// [`crate::render::unreadable_disclosure`] and [`show`] as
+/// [`crate::render::unreadable`]'s marker card, rather than silently
 /// omitting it (`roots.web-agnostic`: a reader surfaces a marker, never an
 /// error or a silent gap, for one entity written by a schema this build no
 /// longer speaks).

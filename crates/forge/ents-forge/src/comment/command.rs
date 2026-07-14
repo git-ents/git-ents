@@ -62,6 +62,11 @@ fn comment_at(refs: &dyn RefStoreRead, objects: &impl Find, id: &str) -> Result<
 
 /// `git ents comment list`: every comment recorded in this repository.
 ///
+/// A ref whose tip this build cannot read back as a [`Comment`] is
+/// silently absent here — a caller that must surface those refs instead
+/// of dropping them (`ents-web`'s comments page) uses [`list_all`], which
+/// this is the readable-rows-only view of.
+///
 /// # Errors
 ///
 /// Propagates a ref-store or object read failure.
@@ -77,19 +82,52 @@ fn comment_at(refs: &dyn RefStoreRead, objects: &impl Find, id: &str) -> Result<
 /// assert!(list(&refs, &objects).expect("reads").is_empty());
 /// ```
 pub fn list(refs: &dyn RefStoreRead, objects: &impl Find) -> Result<Vec<(String, Comment)>> {
+    Ok(list_all(refs, objects)?.0)
+}
+
+/// [`list`] plus the refs it could not read: every readable comment, and
+/// one [`crate::Unreadable`] per `refs/meta/comments/*` ref whose tip this
+/// build's [`Comment`] shape could not read back (written by an older or
+/// unrelated schema, or not pointing at a commit at all). Nothing under
+/// the prefix is ever silently dropped — a failed read lands in the second
+/// vec with its refname and error text, for a caller to surface however
+/// its own surface degrades (see [`crate::Unreadable`]'s own doc).
+///
+/// # Errors
+///
+/// Propagates a ref-store read failure — a per-ref *entity* read failure
+/// is a row in the second vec, never an error.
+///
+/// # Examples
+///
+/// ```
+/// use ents_forge::comment::list_all;
+/// use ents_testutil::{ObjectStore, MemRefStore};
+///
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let (rows, unreadable) = list_all(&refs, &objects).expect("reads");
+/// assert!(rows.is_empty());
+/// assert!(unreadable.is_empty());
+/// ```
+pub fn list_all(refs: &dyn RefStoreRead, objects: &impl Find) -> Result<crate::Listing<Comment>> {
     let mut out = Vec::new();
+    let mut unreadable = Vec::new();
     for entry in refs.iter_prefix("refs/meta/comments/")? {
         let (name, tip) = entry?;
         let path = name.as_bstr().to_string();
         let Some(id) = path.strip_prefix("refs/meta/comments/") else {
             continue;
         };
-        let tree = commit_tree(objects, tip)?;
-        if let Ok(comment) = read_comment(&tree, objects) {
-            out.push((id.to_owned(), comment));
+        match commit_tree(objects, tip).and_then(|tree| read_comment(&tree, objects)) {
+            Ok(comment) => out.push((id.to_owned(), comment)),
+            Err(error) => unreadable.push(crate::Unreadable {
+                refname: path.clone(),
+                error: error.to_string(),
+            }),
         }
     }
-    Ok(out)
+    Ok((out, unreadable))
 }
 
 /// One row of [`list_projected`]: the comment, and — when it carries an

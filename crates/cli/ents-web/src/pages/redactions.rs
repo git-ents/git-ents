@@ -21,8 +21,15 @@ pub async fn list<O>(State(state): State<Arc<AppState<O>>>) -> Result<maud::Mark
 where
     O: Find + Write + Send + 'static,
 {
-    let rows = read_all(&state)?;
-    let body = if rows.is_empty() {
+    let mut rows = Vec::new();
+    let mut failures = Vec::new();
+    for (id, redaction) in read_all(&state)? {
+        match redaction {
+            Ok(redaction) => rows.push((id, redaction)),
+            Err(error) => failures.push((format!("refs/meta/redactions/{id}"), error)),
+        }
+    }
+    let table = if rows.is_empty() {
         super::blankslate(
             "No redactions yet",
             maud::html! { "Record one with " code { "git ents redact add" } "." },
@@ -35,7 +42,10 @@ where
         &super::identity_label(&state),
         "/redactions",
         "Redactions",
-        body,
+        maud::html! {
+            (crate::render::unreadable_disclosure(&failures))
+            (table)
+        },
     ))
 }
 
