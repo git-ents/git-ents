@@ -157,6 +157,12 @@ impl axum::response::IntoResponse for Error {
 
         let status = match &self {
             Error::NotFound { .. } => StatusCode::NOT_FOUND,
+            // A forge entity with no ref at all is as much a 404 as this
+            // crate's own NotFound -- the box exists for variant-size
+            // hygiene, not to demote the status to a 500.
+            Error::Forge(inner) if matches!(inner.as_ref(), ents_forge::Error::NotFound { .. }) => {
+                StatusCode::NOT_FOUND
+            }
             Error::InvalidArgument(_) | Error::BadCsrf => StatusCode::BAD_REQUEST,
             Error::NoSession => StatusCode::UNAUTHORIZED,
             Error::Refused(_) | Error::Stale { .. } | Error::Redacted { .. } => {

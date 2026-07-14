@@ -2310,6 +2310,30 @@ async fn toolchain_form_registers_a_recipe() {
     );
 }
 
+/// A show page for an id with no ref at all is a real 404, not a 500 --
+/// `ents_forge::Error::NotFound` keeps its status through the `Forge`
+/// box (the box exists for variant-size hygiene only).
+#[tokio::test]
+async fn missing_forge_entity_is_a_404_not_a_500() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+    for path in ["/issues/nope", "/comments/nope"] {
+        let response = router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("in-process call");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "GET {path}");
+    }
+}
+
 /// `GET /toolchains` surfaces a toolchain written by an older schema
 /// (piece 1's bug: this repository's own
 /// `refs/meta/toolchains/{rust,sccache,zig}` still carry it) through the
