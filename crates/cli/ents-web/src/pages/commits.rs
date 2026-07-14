@@ -596,6 +596,13 @@ fn diff_sections(
         if truncated {
             return Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Break(()));
         }
+        // The walk yields every intermediate directory as its own tree
+        // change; only blob (and link) entries are files a reader can
+        // diff, so a tree entry renders nothing rather than a bare
+        // header per subdirectory.
+        if is_tree_change(&change) {
+            return Ok(std::ops::ControlFlow::Continue(()));
+        }
         let (section, bytes) = render_change(repo, &change);
         total = total.saturating_add(bytes);
         sections.push(section);
@@ -605,6 +612,18 @@ fn diff_sections(
         Ok(std::ops::ControlFlow::Continue(()))
     });
     (html! { @for section in &sections { (section) } }, truncated)
+}
+
+/// Whether `change` is a tree (directory) entry rather than a blob or
+/// link -- [`diff_sections`] skips these, since the walk names every
+/// intermediate directory on the way to a changed file.
+fn is_tree_change(change: &Change<'_, '_, '_>) -> bool {
+    match *change {
+        Change::Addition { entry_mode, .. }
+        | Change::Deletion { entry_mode, .. }
+        | Change::Modification { entry_mode, .. }
+        | Change::Rewrite { entry_mode, .. } => entry_mode.is_tree(),
+    }
 }
 
 /// One changed file's `.diff` section: a `.file`-classed header naming the

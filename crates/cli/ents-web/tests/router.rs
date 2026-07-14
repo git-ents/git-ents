@@ -1705,6 +1705,45 @@ async fn commit_show_renders_the_subject_and_a_diff_line() {
     );
 }
 
+/// `GET /commit/{oid}` renders one `.file` header per changed blob and
+/// none for the intermediate directories the tree walk also names --
+/// each subdirectory used to appear as its own bare file section.
+#[tokio::test]
+async fn commit_diff_lists_files_not_intermediate_directories() {
+    let dir = seed_repo(&[("crates/foo/src/lib.rs", "pub fn f() {}\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let response = router
+        .oneshot(
+            Request::get(format!("/commit/{oid}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 html");
+    assert_eq!(
+        body.matches("class=\"ln file\"").count(),
+        1,
+        "one changed blob means exactly one file header"
+    );
+}
+
 /// `GET /commit/{oid}` lists, under a "conversation" heading, every
 /// comment whose anchor was captured against that exact commit -- and
 /// none captured against a different one, even a later commit on the same
