@@ -77,6 +77,32 @@ fn loopback_addr(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
+/// The `<label>.localhost` hostname printed for the served repository:
+/// its directory name lowercased with every character outside
+/// `[a-z0-9]` folded to `-` (a DNS label), `repo` when nothing
+/// survives. `*.localhost` names resolve to loopback inside Firefox
+/// and Chrome themselves (RFC 6761) and count as a secure context, so
+/// the printed URL carries the repo's name instead of a bare
+/// `127.0.0.1` — same socket, nicer address bar. Safari delegates to
+/// the system resolver and needs an `/etc/hosts` line, which is why
+/// the raw bound address is still printed alongside.
+fn host_label(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let label: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let label = label.trim_matches('-');
+    if label.is_empty() {
+        "repo".to_owned()
+    } else {
+        label.to_owned()
+    }
+}
+
 /// Build the [`AppState`] `git ents serve` runs, from an already-open
 /// [`LocalRoot`] -- the one seam-wiring step `roots.composition` allows,
 /// and the only place this command touches `root`'s fields at all.
@@ -140,6 +166,7 @@ pub fn run(
     key: Option<PathBuf>,
     mut report: impl std::io::Write,
 ) -> Result<()> {
+    let label = host_label(&root.path);
     let state = build_state(root, key)?;
     let addr = loopback_addr(port.unwrap_or(4880));
 
@@ -156,7 +183,11 @@ pub fn run(
             path: PathBuf::from(addr.to_string()),
             source,
         })?;
-        let _ = writeln!(report, "listening on http://{bound}");
+        let _ = writeln!(
+            report,
+            "listening on http://{label}.localhost:{port} (http://{bound})",
+            port = bound.port()
+        );
         ents_web::serve_on(listener, state)
             .await
             .map_err(|source| Error::Io {
@@ -173,6 +204,14 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::plain_repo_name("git-ents", "git-ents")]
+    #[case::uppercase_and_dots("My_Repo.git", "my-repo-git")]
+    #[case::nothing_survives("...", "repo")]
+    fn host_label_folds_to_a_dns_label(#[case] dir: &str, #[case] expected: &str) {
+        assert_eq!(host_label(std::path::Path::new(dir)), expected);
+    }
 
     #[rstest]
     // @relation(roots.local, scope=function, role=Verifies)
