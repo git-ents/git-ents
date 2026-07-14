@@ -2310,6 +2310,26 @@ async fn toolchain_form_registers_a_recipe() {
     );
 }
 
+/// The issues page carries a `datalist#members` of enrolled usernames so
+/// the assignees field completes by member id in place.
+#[tokio::test]
+async fn issue_forms_carry_a_members_datalist() {
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+    let body = get_body(&router, "/issues").await;
+    assert!(
+        body.contains("datalist id=\"members\""),
+        "the assignees field has a members datalist to complete from: {body}"
+    );
+}
+
 /// A show page for an id with no ref at all is a real 404, not a 500 --
 /// `ents_forge::Error::NotFound` keeps its status through the `Forge`
 /// box (the box exists for variant-size hygiene only).

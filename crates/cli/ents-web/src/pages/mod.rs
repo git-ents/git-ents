@@ -407,6 +407,29 @@ pub(crate) fn blankslate(title: &str, line: Markup) -> Markup {
     }
 }
 
+/// A `<datalist id="members">` of every enrolled username
+/// (`refs/meta/member/*`), for forms whose text field names a member --
+/// an issue's assignees completes by id in place; richer matching (by
+/// key, fuzzy) stays with the palette. Best-effort: a ref-store read
+/// failure renders an empty datalist rather than failing the page the
+/// form sits on.
+pub(crate) fn members_datalist<O>(state: &AppState<O>) -> Markup {
+    let mut names = Vec::new();
+    if let Ok(entries) = state.refs.iter_prefix("refs/meta/member/") {
+        for (name, _tip) in entries.flatten() {
+            let path = name.as_bstr().to_string();
+            if let Some(username) = path.strip_prefix("refs/meta/member/") {
+                names.push(username.to_owned());
+            }
+        }
+    }
+    html! {
+        datalist id="members" {
+            @for name in &names { option value=(name) {} }
+        }
+    }
+}
+
 /// The one-level breadcrumb trail every `/{id}` child page renders above
 /// its own content -- "parent \u{203a} here", reusing the `.crumbs` markup
 /// pattern [`super::files`]'s own multi-level path trail already renders

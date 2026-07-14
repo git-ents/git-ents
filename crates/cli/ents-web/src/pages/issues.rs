@@ -81,6 +81,7 @@ where
                 }
                 h2 { "Open an Issue" }
                 (new_form(&session))
+                (super::members_datalist(&state))
             }
         },
     ))
@@ -151,6 +152,7 @@ where
                 details {
                     summary { "Edit" }
                     (edit_form(&session, &issue))
+                    (super::members_datalist(&state))
                 }
                 h2 { "Discussion" }
                 (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
@@ -351,7 +353,7 @@ fn new_form(session: &Session) -> Markup {
                 input type="text" name="state" value="open" list="issue-states";
             }
             (state_datalist())
-            label { "assignees" input type="text" name="assignees" placeholder="alice, bob"; }
+            label { "assignees" input type="text" name="assignees" placeholder="alice, bob" list="members"; }
             label { "labels" input type="text" name="labels" placeholder="bug, gate"; }
             label { "body" textarea name="body" {} }
             button type="submit" { "Open Issue" }
@@ -373,7 +375,7 @@ fn edit_form(session: &Session, issue: &ents_forge::Issue) -> Markup {
             (state_datalist())
             label {
                 "assignees"
-                input type="text" name="assignees" value=(join_members(&issue.assignees));
+                input type="text" name="assignees" value=(join_members(&issue.assignees)) list="members";
             }
             label { "labels" input type="text" name="labels" value=(issue.labels.join(", ")); }
             button type="submit" { "Save" }
