@@ -12,6 +12,6 @@ mod entity;
 mod recipe;
 
 pub use cli::ToolchainAction;
-pub use command::{import, list, log, view};
+pub use command::{import, list, log, register, view};
 pub use entity::Toolchain;
 pub use recipe::{Component, Recipe, cache_key, materialize, resolve};

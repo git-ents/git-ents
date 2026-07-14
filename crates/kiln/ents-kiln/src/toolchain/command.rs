@@ -79,7 +79,38 @@ pub fn import(
     mode: Mode,
 ) -> Result<Outcome> {
     let tree = write_dir_as_tree(bin, objects)?;
-    let recipe = Recipe::Embedded { tree };
+    register(
+        refs,
+        objects,
+        events,
+        name,
+        &Recipe::Embedded { tree },
+        identity,
+        mode,
+    )
+}
+
+/// Record toolchain `name` from an already-parsed [`Recipe`] -- the
+/// counterpart of [`import`] for a recipe that arrives as text
+/// ([`Recipe::parse`], say from a web form) rather than as a local
+/// directory to embed; [`import`] itself delegates here once its
+/// directory walk has produced the embedded tree.
+///
+/// Returns the raw [`Outcome`] `receive` reached, as [`import`] does.
+///
+/// # Errors
+///
+/// [`Error::InvalidToolchainName`] if `name` cannot form a ref;
+/// otherwise propagates serialization or `receive` failures.
+pub fn register(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn EventSink,
+    name: &str,
+    recipe: &Recipe,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
     let toolchain = Toolchain {
         name: name.to_owned(),
         recipe: recipe.render(),
