@@ -47,11 +47,12 @@ where
             (name, detail)
         })
         .collect();
-    Ok(super::layout_meta(
-        &super::RepoHeader::from_state(&state),
-        &super::identity_label(&state),
-        "/toolchains",
-        "toolchains",
+    let body = if rows.is_empty() {
+        super::blankslate(
+            "No toolchains yet",
+            html! { "Import one with " code { "git ents toolchain import" } "." },
+        )
+    } else {
         html! {
             div.card {
                 ul.string-list {
@@ -65,7 +66,14 @@ where
                     }
                 }
             }
-        },
+        }
+    };
+    Ok(super::layout_meta(
+        &super::RepoHeader::from_state(&state),
+        &super::identity_label(&state),
+        "/toolchains",
+        "Toolchains",
+        body,
     ))
 }
 
@@ -106,7 +114,7 @@ where
                     dt { "name" } dd { (toolchain.name) }
                     dt { "recipe" } dd { (format!("{recipe:?}")) }
                 }
-                h2 { "import log" }
+                h2 { "Import Log" }
                 ul {
                     @for oid in &log {
                         li { (oid.to_string()) }

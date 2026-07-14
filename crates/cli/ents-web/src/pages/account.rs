@@ -55,16 +55,16 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Account,
-        "account",
+        "Account",
         html! {
             div.readable {
                 (view)
-                h2 { "create or update" }
+                h2 { "Create or Update" }
                 form method="post" action="/account" {
                     (super::csrf_input(&session))
                     label { "member" input type="text" name="member" value=(member_value); }
                     label { "login" input type="text" name="login" value=(login_value); }
-                    button type="submit" { "save" }
+                    button type="submit" { "Save" }
                 }
             }
         },

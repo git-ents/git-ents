@@ -83,18 +83,25 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Comments,
-        "comments",
+        "Comments",
         html! {
             div.readable {
-                ul {
-                    @for (id, comment) in &rows {
-                        li {
-                            a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
-                            ": " (comment.body)
+                @if rows.is_empty() {
+                    (super::blankslate(
+                        "No comments yet",
+                        html! { "Anchor one to a file with the form below." },
+                    ))
+                } @else {
+                    ul {
+                        @for (id, comment) in &rows {
+                            li {
+                                a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
+                                ": " (comment.body)
+                            }
                         }
                     }
                 }
-                h2 { "add a comment" }
+                h2 { "Add a Comment" }
                 (add_form(&query.rev, &session, &query.file, &query.lines))
             }
         },
@@ -148,7 +155,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Comments,
-        ents_forge::abbreviate_id(&id),
+        &format!("Comment {}", ents_forge::abbreviate_id(&id)),
         html! {
             (super::child_crumbs("comments", "/comments", ents_forge::abbreviate_id(&id)))
             div.readable {
@@ -326,19 +333,19 @@ pub(crate) fn action_forms(
                 (super::csrf_input(session))
                 input type="hidden" name="return_to" value=(return_to);
                 label { "reply" textarea name="body" {} }
-                button type="submit" { "reply" }
+                button type="submit" { "Reply" }
             }
             @if resolved {
                 form method="post" action=(format!("/comments/{id}/reopen")) {
                     (super::csrf_input(session))
                     input type="hidden" name="return_to" value=(return_to);
-                    button type="submit" { "reopen" }
+                    button type="submit" { "Reopen" }
                 }
             } @else {
                 form method="post" action=(format!("/comments/{id}/resolve")) {
                     (super::csrf_input(session))
                     input type="hidden" name="return_to" value=(return_to);
-                    button type="submit" { "resolve" }
+                    button type="submit" { "Resolve" }
                 }
             }
         }
@@ -423,7 +430,7 @@ fn add_form(
             label { "rev" input type="text" name="rev" value=(default_rev); }
             label { "lines" input type="text" name="lines" value=(prefill_lines); }
             label { "body" textarea name="body" {} }
-            button type="submit" { "comment" }
+            button type="submit" { "Comment" }
         }
     }
 }

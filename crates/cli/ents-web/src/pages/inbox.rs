@@ -29,11 +29,19 @@ where
             rows.push(rest.to_owned());
         }
     }
+    let body = if rows.is_empty() {
+        super::blankslate(
+            "Inbox is empty",
+            maud::html! { "Entries awaiting adoption appear here." },
+        )
+    } else {
+        crate::render::string_list(&rows, |_| "/inbox".to_owned())
+    };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/inbox",
-        "inbox",
-        crate::render::string_list(&rows, |_| "/inbox".to_owned()),
+        "Inbox",
+        body,
     ))
 }

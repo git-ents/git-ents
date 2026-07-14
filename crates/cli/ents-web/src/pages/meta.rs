@@ -21,7 +21,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Meta,
-        "meta",
+        "Meta",
         html! {
             div.card {
                 div.card-header { "meta" }

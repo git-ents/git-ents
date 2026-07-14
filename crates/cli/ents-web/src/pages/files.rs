@@ -123,9 +123,8 @@ where
                 &super::RepoHeader::from_state(state),
                 &super::identity_label(state),
                 super::Tab::Files,
-                "files",
+                "Files",
                 html! {
-                    (crumbs(path))
                     (dir_listing(path, Vec::new()))
                 },
             ));
@@ -143,9 +142,8 @@ where
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
-            "files",
+            "Files",
             html! {
-                (crumbs(path))
                 (dir_listing(path, entries))
             },
         ));
@@ -283,7 +281,10 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool, Option<u64>)>) -> Mark
 /// `path`, `chevron-right` icons separating segments -- pure navigation,
 /// no trailing actions. The history/comment links that used to trail this
 /// nav on a blob view now live in [`blob_header`]'s own action group
-/// instead (see this module's own top-level doc for why).
+/// instead (see this module's own top-level doc for why). The files root
+/// itself renders no crumbs at all: a lone self-referencing "files" crumb
+/// under the page's own "Files" title (and above the listing card's own
+/// "files" header) named the same place three times.
 fn crumbs(path: &str) -> Markup {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut acc = String::new();
@@ -652,7 +653,7 @@ fn outdated_comments_section(comments: &[(usize, &super::comments::FileComment)]
         return html! {};
     }
     html! {
-        h2 { "outdated comments" }
+        h2 { "Outdated Comments" }
         @for &(index, comment) in comments {
             (super::comments::comment_card(index, comment, super::comments::LinkMode::SameFile))
         }

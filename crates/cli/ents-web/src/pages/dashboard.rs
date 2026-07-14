@@ -52,7 +52,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Overview,
-        "overview",
+        "Overview",
         html! {
             div.overview {
                 div { (main) }
@@ -171,17 +171,13 @@ fn freshness_strip(repo: &gix::Repository) -> Markup {
     }
 }
 
-/// The empty-column placeholder shown when the repository has no `README`,
-/// no readable root, or no `HEAD` at all.
+/// The empty-column placeholder ([`super::blankslate`]) shown when the
+/// repository has no `README`, no readable root, or no `HEAD` at all.
 fn blankslate() -> Markup {
-    html! {
-        div.card {
-            div.blankslate {
-                h2 { "Nothing to show yet" }
-                p { "Add a " code { "README" } " or browse the repository in " a href="/files" { "Files" } "." }
-            }
-        }
-    }
+    super::blankslate(
+        "Nothing to show yet",
+        html! { "Add a " code { "README" } " or browse the repository in " a href="/files" { "Files" } "." },
+    )
 }
 
 /// The first root-tree blob whose stem is `README` and whose extension

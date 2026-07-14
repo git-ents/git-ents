@@ -49,11 +49,14 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Issues,
-        "issues",
+        "Issues",
         html! {
             div.readable {
                 @if rows.is_empty() {
-                    p { "No issues yet." }
+                    (super::blankslate(
+                        "No issues yet",
+                        html! { "Open one with the form below." },
+                    ))
                 } @else {
                     table.entity-list {
                         thead {
@@ -71,7 +74,7 @@ where
                         }
                     }
                 }
-                h2 { "open an issue" }
+                h2 { "Open an Issue" }
                 (new_form(&session))
             }
         },
@@ -121,12 +124,12 @@ where
                     div.doc-body { (body) }
                 }
                 details {
-                    summary { "edit" }
+                    summary { "Edit" }
                     (edit_form(&session, &issue))
                 }
-                h2 { "discussion" }
+                h2 { "Discussion" }
                 (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
-                h2 { "add a comment" }
+                h2 { "Add a Comment" }
                 (comment_form(&session, &id))
             }
         },
@@ -326,7 +329,7 @@ fn new_form(session: &Session) -> Markup {
             label { "assignees" input type="text" name="assignees" placeholder="alice, bob"; }
             label { "labels" input type="text" name="labels" placeholder="bug, gate"; }
             label { "body" textarea name="body" {} }
-            button type="submit" { "open issue" }
+            button type="submit" { "Open Issue" }
         }
     }
 }
@@ -348,7 +351,7 @@ fn edit_form(session: &Session, issue: &ents_forge::Issue) -> Markup {
                 input type="text" name="assignees" value=(join_members(&issue.assignees));
             }
             label { "labels" input type="text" name="labels" value=(issue.labels.join(", ")); }
-            button type="submit" { "save" }
+            button type="submit" { "Save" }
         }
     }
 }
@@ -373,7 +376,7 @@ fn comment_form(session: &Session, id: &str) -> Markup {
         form method="post" action=(format!("/issues/{id}/comment")) {
             (super::csrf_input(session))
             label { "body" textarea name="body" {} }
-            button type="submit" { "comment" }
+            button type="submit" { "Comment" }
         }
     }
 }

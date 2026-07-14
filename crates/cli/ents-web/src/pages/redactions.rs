@@ -22,12 +22,20 @@ where
     O: Find + Write + Send + 'static,
 {
     let rows = read_all(&state)?;
+    let body = if rows.is_empty() {
+        super::blankslate(
+            "No redactions yet",
+            maud::html! { "Record one with " code { "git ents redact add" } "." },
+        )
+    } else {
+        crate::render::list_table(&rows, "id", |id| format!("/redactions/{id}"))
+    };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/redactions",
-        "redactions",
-        crate::render::list_table(&rows, "id", |id| format!("/redactions/{id}")),
+        "Redactions",
+        body,
     ))
 }
 

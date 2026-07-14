@@ -94,7 +94,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Commits,
-        "commits",
+        "Commits",
         html! {
             @if rows.is_empty() {
                 (blankslate())
@@ -188,17 +188,13 @@ fn commit_rows<O>(state: &AppState<O>, from: Option<&str>) -> (Vec<CommitRow>, O
     (rows, older)
 }
 
-/// The empty-history placeholder: an unborn `HEAD`, or a repository this
-/// page could not open at all.
+/// The empty-history placeholder ([`super::blankslate`]): an unborn
+/// `HEAD`, or a repository this page could not open at all.
 fn blankslate() -> Markup {
-    html! {
-        div.card {
-            div.blankslate {
-                h2 { "No commits yet" }
-                p { "This repository has no history to show." }
-            }
-        }
-    }
+    super::blankslate(
+        "No commits yet",
+        html! { "This repository has no history to show." },
+    )
 }
 
 /// `GET /commit/{oid}`: a single commit's full message, metadata, and a
@@ -303,7 +299,7 @@ where
             }
             @if !comments.is_empty() {
                 div.readable {
-                    h2 { "conversation" }
+                    h2 { "Conversation" }
                     @for (index, comment) in comments.iter().enumerate() {
                         (super::comments::comment_card(index, comment, super::comments::LinkMode::CrossFile))
                     }
@@ -339,7 +335,7 @@ fn reviews_section<O: Find + Write>(
     .unwrap_or_default();
     let return_to = format!("/commit/{oid}");
     html! {
-        h2 { "reviews" }
+        h2 { "Reviews" }
         @for ((target, member), review) in &reviews {
             div.card {
                 div.comment-meta {
@@ -384,7 +380,7 @@ fn review_comment_form(
             (super::csrf_input(session))
             input type="hidden" name="return_to" value=(return_to);
             label { "comment on this review" textarea name="body" {} }
-            button type="submit" { "comment" }
+            button type="submit" { "Comment" }
         }
     }
 }
@@ -468,7 +464,7 @@ fn start_review_form(session: &Session, oid: &str) -> Markup {
                 option value="request-changes" {}
             }
             label { "body" textarea name="body" {} }
-            button type="submit" { "start a review" }
+            button type="submit" { "Start a Review" }
         }
     }
 }

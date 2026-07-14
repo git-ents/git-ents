@@ -390,6 +390,23 @@ fn ago_plural(n: i64, unit: &str) -> String {
     }
 }
 
+/// The shared empty-state card (`ents.css`'s `.blankslate`): a short
+/// title and one explanatory line, rendered instead of a bare list or a
+/// header-only table when a page family has nothing to show yet. `line`
+/// is markup, not text, so a page can point at its own create form or
+/// link a next step ([`super::dashboard`]'s README pointer does the
+/// same).
+pub(crate) fn blankslate(title: &str, line: Markup) -> Markup {
+    html! {
+        div.card {
+            div.blankslate {
+                h2 { (title) }
+                p { (line) }
+            }
+        }
+    }
+}
+
 /// The one-level breadcrumb trail every `/{id}` child page renders above
 /// its own content -- "parent \u{203a} here", reusing the `.crumbs` markup
 /// pattern [`super::files`]'s own multi-level path trail already renders

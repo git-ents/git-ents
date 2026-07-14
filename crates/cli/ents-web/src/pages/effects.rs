@@ -27,12 +27,20 @@ where
     O: Find + Write + Send + 'static,
 {
     let rows = read_all(&state)?;
+    let body = if rows.is_empty() {
+        super::blankslate(
+            "No effects yet",
+            html! { "Registered effects and their trigger queries appear here." },
+        )
+    } else {
+        crate::render::list_table(&rows, "name", |id| format!("/effects/{id}"))
+    };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/effects",
-        "effects",
-        crate::render::list_table(&rows, "name", |id| format!("/effects/{id}")),
+        "Effects",
+        body,
     ))
 }
 

@@ -1761,7 +1761,7 @@ async fn commit_show_lists_comments_captured_against_that_exact_commit() {
             .to_vec(),
     )
     .expect("utf8 html");
-    assert!(first_body.contains("conversation"));
+    assert!(first_body.contains("Conversation"));
     assert!(first_body.contains("left at the first commit"));
     assert!(first_body.contains("commenter"));
     assert!(
@@ -1837,7 +1837,7 @@ async fn commit_page_shows_a_seeded_review_verdict_and_a_review_comment() {
 
     // The commit page renders the review's verdict, body, and reviewer.
     let page = get_body(&router, &format!("/commit/{oid}")).await;
-    assert!(page.contains("reviews"), "the reviews section renders");
+    assert!(page.contains("Reviews"), "the reviews section renders");
     assert!(
         page.contains("class=\"verdict\""),
         "the verdict renders prominently"
@@ -1982,7 +1982,7 @@ async fn issues_index_and_detail_render_a_seeded_issue_and_its_context_comment()
     let detail = get_body(&router, &format!("/issues/{id}")).await;
     assert!(detail.contains("gate rejects a valid signature"));
     assert!(detail.contains("the full body"));
-    assert!(detail.contains("discussion"));
+    assert!(detail.contains("Discussion"));
 
     // A comment naming the issue as its context joins the thread.
     let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/issues").await;
@@ -2098,8 +2098,9 @@ async fn search_finds_a_known_fixture_file_path() {
     assert!(body.contains("/files/src/needle.rs"));
 }
 
-/// `GET /search` with no query renders a friendly blankslate rather than
-/// an empty or error page.
+/// `GET /search` with no query renders a "type to search" blankslate
+/// naming the header's own search input -- not a "no matches" one, since
+/// nothing was searched yet -- rather than an empty or error page.
 #[tokio::test]
 async fn search_with_no_query_renders_a_blankslate() {
     let state = build_state(FixtureIdentity {
@@ -2124,7 +2125,11 @@ async fn search_with_no_query_renders_a_blankslate() {
         .expect("body")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("No matches"));
+    assert!(body.contains("Type to search"));
+    assert!(
+        body.contains("Jump to file or symbol"),
+        "the prompt names the header's own search input"
+    );
 }
 
 /// `GET /toolchains` lists a toolchain written by an older schema (piece

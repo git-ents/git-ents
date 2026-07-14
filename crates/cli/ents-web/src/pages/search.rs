@@ -28,8 +28,9 @@ const MAX_RESULTS: usize = 100;
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
     /// The search term. Empty (the default, and what a bare `GET /search`
-    /// carries) renders the same friendly blankslate as a query with no
-    /// matches.
+    /// carries) renders a "type to search" blankslate rather than a
+    /// no-matches one -- nothing was searched yet, so nothing "failed to
+    /// match" (see [`blankslate`]'s own doc).
     #[serde(default)]
     q: String,
 }
@@ -63,7 +64,7 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::None,
-        "search",
+        "Search",
         html! {
             @if !any_matches {
                 (blankslate(&query))
@@ -223,20 +224,25 @@ fn result_group(
     }
 }
 
-/// The empty-results placeholder, shown for an empty query and for a
-/// non-empty one with no matches at all.
+/// The empty-results placeholder ([`super::blankslate`]): a "type to
+/// search" prompt before any query has been typed at all (naming the
+/// header's own "Jump to file or symbol" search input, this page's only
+/// entry point), or a "no matches" note for a non-empty query that found
+/// nothing.
 fn blankslate(query: &str) -> Markup {
-    html! {
-        div.card {
-            div.blankslate {
-                h2 { "No matches" }
-                @if query.is_empty() {
-                    p { "Type a search term above to look through files and meta entities." }
-                } @else {
-                    p { "Nothing matched " code { (query) } "." }
-                }
-            }
-        }
+    if query.is_empty() {
+        super::blankslate(
+            "Type to search",
+            html! {
+                "Use the header's \u{201c}Jump to file or symbol\u{201d} search "
+                "to look through files and meta entities."
+            },
+        )
+    } else {
+        super::blankslate(
+            "No matches",
+            html! { "Nothing matched " code { (query) } "." },
+        )
     }
 }
 
