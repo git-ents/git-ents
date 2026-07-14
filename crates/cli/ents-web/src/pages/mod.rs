@@ -11,13 +11,14 @@
 //! and issue threads all need domain-specific rendering no generic
 //! reflection walk should grow special cases for). [`members`],
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
-//! share one `meta` tab and `META_SECTIONS` rail rather than each carrying
-//! its own top-level tab (see `Tab`'s own doc); [`meta`] is that group's
-//! `GET /meta` landing page. [`commits`] and [`issues`] are tabs of their
-//! own -- `Tab::Commits` and `Tab::Issues` in [`layout`]'s six-tab strip,
-//! alongside overview, files, comments, and meta. [`search`] renders with
-//! no tab active at all, like [`account`]; it is reached from `layout`'s
-//! own nav search form rather than any tab.
+//! share one `meta` rail item and `META_SECTIONS` rail rather than each
+//! carrying its own top-level entry (see `Tab`'s own doc); [`meta`] is that
+//! group's `GET /meta` landing page. [`commits`] and [`issues`] are rail
+//! items of their own -- `Tab::Commits` (Review) and `Tab::Issues`
+//! (Tickets) in [`layout`]'s icon rail, alongside the dashboard, code,
+//! threads, and meta items. [`search`] renders with no rail item active at
+//! all; it is reached from the `.wb-bar`'s own `.palette` search form
+//! rather than any rail item.
 
 pub mod account;
 pub mod comments;
@@ -101,21 +102,21 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
     Ok((author.name.to_str_lossy().into_owned(), seconds))
 }
 
-/// The tab-nav page families this crate exposes -- one variant per tab in
-/// [`layout`]'s nav bar, so a handler can name which tab it renders behind
-/// without `layout` re-deriving it from the request path (mirrors
-/// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `Tab` enum,
-/// at this crate's own six primary tabs: overview, files, commits, issues,
-/// comments, meta). `Meta` covers five page families ([`super::members`],
-/// [`super::effects`], [`super::toolchains`], [`super::redactions`],
-/// [`super::inbox`]) behind one tab and the
-/// [`META_SECTIONS`] rail (see [`layout_meta`]) rather than a tab each --
-/// nine equal tabs did not scale as page families grew. `Account` matches
-/// none of [`layout`]'s tab-strip arms, so it highlights nothing there;
-/// its own link lives in the header's `.id-chip` instead (see [`layout`]'s
-/// own doc). `None` is the same "highlights nothing" case for a page that
-/// is not part of any tab's own section at all ([`super::search`]'s
-/// results page).
+/// The rail-nav page families this crate exposes -- one variant per icon
+/// in [`layout`]'s `.rail`, so a handler can name which rail item it
+/// renders behind without `layout` re-deriving it from the request path
+/// (the pre-redo `Tab` enum, carried through the workbench restructure:
+/// the horizontal tab strip became the vertical icon rail, but the
+/// "handler names its own section" contract is unchanged). The rail reads,
+/// top to bottom: Dashboard (`Overview`), Code (`Files`), Review
+/// (`Commits`), Tickets (`Issues`), Threads (`Comments`); then, past the
+/// spacer, Repo & governance (`Meta`) and Account. `Meta` covers five page
+/// families ([`super::members`], [`super::effects`], [`super::toolchains`],
+/// [`super::redactions`], [`super::inbox`]) behind one rail item and the
+/// [`META_SECTIONS`] rail (see [`layout_meta`]) rather than an item each --
+/// nine equal entries did not scale as page families grew. `None`
+/// highlights nothing at all, for a page that is not part of any rail
+/// item's own section ([`super::search`]'s results page).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Overview,
@@ -176,8 +177,8 @@ pub(crate) const META_SECTIONS: &[MetaSection] = &[
     },
 ];
 
-/// The served repository's identity for the shell's `.repo-header`
-/// breadcrumb band: its directory name and, when `HEAD` resolves to a
+/// The served repository's identity for the shell's `.wb-bar` top bar:
+/// its directory name and, when `HEAD` resolves to a
 /// branch, that branch's short name (mirrors
 /// `pre-redo:crates/git-ents-server/src/web/mod.rs`'s `RepoMeta`, trimmed
 /// to the two fields this single-repo crate actually has a data surface
@@ -217,20 +218,60 @@ impl RepoHeader {
 }
 
 /// Wrap `title` and `body` in the one page shell every route renders
-/// through -- the pre-redo header bar, repo-header breadcrumb band, and tab
-/// nav (`pre-redo:crates/git-ents-server/src/web/style.css`'s `.site-nav`/
-/// `.nav-search`/`.repo-header`/`.tabs` rules), `active` naming which tab
-/// is current and `repo` the served repository the band names. `identity`
-/// is the signing identity's display label (see [`identity_label`]),
-/// rendered as the header's right-aligned `.id-chip` link to `/account` --
-/// account has no tab of its own (see [`Tab`]'s own doc), so this chip is
-/// its only entry point from the shell.
+/// through -- the workbench chrome (see [`layout_shell`]) around a
+/// `main.content` column carrying the page's own `.page-header` title and
+/// `body`. `active` names which rail item is current and `repo` the served
+/// repository the top bar names. `identity` is the signing identity's
+/// display label (see [`identity_label`]), rendered as the bar's
+/// right-aligned `.id-chip` link to `/account` -- the same place the
+/// rail's own account icon leads.
 pub(crate) fn layout(
     repo: &RepoHeader,
     identity: &str,
     active: Tab,
     title: &str,
     body: Markup,
+) -> Markup {
+    layout_shell(
+        repo,
+        identity,
+        active,
+        title,
+        html! {
+            main.content {
+                div.page-header { h1.page-title { (title) } }
+                (body)
+            }
+        },
+    )
+}
+
+/// One `.rail` item: an icon-only link into a page family, `title`-tipped
+/// (the rail carries no text labels at all), highlighted when `tab` is the
+/// page's own `active` section.
+fn rail_link(active: Tab, tab: Tab, href: &str, title: &str, icon: &str) -> Markup {
+    html! {
+        a.active[active == tab] href=(href) title=(title) { (crate::assets::icon_use(icon)) }
+    }
+}
+
+/// The workbench shell itself (the "Proposal C" chrome,
+/// `docs/web-workbench-plan.adoc`): a `.wb` grid pairing the sticky icon
+/// `.rail` (Dashboard / Code / Review / Tickets / Threads, then governance
+/// and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
+/// column whose sticky `.wb-bar` top bar names the served repository and
+/// its branch pill, carries the `.palette` search form (a plain GET to
+/// `/search` for now -- the `⌘K` kbd is a hint at the palette phase, not
+/// yet wired), and ends in the `.id-chip` identity link. `content` renders
+/// below the bar as-is: [`layout`] passes the ordinary padded
+/// `main.content` column, while a master-detail page passes its own
+/// full-bleed `.split` instead.
+pub(crate) fn layout_shell(
+    repo: &RepoHeader,
+    identity: &str,
+    active: Tab,
+    title: &str,
+    content: Markup,
 ) -> Markup {
     html! {
         (maud::DOCTYPE)
@@ -244,38 +285,36 @@ pub(crate) fn layout(
                 script src="/ents.js" defer {}
             }
             body {
-                nav.site-nav {
-                    div.nav-inner {
-                        a.nav-logo href="/" { span.nav-mark { "✳" } "git-ents" }
-                        form.nav-search method="get" action="/search" {
-                            (crate::assets::icon_search())
-                            input type="search" name="q" placeholder="Jump to file or symbol" aria-label="Search";
-                        }
-                        a.id-chip href="/account" { (identity) }
+                (crate::assets::sprite())
+                div.wb {
+                    aside.rail {
+                        span.nav-mark { "✳" }
+                        (rail_link(active, Tab::Overview, "/", "Dashboard", "i-home"))
+                        (rail_link(active, Tab::Files, "/files", "Code", "i-files"))
+                        (rail_link(active, Tab::Commits, "/commits", "Review", "i-commit"))
+                        (rail_link(active, Tab::Issues, "/issues", "Tickets", "i-issue"))
+                        (rail_link(active, Tab::Comments, "/comments", "Threads", "i-comment"))
+                        span.spacer {}
+                        (rail_link(active, Tab::Meta, "/meta", "Repo & governance", "i-meta"))
+                        (rail_link(active, Tab::Account, "/account", "Account", "i-person"))
                     }
-                }
-                div.repo-header {
-                    div.repo-headline {
-                        div.repo-path {
-                            (crate::assets::icon_folder())
-                            span.here { (repo.name) }
-                            @if let Some(branch) = &repo.branch {
-                                span.branch { (crate::assets::icon_branch()) (branch) }
+                    div.wb-main {
+                        div.wb-bar {
+                            span.repo-path {
+                                span.here { (repo.name) }
+                                @if let Some(branch) = &repo.branch {
+                                    span.branch { (crate::assets::icon_use("i-commit")) (branch) }
+                                }
                             }
+                            form.palette method="get" action="/search" {
+                                (crate::assets::icon_use("i-search"))
+                                input type="search" name="q" placeholder="Jump to file, commit, ticket, member…" aria-label="Search";
+                                kbd { "⌘K" }
+                            }
+                            a.id-chip href="/account" { (identity) }
                         }
+                        (content)
                     }
-                }
-                nav.tabs {
-                    a.tab.active[active == Tab::Overview] href="/" { "overview" }
-                    a.tab.active[active == Tab::Files] href="/files" { "files" }
-                    a.tab.active[active == Tab::Commits] href="/commits" { "commits" }
-                    a.tab.active[active == Tab::Issues] href="/issues" { "issues" }
-                    a.tab.active[active == Tab::Comments] href="/comments" { "comments" }
-                    a.tab.active[active == Tab::Meta] href="/meta" { "meta" }
-                }
-                main.content {
-                    div.page-header { h1.page-title { (title) } }
-                    (body)
                 }
             }
         }

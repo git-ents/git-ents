@@ -429,20 +429,21 @@ async fn dashboard_renders_in_process_with_no_socket_bound() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("members"));
     assert!(body.contains("toolchains"));
-    // The shell chrome renders on every page: the nav search form in the
-    // top nav and the repo-header breadcrumb band above the tabs.
-    assert!(body.contains("nav-search"));
-    assert!(body.contains("Jump to file or symbol"));
-    assert!(body.contains("repo-header"));
+    // The shell chrome renders on every page: the icon rail, the sticky
+    // top bar, and the bar's palette search form.
+    assert!(body.contains("class=\"rail\""));
+    assert!(body.contains("class=\"wb-bar\""));
+    assert!(body.contains("class=\"palette\""));
+    assert!(body.contains("Jump to file, commit, ticket, member"));
 }
 
-/// `roots.web-agnostic`: the shell's `.repo-header` band names the served
+/// `roots.web-agnostic`: the shell's `.wb-bar` top bar names the served
 /// repository (its directory name) and, when `HEAD` resolves to a branch,
 /// renders that branch in the `.branch` pill -- both read once off
 /// `AppState.path`, so every page's chrome reflects the actual repository
 /// being served rather than a placeholder.
 #[tokio::test]
-async fn repo_header_names_the_served_repo_and_its_head_branch() {
+async fn the_top_bar_names_the_served_repo_and_its_head_branch() {
     let dir = seed_repo(&[("README.md", "# hi\n")]);
     // `git init` picks the default branch name (which varies by host git
     // config); rename it so the pill's text is deterministic to assert.
@@ -481,10 +482,10 @@ async fn repo_header_names_the_served_repo_and_its_head_branch() {
         .expect("body")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
-    assert!(body.contains("repo-header"));
+    assert!(body.contains("class=\"wb-bar\""));
     assert!(
         body.contains(&repo_name),
-        "the served repo's directory name {repo_name:?} must appear as the breadcrumb crumb"
+        "the served repo's directory name {repo_name:?} must appear in the top bar"
     );
     assert!(
         body.contains("class=\"branch\""),
@@ -966,13 +967,13 @@ async fn files_blob_view_syntax_highlights_a_rust_file() {
     assert!(body.contains("class=\"keyword\""));
 }
 
-/// The tab strip (`crate::pages::layout`) names every top-level page
-/// family truthfully: six tabs -- overview, files, commits, issues,
-/// comments, meta -- and the issues family no longer renders behind the
-/// `META_SECTIONS` rail (it is a tab of its own; see `crate::pages::mod`'s
+/// The icon rail (`crate::pages::layout_shell`) names every top-level page
+/// family truthfully: Dashboard, Code, Review, Tickets, Threads, then the
+/// meta and account items -- and the issues family renders as its own rail
+/// item, never behind the `META_SECTIONS` rail (see `crate::pages::mod`'s
 /// own doc).
 #[tokio::test]
-async fn the_tab_strip_carries_all_six_tabs_and_issues_left_the_meta_rail() {
+async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
     let state = build_state(FixtureIdentity {
         name: "local-user",
         key: Keypair::from_seed(1),
@@ -980,22 +981,36 @@ async fn the_tab_strip_carries_all_six_tabs_and_issues_left_the_meta_rail() {
     let router = ents_web::router(state);
 
     let overview = get_body(&router, "/").await;
-    for href in ["/", "/files", "/commits", "/issues", "/comments", "/meta"] {
+    for href in [
+        "/",
+        "/files",
+        "/commits",
+        "/issues",
+        "/comments",
+        "/meta",
+        "/account",
+    ] {
         assert!(
             overview.contains(&format!("href=\"{href}\"")),
-            "the tab strip links {href}"
+            "the rail links {href}"
+        );
+    }
+    for label in ["Dashboard", "Code", "Review", "Tickets", "Threads"] {
+        assert!(
+            overview.contains(&format!("title=\"{label}\"")),
+            "the rail tooltips {label}"
         );
     }
 
     let issues = get_body(&router, "/issues").await;
     assert!(
         !issues.contains("class=\"meta-rail\""),
-        "issues renders as its own tab, not behind the meta rail"
+        "issues renders as its own rail item, not behind the meta rail"
     );
 
-    // The rail renders a bare (classless when inactive) link per section;
-    // the tab strip's own issues link always carries `class="tab..."`, so
-    // this exact form only ever comes from the rail.
+    // The meta rail renders a bare (classless when inactive) link per
+    // section; the icon rail's own issues link always carries a `title`
+    // attribute, so this exact form only ever comes from the meta rail.
     let members = get_body(&router, "/members").await;
     assert!(
         !members.contains("<a href=\"/issues\">issues</a>"),
@@ -1003,11 +1018,48 @@ async fn the_tab_strip_carries_all_six_tabs_and_issues_left_the_meta_rail() {
     );
 }
 
-/// The `meta` tab restructure (`crate::pages::mod`'s own doc): `GET /meta`
-/// is reachable as the tab's index page, and `GET /members` -- one of the
-/// five page families that group now shares -- renders with the
-/// `META_SECTIONS` rail visible and the `meta` tab (not a per-family tab)
-/// highlighted.
+/// The rail highlights exactly the item whose page family is being viewed
+/// (`crate::pages::rail_link`'s `active` toggle): on `GET /files` the Code
+/// item carries `class="active"` and the others do not.
+#[tokio::test]
+async fn the_rail_marks_the_active_item() {
+    // A real on-disk repository: `GET /files` opens `state.path` itself.
+    let dir = seed_repo(&[("README.md", "# hi\n")]);
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state);
+
+    let files = get_body(&router, "/files").await;
+    assert!(
+        files.contains("class=\"active\" href=\"/files\""),
+        "the Code item highlights on a files page"
+    );
+    assert!(
+        files.contains("class=\"\" href=\"/commits\""),
+        "the Review item stays unhighlighted there"
+    );
+
+    let comments = get_body(&router, "/comments").await;
+    assert!(
+        comments.contains("class=\"active\" href=\"/comments\""),
+        "the Threads item highlights on the comments page"
+    );
+    assert!(
+        comments.contains("class=\"\" href=\"/files\""),
+        "the Code item stays unhighlighted there"
+    );
+}
+
+/// The `meta` group (`crate::pages::mod`'s own doc): `GET /meta` is
+/// reachable as the group's index page, and `GET /members` -- one of the
+/// five page families that group shares -- renders with the
+/// `META_SECTIONS` rail visible and the icon rail's meta item (not a
+/// per-family item) highlighted.
 #[tokio::test]
 async fn meta_index_and_a_meta_group_page_render_with_the_rail() {
     let state = build_state(FixtureIdentity {
@@ -1044,8 +1096,8 @@ async fn meta_index_and_a_meta_group_page_render_with_the_rail() {
         "a meta-group page renders the section rail"
     );
     assert!(
-        body.contains("class=\"tab active\""),
-        "the meta tab itself highlights, not a per-family tab"
+        body.contains("class=\"active\" href=\"/meta\""),
+        "the rail's meta item itself highlights, not a per-family item"
     );
 }
 

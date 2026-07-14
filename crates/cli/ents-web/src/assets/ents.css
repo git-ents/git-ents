@@ -11,10 +11,11 @@
  * account-strip sign-in). The pre-redo brand type stack (DM Sans, IBM Plex
  * Mono, Lora, loaded from Google Fonts) is dropped in favor of system font
  * stacks, so this sheet never depends on a network fetch. Added beyond the
- * pre-redo sheet: `.meta-layout`/`.meta-rail` for the `meta` tab's
+ * pre-redo sheet: the `.wb`/`.rail`/`.wb-bar`/`.palette` workbench shell
+ * (`crate::pages::layout_shell`, adapted from the design project's
+ * `proposal-c.css`); `.meta-layout`/`.meta-rail` for the `meta` group's
  * page-family rail (`crate::pages::META_SECTIONS`) and `.id-chip` for the
- * header's signing-identity link, both new to this crate's own tab
- * restructure; `.comment-meta`/`.outdated` for the file-anchored
+ * bar's signing-identity link; `.comment-meta`/`.outdated` for the file-anchored
  * comment cards `crate::pages::comments::comments_section` renders below a
  * blob view, which otherwise reuse `.card`/`.doc-body` as-is; and
  * `.blob-header`/`.blob-actions`/`.entry-size` for
@@ -99,46 +100,40 @@ a:hover { color: var(--color-link-hover); text-decoration-color: currentColor; }
 a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
 .icon { flex-shrink: 0; fill: currentColor; vertical-align: -0.125em; }
 
-/* Header band: site wordmark, then the tab-style page nav. */
-.site-nav { position: sticky; top: 0; z-index: 100; background: color-mix(in srgb, var(--color-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--color-border); }
-.nav-inner { max-width: var(--max-width); margin: 0 auto; height: 58px; padding: 0 1.5rem; display: flex; align-items: center; gap: 1.25rem; }
-.nav-logo { display: inline-flex; align-items: center; gap: .5rem; font-family: var(--font-mono); font-weight: 700; font-size: 1.02rem; color: var(--color-text); letter-spacing: -.01em; text-decoration: none; white-space: nowrap; transition: color .15s; }
-.nav-mark { color: var(--color-accent); font-size: 1.1rem; }
-.nav-logo:hover { color: var(--color-accent); }
-.nav-search { flex: 1; max-width: 24rem; margin: 0 auto; position: relative; display: flex; align-items: center; }
-.nav-search .icon { position: absolute; left: .65rem; color: var(--color-text-muted); pointer-events: none; }
-.nav-search input { width: 100%; font-family: var(--font-sans); font-size: .82rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem .7rem .42rem 2rem; transition: border-color .15s; }
-.nav-search input:focus { border-color: var(--color-accent); }
-.id-chip { font-family: var(--font-mono); font-size: .78rem; font-weight: 600; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: .25rem .75rem; white-space: nowrap; text-decoration: none; transition: border-color .15s, color .15s; }
-.id-chip:hover { color: var(--color-accent); border-color: var(--color-accent); text-decoration: none; }
-
-/* Repo-header band: the served repository's name breadcrumb and HEAD-branch
- * pill, between the site nav and the tab strip (the Gitea-style repo header,
- * trimmed to this single-repo crate's name + branch). */
-.repo-header { max-width: var(--max-width); margin: 0 auto; padding: 1.25rem 1.5rem .85rem; display: flex; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap; }
-.repo-headline { flex: 1; min-width: 0; }
-.repo-path { font-family: var(--font-mono); font-size: 1.18rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; word-break: break-all; }
-.repo-path .icon { color: var(--color-accent); }
+/* The workbench shell (`crate::pages::layout_shell`, the "Proposal C"
+ * chrome): a `.wb` grid pairing the sticky icon `.rail` with a `.wb-main`
+ * column whose sticky `.wb-bar` top bar carries the repo name, branch
+ * pill, `.palette` search, and `.id-chip` identity link. */
+.wb { display: grid; grid-template-columns: 56px minmax(0, 1fr); min-height: 100vh; width: 100%; }
+.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; gap: .3rem; padding: .8rem 0; border-right: 1px solid var(--color-border); background: var(--color-surface); }
+.rail .nav-mark { font-size: 1.35rem; margin-bottom: .6rem; }
+.nav-mark { color: var(--color-accent); }
+.rail a { display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 10px; color: var(--color-text-muted); }
+.rail a:hover { background: var(--color-code-bg); color: var(--color-text); }
+.rail a.active { background: var(--color-accent-subtle); color: var(--color-accent); }
+.rail a .icon { width: 17px; height: 17px; }
+.rail .spacer { flex: 1; }
+.wb-main { min-width: 0; display: flex; flex-direction: column; }
+.wb-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 1rem; height: 52px; padding: 0 1.25rem; border-bottom: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-bg) 90%, transparent); backdrop-filter: blur(10px); }
+.repo-path { font-family: var(--font-mono); font-size: .98rem; display: flex; align-items: center; gap: .5rem; white-space: nowrap; min-width: 0; }
 .repo-path .here { color: var(--color-accent); font-weight: 600; }
 .branch { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: .1rem .6rem; display: inline-flex; align-items: center; gap: .3rem; }
 .branch .icon { width: 13px; height: 13px; color: var(--color-accent); }
-
-/* `overflow-x: auto` keeps the strip scrollable on a narrow viewport;
- * `scrollbar-width: none` (and the WebKit pseudo-element below) hides the
- * scrollbar itself, which otherwise renders as a stray artifact under the
- * strip on macOS. */
-.tabs { display: flex; gap: .15rem; max-width: var(--max-width); margin: 0 auto; padding: 0 1.5rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
-.tab { display: inline-flex; align-items: center; gap: .4rem; padding: 10px 14px; font-size: .88rem; color: var(--color-text-muted); text-decoration: none; white-space: nowrap; position: relative; transition: color .15s; }
-.tab:hover { color: var(--color-text); text-decoration: none; }
-.tab.active { color: var(--color-text); font-weight: 600; }
-.tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--color-accent); }
+/* `.palette` is a `form`, so it must undo the stacked-field form rule
+ * below (column direction, row gap, bottom margin). */
+.palette { flex: 0 1 26rem; margin-left: auto; position: relative; display: flex; flex-direction: row; align-items: center; gap: 0; margin-bottom: 0; }
+.palette .icon { position: absolute; left: .65rem; width: 14px; height: 14px; color: var(--color-text-muted); pointer-events: none; }
+.palette input { width: 100%; font-family: var(--font-sans); font-size: .82rem; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: .42rem 3rem .42rem 2rem; transition: border-color .15s; }
+.palette input:focus { border-color: var(--color-accent); }
+.palette kbd { position: absolute; right: .55rem; font-family: var(--font-mono); font-size: .66rem; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 5px; padding: 0 .35rem; background: var(--color-code-bg); }
+.id-chip { font-family: var(--font-mono); font-size: .78rem; font-weight: 600; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: .25rem .75rem; white-space: nowrap; text-decoration: none; transition: border-color .15s, color .15s; }
+.id-chip:hover { color: var(--color-accent); border-color: var(--color-accent); text-decoration: none; }
 
 /* The `meta` tab's page-family rail (`crate::pages::META_SECTIONS`),
  * rendered beside every meta-namespace page's own content
  * (`crate::pages::layout_meta`). */
 .meta-layout { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 2rem; align-items: start; }
-.meta-rail { display: flex; flex-direction: column; gap: .1rem; position: sticky; top: 78px; }
+.meta-rail { display: flex; flex-direction: column; gap: .1rem; position: sticky; top: 64px; }
 .meta-rail a { font-family: var(--font-mono); font-size: .85rem; color: var(--color-text-muted); text-decoration: none; padding: .4rem .6rem; border-radius: var(--radius-sm); }
 .meta-rail a:hover { color: var(--color-text); background: var(--color-code-bg); }
 .meta-rail a.active { color: var(--color-accent); font-weight: 600; background: var(--color-accent-subtle); }
@@ -180,7 +175,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
  * of a contents rail and a language breakdown (pre-redo:.../style.css's
  * `.overview`/`.aside`/`.lang`). */
 .overview { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 34px; align-items: start; }
-.aside { position: sticky; top: 78px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.aside { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .aside .card { margin-bottom: 0; }
 .aside-row { display: flex; align-items: center; gap: .5rem; padding: .55rem 1.1rem; font-size: .82rem; }
 .aside-row + .aside-row { border-top: 1px solid var(--color-border); }
@@ -459,9 +454,9 @@ form button:hover { background: var(--color-link-hover); }
   html { font-size: 16px; }
   .content { padding: 1.5rem 1.25rem 2.5rem; }
   form label { grid-template-columns: minmax(0, 1fr); }
-  .nav-inner { gap: .75rem; padding: 0 1.25rem; }
-  .repo-header { padding: 1rem 1.25rem .75rem; }
-  .tabs { padding: 0 1.25rem; }
+  .wb-bar { gap: .6rem; padding: 0 .9rem; }
+  .palette { flex-basis: 14rem; }
+  .palette kbd { display: none; }
   .page-title { font-size: 1.3rem; }
   .doc-body { padding: 1.75rem 1.5rem 2rem; }
   .doc-body h1 { font-size: 1.9rem; }

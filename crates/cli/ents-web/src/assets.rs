@@ -14,11 +14,14 @@
 //! The icon functions below are vendored Octicons (`.gitvendors`, MIT; see
 //! `assets/icons/LICENSE`), re-homed here from
 //! `pre-redo:crates/git-ents-server/src/web/icons/` for
-//! [`crate::pages::files`]'s directory listing and breadcrumbs and for the
-//! shell chrome [`crate::pages::layout`] draws (the `nav.site-nav` search
-//! stub and the `.repo-header` branch pill) -- the same
+//! [`crate::pages::files`]'s directory listing and breadcrumbs -- the same
 //! `include_str!`-and-tag pattern
-//! `pre-redo:crates/git-ents-server/src/web/icons.rs` used.
+//! `pre-redo:crates/git-ents-server/src/web/icons.rs` used. The workbench
+//! shell's own chrome (the `.rail` page-family icons, the `.palette`
+//! search glass, the `.branch` pill) draws from [`sprite`] instead: one
+//! hand-rolled `<symbol>` sprite embedded per page by
+//! `crate::pages::layout`, each use site a tiny [`icon_use`] reference
+//! rather than a repeated inline SVG.
 
 use std::sync::LazyLock;
 
@@ -57,6 +60,22 @@ icons! {
     icon_folder => "file-directory-fill",
     icon_file => "file",
     icon_chevron => "chevron-right",
-    icon_search => "search",
-    icon_branch => "git-branch",
+}
+
+/// The workbench shell's inline `<symbol>` sprite (see this module's own
+/// doc) -- embedded once per page, right after `<body>`, so every
+/// [`icon_use`] reference on the page resolves against it.
+pub(crate) fn sprite() -> Markup {
+    PreEscaped(include_str!("assets/sprite.svg").to_owned())
+}
+
+/// An `.icon`-classed, decorative `<use>` reference into [`sprite`] --
+/// `id` names one of its `<symbol>`s (`i-home`, `i-files`, ...). Sized
+/// entirely by the use site's own CSS rule (`.rail a .icon`,
+/// `.palette .icon`, `.branch .icon`), since a symbol carries only a
+/// viewBox.
+pub(crate) fn icon_use(id: &str) -> Markup {
+    PreEscaped(format!(
+        "<svg class=\"icon\" aria-hidden=\"true\"><use href=\"#{id}\"/></svg>"
+    ))
 }
