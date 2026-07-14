@@ -446,22 +446,21 @@ where
     Ok(Redirect::to(&target))
 }
 
-/// The start-a-review form (`POST /commit/{oid}/review`): a verdict
-/// (`approve`, `request-changes`, or any custom value -- `model.review`
-/// makes these conventions, not an enum, which is exactly why the verdict
-/// field is a free text input with a `datalist` of the conventional
-/// values, never a closed `select`) and a body.
+/// The start-a-review form (`POST /commit/{oid}/review`): a verdict and
+/// a body. The verdict is a closed `select` over
+/// [`ents_forge::review::Verdict`]'s three variants -- `model.review`
+/// makes it a hard enum, unlike issue and comment states.
 fn start_review_form(session: &Session, oid: &str) -> Markup {
     html! {
         form method="post" action=(format!("/commit/{oid}/review")) {
             (super::csrf_input(session))
             label {
                 "verdict"
-                input type="text" name="verdict" value="approve" list="verdict-values";
-            }
-            datalist id="verdict-values" {
-                option value="approve" {}
-                option value="request-changes" {}
+                select name="verdict" {
+                    option value="approve" { "approve" }
+                    option value="request-changes" { "request-changes" }
+                    option value="comment" { "comment" }
+                }
             }
             label { "body" textarea name="body" {} }
             button type="submit" { "Start a Review" }
@@ -508,7 +507,9 @@ where
     let identity = state.identity.as_ref();
     let new = ents_forge::review::NewReview {
         target: oid.clone(),
-        verdict: form.verdict,
+        verdict: form.verdict.parse().map_err(|_unknown| {
+            Error::InvalidArgument(format!("unknown verdict: {}", form.verdict))
+        })?,
         body: form.body,
     };
     let (_target, outcome) = ents_forge::review::new(

@@ -20,6 +20,7 @@ use std::process::Command;
 
 use ents_forge::comment::NewComment;
 use ents_forge::review::NewReview;
+use ents_forge::review::Verdict;
 use git_ents::commands::{comment, members, review};
 use git_ents::root::LocalRoot;
 use gix_object::{CommitRef, Find, Write as _};
@@ -77,7 +78,7 @@ fn review_new_writes_both_refs_with_the_pin_parented_on_the_reviewed_commit() {
 
     let new = NewReview {
         target: "HEAD".to_owned(),
-        verdict: "approve".to_owned(),
+        verdict: Verdict::Approve,
         body: "looks good".to_owned(),
     };
     let target = review::new(&root, new, Some(fixture.key_path.clone())).expect("reviews");
@@ -85,7 +86,7 @@ fn review_new_writes_both_refs_with_the_pin_parented_on_the_reviewed_commit() {
     // The entity ref exists and reads back verdict, body, and the
     // reviewed commit as a plain data field — no pin read required.
     let (found, _thread) = review::show(&root, &target, "reviewer").expect("shows");
-    assert_eq!(found.verdict, "approve");
+    assert_eq!(found.verdict, Verdict::Approve);
     assert_eq!(found.body, "looks good");
     assert_eq!(found.target(), reviewed);
 
@@ -131,7 +132,7 @@ fn review_show_surfaces_a_context_comment() {
 
     let new = NewReview {
         target: "HEAD".to_owned(),
-        verdict: "request-changes".to_owned(),
+        verdict: Verdict::RequestChanges,
         body: "one nit".to_owned(),
     };
     let target = review::new(&root, new, Some(fixture.key_path.clone())).expect("reviews");
@@ -172,14 +173,14 @@ fn review_list_filters_by_target() {
 
     let review_of_first = NewReview {
         target: first.to_string(),
-        verdict: "approve".to_owned(),
+        verdict: Verdict::Approve,
         body: String::new(),
     };
     let first_target =
         review::new(&root, review_of_first, Some(fixture.key_path.clone())).expect("reviews");
     let review_of_second = NewReview {
         target: second.to_string(),
-        verdict: "approve".to_owned(),
+        verdict: Verdict::Approve,
         body: String::new(),
     };
     review::new(&root, review_of_second, Some(other_key)).expect("reviews");
@@ -209,7 +210,7 @@ fn re_reviewing_a_descendant_advances_the_same_ref_fast_forward() {
 
     let initial = NewReview {
         target: first.to_string(),
-        verdict: "request-changes".to_owned(),
+        verdict: Verdict::RequestChanges,
         body: "please address this".to_owned(),
     };
     let first_target =
@@ -221,7 +222,7 @@ fn re_reviewing_a_descendant_advances_the_same_ref_fast_forward() {
     // `second`, and advances it in place.
     let follow_up = NewReview {
         target: second.to_string(),
-        verdict: "approve".to_owned(),
+        verdict: Verdict::Approve,
         body: "looks good now".to_owned(),
     };
     let advanced_target =
@@ -233,7 +234,7 @@ fn re_reviewing_a_descendant_advances_the_same_ref_fast_forward() {
     assert_eq!(advanced_target, first_target);
     let (review, _thread) = review::show(&root, &first_target, "reviewer").expect("shows");
     assert_eq!(review.target(), second);
-    assert_eq!(review.verdict, "approve");
+    assert_eq!(review.verdict, Verdict::Approve);
     assert_eq!(review.body, "looks good now");
 
     let all = review::list(&root, None).expect("lists");

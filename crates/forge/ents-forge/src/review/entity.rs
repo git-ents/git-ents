@@ -6,6 +6,61 @@
 use facet::Facet;
 use gix_hash::ObjectId;
 
+/// A review's verdict (`model.review`): a hard enum, unlike issue and
+/// comment states — a verdict gates decisions, so its vocabulary is
+/// platform, not schema.
+///
+/// Parses from and renders as its kebab-case convention names
+/// (`approve`, `request-changes`, `comment`), the same strings every
+/// surface shows.
+///
+/// # Examples
+///
+/// ```
+/// use ents_forge::review::Verdict;
+///
+/// let verdict: Verdict = "request-changes".parse().expect("known verdict");
+/// assert_eq!(verdict, Verdict::RequestChanges);
+/// assert_eq!(verdict.to_string(), "request-changes");
+/// assert!("needs-design-doc".parse::<Verdict>().is_err());
+/// ```
+// @relation(model.review, scope=type)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(u8)]
+pub enum Verdict {
+    /// The reviewed content is accepted.
+    Approve,
+    /// The reviewed content needs changes before acceptance.
+    RequestChanges,
+    /// Judgment withheld: the review exists for its body and thread.
+    Comment,
+}
+
+impl std::str::FromStr for Verdict {
+    type Err = crate::Error;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "approve" => Ok(Self::Approve),
+            "request-changes" => Ok(Self::RequestChanges),
+            "comment" => Ok(Self::Comment),
+            other => Err(crate::Error::InvalidArgument(format!(
+                "unknown verdict {other:?}: expected approve, request-changes, or comment"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Approve => "approve",
+            Self::RequestChanges => "request-changes",
+            Self::Comment => "comment",
+        })
+    }
+}
+
 /// A verdict on a commit, plus a body (`model.review`).
 ///
 /// Every review occupies exactly two refs: this entity's own tree at
@@ -20,10 +75,10 @@ use gix_hash::ObjectId;
 /// genesis this field equals the refname's `<target>` segment and binds
 /// it (`meta-ref.identity-binding`); re-reviewing a descendant advances
 /// this field while the refname stays keyed by genesis
-/// (`model.review-pin`). `approve` and `request-changes` are conventions,
-/// not an enum: custom verdicts are schema, not a platform feature
-/// (`model.extensibility`), exactly as custom states are for
-/// [`crate::Issue`] and [`crate::comment::Comment`]. Reviewer and
+/// (`model.review-pin`). The verdict is a hard [`Verdict`] enum — unlike
+/// the open state vocabularies on [`crate::Issue`] and
+/// [`crate::comment::Comment`], a verdict gates decisions, so its
+/// vocabulary is platform, not schema. Reviewer and
 /// timestamp come from the mutation commit chain rather than a stored
 /// field (`meta-ref.identity-binding`), so `Review` carries no author or
 /// timestamp field — the same omission [`crate::comment::Comment`] makes.
@@ -38,7 +93,7 @@ use gix_hash::ObjectId;
 ///
 /// let target = gix_hash::ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567")
 ///     .expect("valid hex");
-/// let review = Review::new(target, "approve", "looks good");
+/// let review = Review::new(target, ents_forge::review::Verdict::Approve, "looks good");
 /// let (root, store) = facet_git_tree::serialize(&review).expect("serialize");
 /// let back: Review = facet_git_tree::deserialize(&root, &store).expect("deserialize");
 /// assert_eq!(back, review);
@@ -48,10 +103,9 @@ use gix_hash::ObjectId;
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Review {
     target: [u8; 20],
-    /// The review's verdict — `approve`, `request-changes`, or any custom
-    /// value a schema defines; not a fixed enum (`model.review`,
-    /// `model.extensibility`).
-    pub verdict: String,
+    /// The review's verdict (`model.review`): a fixed [`Verdict`], not a
+    /// string.
+    pub verdict: Verdict,
     /// The review's body text.
     pub body: String,
 }
@@ -60,12 +114,12 @@ impl Review {
     /// Build a review of `target` carrying `verdict` and `body`
     /// (`model.review`).
     #[must_use]
-    pub fn new(target: ObjectId, verdict: impl Into<String>, body: impl Into<String>) -> Self {
+    pub fn new(target: ObjectId, verdict: Verdict, body: impl Into<String>) -> Self {
         let mut bytes = [0u8; 20];
         bytes.copy_from_slice(target.as_slice());
         Self {
             target: bytes,
-            verdict: verdict.into(),
+            verdict,
             body: body.into(),
         }
     }
@@ -90,11 +144,11 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::approve("approve")]
-    #[case::request_changes("request-changes")]
-    #[case::custom_verdict("needs-design-doc")]
-    // @relation(model.review, model.extensibility, meta-ref.typed-tree, scope=function, role=Verifies)
-    fn review_round_trips_with_any_verdict_string(#[case] verdict: &str) {
+    #[case::approve(Verdict::Approve)]
+    #[case::request_changes(Verdict::RequestChanges)]
+    #[case::comment(Verdict::Comment)]
+    // @relation(model.review, meta-ref.typed-tree, scope=function, role=Verifies)
+    fn review_round_trips_with_every_verdict(#[case] verdict: Verdict) {
         let target =
             ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567").expect("valid hex");
         let review = Review::new(target, verdict, "reviewed the change");
@@ -109,7 +163,7 @@ mod tests {
     fn target_accessor_reflects_the_stored_bytes() {
         let target =
             ObjectId::from_hex(b"fedcba9876543210fedcba9876543210fedcba98").expect("valid hex");
-        let review = Review::new(target, "approve", "");
+        let review = Review::new(target, Verdict::Approve, "");
         assert_eq!(review.target(), target);
     }
 }

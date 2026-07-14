@@ -107,7 +107,7 @@ fn samples(store: &ObjectStore) -> Vec<Sample> {
         Sample {
             name: "Review",
             tree: facet_git_tree::serialize_into(
-                &Review::new(target, "approve", "looks good"),
+                &Review::new(target, ents_forge::review::Verdict::Approve, "looks good"),
                 store,
             )
             .expect("serialize Review"),

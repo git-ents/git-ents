@@ -139,9 +139,8 @@ fn review_at(
 pub struct NewReview {
     /// The revision to review; resolved to a commit before writing.
     pub target: String,
-    /// The review's verdict (`approve`, `request-changes`, or any custom
-    /// value — `model.extensibility`).
-    pub verdict: String,
+    /// The review's verdict.
+    pub verdict: super::Verdict,
     /// The review's body text.
     pub body: String,
 }

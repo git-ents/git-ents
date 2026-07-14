@@ -10,4 +10,4 @@ mod entity;
 
 pub use cli::ReviewAction;
 pub use command::{NewReview, list, new, show};
-pub use entity::Review;
+pub use entity::{Review, Verdict};

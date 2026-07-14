@@ -196,9 +196,10 @@ segment and binds it; re-reviewing a descendant advances the field
 while the refname stays keyed by genesis — plus a verdict and a body;
 reading the field MUST NOT require the pin ref: the pin anchors, the
 entity describes.
-`approve` and `request-changes` are conventions, not an enum, because
-custom verdicts are schema, not platform features
-(<<model.extensibility>>).
+A review's verdict MUST be one of `approve`, `request-changes`, or
+`comment` — a hard enum, unlike issue and comment states
+(<<model.issue>>, <<model.comment-state>>): a verdict gates decisions,
+so its vocabulary is platform, not schema.
 A review's discussion MUST be Comment entities naming the review as
 their context (<<model.comment-context>>), anchored into the reviewed
 code where they concern specific lines (<<anchor.definition>>); the

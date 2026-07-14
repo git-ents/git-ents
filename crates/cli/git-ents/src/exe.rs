@@ -353,7 +353,7 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
         } => {
             let new = ents_forge::review::NewReview {
                 target,
-                verdict,
+                verdict: verdict.parse()?,
                 body,
             };
             let target = commands::review::new(&root, new, key)?;
