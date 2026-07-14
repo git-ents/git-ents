@@ -127,14 +127,21 @@ impl<O: Find + Write> Lens<O> {
             state: Some("open".to_owned()),
             context: None,
         };
-        Ok(comment::list_for_document(
+        let (rows, unreadable) = comment::list_for_document(
             self.refs.as_ref(),
             &self.objects,
             &self.path,
             &rel,
             buffer,
             &filter,
-        )?)
+        )?;
+        // An unreadable comment ref names no document, so it has no lens,
+        // diagnostic, or hover to appear in -- the web listing's
+        // disclosure and `git ents comment list`'s trailing note are the
+        // surfaces that report it; here it is dropped deliberately, not
+        // silently (the library returns it either way, `lens.parity`).
+        let _ = unreadable;
+        Ok(rows)
     }
 
     /// The code lenses for `uri` (`lens.lenses`): three per open comment

@@ -320,7 +320,7 @@ fn list_projected_filters_and_projects_onto_the_working_tree() {
         .collect();
     std::fs::write(fixture.path().join("file.txt"), dirty).unwrap();
 
-    let open_only = comment::list_projected(
+    let (open_only, _unreadable) = comment::list_projected(
         &fixture.refs,
         &fixture.objects,
         fixture.path(),
@@ -341,7 +341,7 @@ fn list_projected_filters_and_projects_onto_the_working_tree() {
         })
     );
 
-    let by_context = comment::list_projected(
+    let (by_context, _unreadable) = comment::list_projected(
         &fixture.refs,
         &fixture.objects,
         fixture.path(),

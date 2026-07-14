@@ -161,7 +161,10 @@ pub struct ListFilter {
 /// every matching comment, each anchor projected onto the working tree
 /// (`anchor.working-tree`) when `worktree` is set, onto `HEAD` otherwise —
 /// the listing `lens.parity` requires to be one library call shared by the
-/// CLI's machine-readable form, the web UI, and the editor lens.
+/// CLI's machine-readable form, the web UI, and the editor lens. Refs
+/// whose stored tree this build cannot read back come back as the second
+/// element, exactly as [`list_all`] reports them, so no caller can drop
+/// them silently.
 ///
 /// # Errors
 ///
@@ -174,10 +177,11 @@ pub fn list_projected(
     repo_path: &std::path::Path,
     worktree: bool,
     filter: &ListFilter,
-) -> Result<Vec<Listed>> {
+) -> Result<(Vec<Listed>, Vec<crate::Unreadable>)> {
     let repo = gix::open(repo_path)?;
     let mut out = Vec::new();
-    for (id, comment) in list(refs, objects)? {
+    let (all, unreadable) = list_all(refs, objects)?;
+    for (id, comment) in all {
         if let Some(state) = &filter.state
             && comment.state != *state
         {
@@ -207,7 +211,7 @@ pub fn list_projected(
             projection,
         });
     }
-    Ok(out)
+    Ok((out, unreadable))
 }
 
 /// What `git ents comment add` writes, before the mechanism-side
@@ -549,10 +553,11 @@ pub fn list_for_document(
     target_path: &str,
     buffer: Option<&[u8]>,
     filter: &ListFilter,
-) -> Result<Vec<Listed>> {
+) -> Result<(Vec<Listed>, Vec<crate::Unreadable>)> {
     let repo = gix::open(repo_path)?;
     let mut out = Vec::new();
-    for (id, comment) in list(refs, objects)? {
+    let (all, unreadable) = list_all(refs, objects)?;
+    for (id, comment) in all {
         if let Some(state) = &filter.state
             && comment.state != *state
         {
@@ -578,7 +583,7 @@ pub fn list_for_document(
             projection: Some(projection),
         });
     }
-    Ok(out)
+    Ok((out, unreadable))
 }
 
 /// The thread rooted at `root_id` (`model.comment-thread`): the comment

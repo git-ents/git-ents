@@ -113,7 +113,7 @@ fn the_comment_loop_runs_through_the_machine_readable_listing() {
         state: Some("open".to_owned()),
         context: None,
     };
-    let rows = comment::list_projected(&root, true, &open).expect("lists");
+    let (rows, _unreadable) = comment::list_projected(&root, true, &open).expect("lists");
     let rendered = comment::porcelain(&rows);
     let expected = format!(
         "{id} open current file.txt:5-5\ncontext issues/42\n\tthis new line looks wrong\n\t\n\tsecond paragraph\n"
@@ -123,9 +123,10 @@ fn the_comment_loop_runs_through_the_machine_readable_listing() {
     // Resolve through the CLI surface; the open listing no longer shows
     // it, the unfiltered one shows it resolved.
     comment::set_state(&root, &id, true, Some(fixture.key_path.clone())).expect("resolves");
-    let rows = comment::list_projected(&root, true, &open).expect("lists");
+    let (rows, _unreadable) = comment::list_projected(&root, true, &open).expect("lists");
     assert!(rows.is_empty(), "a resolved comment is not open");
-    let all = comment::list_projected(&root, true, &ListFilter::default()).expect("lists");
+    let (all, _unreadable) =
+        comment::list_projected(&root, true, &ListFilter::default()).expect("lists");
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].comment.state, "resolved");
 }
@@ -149,7 +150,8 @@ fn porcelain_separates_records_and_renders_unanchored_comments() {
     )
     .expect("replies");
 
-    let rows = comment::list_projected(&root, false, &ListFilter::default()).expect("lists");
+    let (rows, _unreadable) =
+        comment::list_projected(&root, false, &ListFilter::default()).expect("lists");
     let rendered = comment::porcelain(&rows);
     let records: Vec<&str> = rendered.split("\n\n").collect();
     assert_eq!(records.len(), 2);

@@ -26,7 +26,9 @@ pub fn list(root: &LocalRoot) -> Result<Vec<(String, Comment)>> {
 
 /// `git ents comment list [--worktree] [--state ...] [--context ...]`:
 /// matching comments with each anchor projected onto the working tree
-/// (with `worktree`) or `HEAD`.
+/// (with `worktree`) or `HEAD`, plus the refs whose stored tree this
+/// build could not read back (reported after the listing, never
+/// silently dropped).
 ///
 /// # Errors
 ///
@@ -35,7 +37,7 @@ pub fn list_projected(
     root: &LocalRoot,
     worktree: bool,
     filter: &ListFilter,
-) -> Result<Vec<Listed>> {
+) -> Result<(Vec<Listed>, Vec<ents_forge::Unreadable>)> {
     Ok(comment::list_projected(
         &root.refs,
         &root.objects,

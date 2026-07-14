@@ -215,8 +215,11 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                 }
             };
             let filter = ents_forge::comment::ListFilter { state, context };
-            let rows = commands::comment::list_projected(&root, worktree, &filter)?;
+            let (rows, unreadable) = commands::comment::list_projected(&root, worktree, &filter)?;
             if porcelain {
+                // Porcelain stays rows-only for format stability; a tool
+                // that wants the unreadable refs takes them from
+                // `comment::list_projected` itself.
                 let _ = write!(out, "{}", commands::comment::porcelain(&rows));
             } else {
                 for row in rows {
@@ -227,6 +230,9 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                         row.comment.state,
                         row.comment.body
                     );
+                }
+                for entry in unreadable {
+                    let _ = writeln!(out, "! {}\tunreadable: {}", entry.refname, entry.error);
                 }
             }
         }
