@@ -33,11 +33,11 @@ it twice.
 Parallel-safe, each its own commit; land on `web-ui-polish` or a
 successor branch.
 
-* `serve` prints and opens `http://<repo-dir>.localhost:<port>` instead
+* `serve` prints `http://<repo-dir>.localhost:<port>` instead
   of `127.0.0.1` — `*.localhost` resolves in-browser (RFC 6761) and is
   a secure context, so no hosts file, no DNS, no "Not secure" chip.
   Verified live 2026-07-13. Safari caveat documented (system resolver;
-  one `/etc/hosts` line).
+  one `/etc/hosts` line). Opening the browser is Phase D's `--web` work.
 * Fix the commit diff view repeating every subdirectory as its own
   entry in the changed-file list.
 * Effect adder: form + POST route (there is currently no way to add an

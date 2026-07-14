@@ -12,8 +12,10 @@
 )]
 
 use ents_forge::comment::{self, ListFilter, NewComment};
+use ents_model::{Member, MemberId, Provenance};
 use ents_receive::{Identity, Mode, NullEventSink, TxResult};
 use ents_testutil::{Keypair, MemRefStore, ObjectStore};
+use gix_ref_store::RefStoreRead as _;
 use rstest::rstest;
 
 /// A throwaway on-disk repository holding one committed file — the
@@ -208,6 +210,7 @@ fn resolve_and_reopen_advance_the_same_ref() {
         &id,
         &fixture.identity(),
         Mode::Advisory,
+        None,
     )
     .expect("resolves");
     assert_eq!(outcome.result, TxResult::Applied);
@@ -220,6 +223,7 @@ fn resolve_and_reopen_advance_the_same_ref() {
         &id,
         &fixture.identity(),
         Mode::Advisory,
+        None,
     )
     .expect("reopens");
     assert_eq!(outcome.result, TxResult::Applied);
@@ -310,6 +314,7 @@ fn list_projected_filters_and_projects_onto_the_working_tree() {
         &unanchored,
         &fixture.identity(),
         Mode::Advisory,
+        None,
     )
     .expect("resolves");
 
@@ -418,5 +423,99 @@ fn a_worktree_anchored_comment_tracks_the_dirty_file() {
         ents_anchor::Projection::Outdated {
             path: "file.txt".to_owned(),
         }
+    );
+}
+
+// ---------------------------------------------------------------------
+// model.comment-provenance: a state change pins the resolver's record.
+// ---------------------------------------------------------------------
+
+/// The commit message at `id`'s comment ref tip.
+fn tip_message(fixture: &Fixture, id: &str) -> String {
+    use gix_object::Find as _;
+    let name = ents_model::namespace::comment_ref(id).expect("valid");
+    let tip = fixture
+        .refs
+        .get(name.as_ref())
+        .expect("reads")
+        .expect("exists");
+    let mut buf = Vec::new();
+    let data = fixture
+        .objects
+        .try_find(&tip, &mut buf)
+        .expect("finds")
+        .expect("exists");
+    gix_object::CommitRef::from_bytes(data.data, tip.kind())
+        .expect("commit")
+        .message
+        .to_string()
+}
+
+/// Resolving with an enrolled member's key writes a `Key-for-<id>`
+/// trailer naming the member ref's tip commit at resolve time; a signer
+/// whose key matches no enrolled member writes none.
+#[rstest]
+// @relation(model.comment-provenance, scope=function, role=Verifies)
+fn resolving_pins_the_resolvers_member_record() {
+    let fixture = Fixture::new();
+    let id = fixture.add(fixture.draft());
+
+    // Enroll the fixture's signer as member `joey` through the real
+    // proposal path, then capture the member ref's tip.
+    let member = Member::new(
+        MemberId::new("joey"),
+        Keypair::from_seed(1).public_openssh(),
+        Provenance::AdminRegistered,
+    );
+    let name = ents_model::namespace::member_ref(&MemberId::new("joey")).expect("valid");
+    let outcome = ents_receive::propose_entity(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        name.clone(),
+        &member,
+        &fixture.identity(),
+        "Enroll joey",
+        Mode::Advisory,
+    )
+    .expect("enrolls");
+    assert_eq!(outcome.result, TxResult::Applied);
+    let member_tip = fixture
+        .refs
+        .get(name.as_ref())
+        .expect("reads")
+        .expect("exists");
+
+    comment::resolve(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        &fixture.identity(),
+        Mode::Advisory,
+        Some(&Keypair::from_seed(1).public_openssh()),
+    )
+    .expect("resolves");
+    let message = tip_message(&fixture, &id);
+    assert!(
+        message.contains(&format!("Key-for-joey: {member_tip}")),
+        "the resolve mutation pins the member record: {message}"
+    );
+
+    // A key matching no enrolled member (seed 2) writes no trailer.
+    comment::reopen(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        &fixture.identity(),
+        Mode::Advisory,
+        Some(&Keypair::from_seed(2).public_openssh()),
+    )
+    .expect("reopens");
+    let message = tip_message(&fixture, &id);
+    assert!(
+        !message.contains("Key-for-"),
+        "an unenrolled signer writes no trailer: {message}"
     );
 }

@@ -120,6 +120,15 @@ Who changed a state, and when, MUST come from the mutation commit chain
 (<<meta-ref.identity-binding>>), never from stored fields.
 --
 
+[role="requirement", id="model.comment-provenance"]
+.Comment State Provenance
+--
+A mutation that changes a comment's state MUST, when the mutating tool's signing key matches an enrolled member's stored key, carry a `Key-for-<member-id>` trailer in its commit message.
+The trailer's value MUST be the member ref's tip commit oid at mutation time, pinning the resolver's whole enrolled record — key, state, provenance — into the chain, so which member acted, and under which key, stays answerable after any later key rotation or revocation (<<meta-ref.identity-binding>>).
+A signer with no enrolled member writes no trailer; the mutation itself is still recorded.
+The trailer is the writing tool's duty; the gate stays content-agnostic (<<model.comment-state>>).
+--
+
 [role="requirement", id="model.comment-context"]
 .Context Aggregates, Never Contains
 --

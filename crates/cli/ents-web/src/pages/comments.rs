@@ -292,6 +292,7 @@ where
         &id,
         &crate::receive_identity!(identity),
         state.mode,
+        Some(&identity.public_openssh()),
     )?;
     crate::error::outcome_to_result(outcome)?;
     Ok(redirect_back(&form.return_to, &id))
@@ -323,6 +324,7 @@ where
         &id,
         &crate::receive_identity!(identity),
         state.mode,
+        Some(&identity.public_openssh()),
     )?;
     crate::error::outcome_to_result(outcome)?;
     Ok(redirect_back(&form.return_to, &id))

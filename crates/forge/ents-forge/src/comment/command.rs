@@ -379,13 +379,17 @@ pub fn reply(
 
 /// `git ents comment resolve`: record state `resolved` as an ordinary
 /// mutation commit on the comment's own ref — never a deletion, so the
-/// conversation stays auditable (`model.comment-state`).
+/// conversation stays auditable (`model.comment-state`). When
+/// `resolver_key` (the signer's openssh public key) matches an enrolled
+/// member, the mutation carries a `Key-for-<member-id>` trailer naming
+/// that member ref's tip commit oid (`model.comment-provenance`); an
+/// unenrolled signer writes no trailer.
 ///
 /// # Errors
 ///
 /// [`Error::NotFound`] if `id` has no comment ref; otherwise propagates
 /// read, serialization, or `receive` failures.
-// @relation(model.comment-state, lens.parity, scope=function)
+// @relation(model.comment-state, model.comment-provenance, lens.parity, scope=function)
 pub fn resolve(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
@@ -393,8 +397,18 @@ pub fn resolve(
     id: &str,
     identity: &Identity<'_>,
     mode: Mode,
+    resolver_key: Option<&str>,
 ) -> Result<Outcome> {
-    set_state(refs, objects, events, id, "resolved", identity, mode)
+    set_state(
+        refs,
+        objects,
+        events,
+        id,
+        "resolved",
+        identity,
+        mode,
+        resolver_key,
+    )
 }
 
 /// `git ents comment reopen`: record state `open` again, the same way
@@ -411,13 +425,29 @@ pub fn reopen(
     id: &str,
     identity: &Identity<'_>,
     mode: Mode,
+    resolver_key: Option<&str>,
 ) -> Result<Outcome> {
-    set_state(refs, objects, events, id, "open", identity, mode)
+    set_state(
+        refs,
+        objects,
+        events,
+        id,
+        "open",
+        identity,
+        mode,
+        resolver_key,
+    )
 }
 
 /// The shared state mutation [`resolve`] and [`reopen`] are: read the
 /// comment at `id`, set `state`, and propose the new tree on top of the
-/// old tip.
+/// old tip -- carrying the resolver's `Key-for-<member-id>` trailer when
+/// `resolver_key` names an enrolled member (`model.comment-provenance`).
+// @relation(model.comment-provenance, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared mutation seam plus the provenance key; the only callers are resolve/reopen's thin forwards"
+)]
 fn set_state(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
@@ -426,20 +456,48 @@ fn set_state(
     state: &str,
     identity: &Identity<'_>,
     mode: Mode,
+    resolver_key: Option<&str>,
 ) -> Result<Outcome> {
     let mut comment = comment_at(refs, objects, id)?;
     comment.state = state.to_owned();
     let ref_name = ents_model::namespace::comment_ref(id)?;
+    let mut message = format!("Mark comment {id} {state}");
+    if let Some(trailer) = resolver_key.and_then(|key| key_trailer(refs, objects, key)) {
+        message.push_str("\n\n");
+        message.push_str(&trailer);
+    }
     Ok(propose_entity(
-        refs,
-        objects,
-        events,
-        ref_name,
-        &comment,
-        identity,
-        &format!("Mark comment {id} {state}"),
-        mode,
+        refs, objects, events, ref_name, &comment, identity, &message, mode,
     )?)
+}
+
+/// The `Key-for-<member-id>: <oid>` trailer for the enrolled member whose
+/// stored key matches `pubkey` (`model.comment-provenance`): the oid is
+/// the member ref's tip commit at this moment, pinning the resolver's
+/// whole enrolled record -- key, state, provenance -- into the mutation
+/// chain. `None` when no member's key matches (an unenrolled signer
+/// writes no trailer) or when the member listing cannot be read; a state
+/// mutation never fails for want of provenance.
+// @relation(model.comment-provenance, scope=function)
+fn key_trailer(refs: &dyn RefStore, objects: &impl Find, pubkey: &str) -> Option<String> {
+    let entries = refs.iter_prefix("refs/meta/member/").ok()?;
+    for entry in entries.flatten() {
+        let (name, tip) = entry;
+        let path = name.as_bstr().to_string();
+        let Some(id) = path.strip_prefix("refs/meta/member/") else {
+            continue;
+        };
+        let Ok(tree) = commit_tree(objects, tip) else {
+            continue;
+        };
+        let Ok(member) = facet_git_tree::deserialize::<ents_model::Member>(&tree, objects) else {
+            continue;
+        };
+        if member.key == pubkey {
+            return Some(format!("Key-for-{id}: {tip}"));
+        }
+    }
+    None
 }
 
 /// `git ents comment show`: `id`'s comment and — when it carries an

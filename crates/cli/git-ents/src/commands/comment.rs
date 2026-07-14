@@ -129,6 +129,7 @@ pub fn set_state(
             id,
             &identity,
             root.mode(),
+            Some(&signer.public_openssh()),
         )?
     } else {
         comment::reopen(
@@ -138,6 +139,7 @@ pub fn set_state(
             id,
             &identity,
             root.mode(),
+            Some(&signer.public_openssh()),
         )?
     };
     outcome_to_result(outcome, None)?;

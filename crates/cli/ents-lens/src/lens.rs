@@ -272,6 +272,7 @@ impl<O: Find + Write> Lens<O> {
                     &id,
                     &identity,
                     self.mode,
+                    Some(signer.public_openssh()),
                 )?;
                 Ok(Outcome {
                     refresh: true,
