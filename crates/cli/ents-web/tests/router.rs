@@ -895,6 +895,64 @@ async fn files_root_renders_the_readme_below_the_listing() {
     assert!(listing < readme, "the README card sits below the listing");
 }
 
+/// The master-detail splits (`crate::pages::layout_split`): a blob view
+/// renders a `.tree` sidebar with its own entry active and its siblings
+/// listed; a commit page renders the compact history sidebar with the
+/// viewed commit active; the tickets page renders its list beside the
+/// composer.
+#[tokio::test]
+async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
+    let dir = seed_repo(&[
+        ("src/main.rs", "fn main() {}\n"),
+        ("src/lib.rs", "pub fn f() {}\n"),
+        ("README.md", "# hi\n"),
+    ]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+    let issue_id = seed_issue(&router, &state, "Split the panes", "open", "", "").await;
+
+    let blob = get_body(&router, "/files/src/main.rs").await;
+    assert!(blob.contains("class=\"tree\""), "the blob page splits");
+    assert!(
+        blob.contains(">main.rs</a>") && blob.contains("active"),
+        "the viewed blob's own entry renders in the sidebar"
+    );
+    assert!(
+        blob.contains("href=\"/files/src/lib.rs\""),
+        "its sibling entries render beside it"
+    );
+    assert!(
+        blob.contains("class=\"pane\""),
+        "the content sits in a pane"
+    );
+
+    let commit = get_body(&router, &format!("/commit/{oid}")).await;
+    assert!(commit.contains("class=\"tree\""), "the commit page splits");
+    assert!(
+        commit.contains(&format!("class=\"active\" href=\"/commit/{oid}\"")),
+        "the viewed commit highlights in the history sidebar"
+    );
+
+    let issues = get_body(&router, "/issues").await;
+    assert!(issues.contains("class=\"tree\""), "the tickets page splits");
+    assert!(
+        issues.contains("Split the panes") && issues.contains("Open an Issue"),
+        "the list and the composer render side by side"
+    );
+    let detail = get_body(&router, &format!("/issues/{issue_id}")).await;
+    assert!(
+        detail.contains(&format!("class=\"active\" href=\"/issues/{issue_id}\"")),
+        "the viewed ticket highlights in the sidebar"
+    );
+}
+
 /// `GET /files/<path>` on a plain-text blob with no recognized grammar
 /// renders a line-numbered, escaped `pre.blob-code` source view -- no
 /// syntax highlighting, and no unescaped source.

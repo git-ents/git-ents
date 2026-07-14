@@ -138,11 +138,12 @@ where
 
     if path.is_empty() {
         let entries = tree_entries(&head_tree)?;
-        return Ok(super::layout(
+        return Ok(super::layout_split(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
             "Files",
+            tree_sidebar(&head_tree, "", ""),
             html! {
                 (dir_listing(path, entries))
                 (readme_card(&head_tree))
@@ -164,11 +165,12 @@ where
             .try_into_tree()
             .map_err(|source| Error::Repo(source.to_string()))?;
         let entries = tree_entries(&subtree)?;
-        Ok(super::layout(
+        Ok(super::layout_split(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            tree_sidebar(&head_tree, path, path),
             html! {
                 (crumbs(path))
                 (dir_listing(path, entries))
@@ -187,11 +189,13 @@ where
             .map_err(|source| Error::Repo(source.to_string()))?
             .to_string();
         let (body, below) = blob_view(path, name, &head_oid, session, &blob.data, &comments)?;
-        Ok(super::layout(
+        let parent = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        Ok(super::layout_split(
             &super::RepoHeader::from_state(state),
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            tree_sidebar(&head_tree, parent, path),
             html! {
                 (crumbs(path))
                 (body)
@@ -236,6 +240,80 @@ fn tree_entries(tree: &gix::Tree<'_>) -> Result<Vec<(String, bool, Option<u64>)>
             Ok((entry.filename().to_str_lossy().into_owned(), is_dir, size))
         })
         .collect()
+}
+
+/// The Code split's `.tree` sidebar (`crate::pages::layout_split`): a
+/// crumb trail back to the repository root, then the entries of the
+/// directory at `dir` (the viewed directory itself, or a viewed blob's
+/// parent), directories first -- not a full recursive tree, just enough
+/// context to move one level in any direction. `active` names the full
+/// path of the entry (or trailing crumb) being viewed. Best-effort: a
+/// subtree that fails to read renders an empty entry list rather than
+/// failing the page around it.
+fn tree_sidebar(head_tree: &gix::Tree<'_>, dir: &str, active: &str) -> Markup {
+    let mut entries = if dir.is_empty() {
+        tree_entries(head_tree).unwrap_or_default()
+    } else {
+        head_tree
+            .lookup_entry_by_path(dir)
+            .ok()
+            .flatten()
+            .and_then(|entry| entry.object().ok())
+            .and_then(|object| object.try_into_tree().ok())
+            .map(|subtree| tree_entries(&subtree).unwrap_or_default())
+            .unwrap_or_default()
+    };
+    entries.sort_by(|(a_name, a_is_dir, _), (b_name, b_is_dir, _)| {
+        b_is_dir.cmp(a_is_dir).then_with(|| a_name.cmp(b_name))
+    });
+
+    let crumb_parts: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
+    let mut crumb_trail: Vec<(String, String)> = Vec::new();
+    let mut acc = String::new();
+    for part in &crumb_parts {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(part);
+        crumb_trail.push(((*part).to_owned(), acc.clone()));
+    }
+    let entry_depth = crumb_parts.len().saturating_add(1);
+
+    html! {
+        a class=(tree_class(true, 0, active.is_empty())) href="/files" { "/" }
+        @for (index, (label, crumb_path)) in crumb_trail.iter().enumerate() {
+            a class=(tree_class(true, index.saturating_add(1), crumb_path == active))
+                href={ "/files/" (crumb_path) } { (label) "/" }
+        }
+        @for (name, is_dir, _) in &entries {
+            @let full = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+            a class=(tree_class(*is_dir, entry_depth, full == active))
+                href=(child_href(dir, name)) {
+                (name) @if *is_dir { "/" }
+            }
+        }
+    }
+}
+
+/// The class list for one [`tree_sidebar`] link: `.dir` for a directory,
+/// an `.i{1..3}` indent per crumb depth (capped -- the sidebar shows one
+/// directory's entries, not an unbounded tree), `.active` for the viewed
+/// entry.
+fn tree_class(is_dir: bool, depth: usize, active: bool) -> String {
+    let mut classes = Vec::new();
+    if is_dir {
+        classes.push("dir");
+    }
+    match depth {
+        0 => {}
+        1 => classes.push("i1"),
+        2 => classes.push("i2"),
+        _ => classes.push("i3"),
+    }
+    if active {
+        classes.push("active");
+    }
+    classes.join(" ")
 }
 
 /// The link to a child of the directory at `dir` (empty at the root).

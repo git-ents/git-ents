@@ -29,9 +29,10 @@ use crate::error::Result;
 use crate::session::Session;
 use crate::state::AppState;
 
-/// `GET /issues`: every issue recorded in this repository
-/// (`ents_forge::issue::list`) -- title, state, assignees, and labels --
-/// plus the new-issue form.
+/// `GET /issues`: the Tickets split (`crate::pages::layout_split`) --
+/// every issue recorded in this repository (`ents_forge::issue::list_all`)
+/// as the sidebar, its state/assignees/labels on each row's own locator
+/// line, beside the new-issue composer in the pane.
 ///
 /// # Errors
 ///
@@ -49,35 +50,20 @@ where
         .into_iter()
         .map(|entry| (entry.refname, entry.error))
         .collect();
-    Ok(super::layout(
+    Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Issues,
-        "Issues",
+        "Tickets",
+        issues_sidebar(&rows, None),
         html! {
             div.readable {
                 (crate::render::unreadable_disclosure(&failures))
                 @if rows.is_empty() {
                     (super::blankslate(
-                        "No issues yet",
+                        "No tickets yet",
                         html! { "Open one with the form below." },
                     ))
-                } @else {
-                    table.entity-list {
-                        thead {
-                            tr { th { "issue" } th { "state" } th { "assignees" } th { "labels" } }
-                        }
-                        tbody {
-                            @for (id, issue) in &rows {
-                                tr {
-                                    td { a href=(format!("/issues/{id}")) { (issue.title) } }
-                                    td { span.comment-state { (issue.state) } }
-                                    td { (join_members(&issue.assignees)) }
-                                    td { (issue.labels.join(", ")) }
-                                }
-                            }
-                        }
-                    }
                 }
                 h2 { "Open an Issue" }
                 (new_form(&session))
@@ -85,6 +71,27 @@ where
             }
         },
     ))
+}
+
+/// The Tickets split's `.tree` sidebar: every issue as a two-line row --
+/// its title, then a muted locator of its state, assignees, and labels --
+/// linking to its own page, `active` naming the viewed issue's id.
+fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) -> Markup {
+    html! {
+        @if rows.is_empty() {
+            span.tree-note { "No tickets yet." }
+        }
+        @for (id, issue) in rows {
+            a.active[active == Some(id.as_str())] href={ "/issues/" (id) } {
+                span { (issue.title) }
+                span class="where" {
+                    (issue.state)
+                    @if !issue.assignees.is_empty() { " \u{b7} " (join_members(&issue.assignees)) }
+                    @if !issue.labels.is_empty() { " \u{b7} " (issue.labels.join(", ")) }
+                }
+            }
+        }
+    }
 }
 
 /// `GET /issues/{id}`: one issue (`ents_forge::issue::show`), an edit form
@@ -133,11 +140,16 @@ where
     let body =
         crate::asciidoc::to_html(&issue.body).unwrap_or_else(|_| html! { p { (issue.body) } });
     let return_to = format!("/issues/{id}");
-    Ok(super::layout(
+    // Best-effort: the sidebar listing every ticket beside this one is
+    // navigation chrome, never a reason to fail the issue's own page.
+    let (rows, _unreadable) =
+        issue::list_all(state.refs.as_ref(), &*state.objects()).unwrap_or_default();
+    Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Issues,
         &issue.title,
+        issues_sidebar(&rows, Some(&id)),
         html! {
             (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))
             div.readable {

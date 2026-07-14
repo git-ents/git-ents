@@ -354,6 +354,40 @@ pub(crate) fn layout_meta(
     )
 }
 
+/// Wrap `title`, `sidebar`, and `pane` in the master-detail split every
+/// selection-heavy page family renders through ([`super::files`]'s tree
+/// beside a blob, [`super::commits`]'s compact history beside a diff,
+/// [`super::issues`]'s ticket list beside a ticket): the workbench chrome
+/// ([`layout_shell`]) around a full-bleed `.split` grid -- a sticky
+/// `nav.tree` sidebar on the left, a padded `main.pane` (carrying the
+/// page's own `.page-header` title and `pane` body) on the right. Every
+/// selection in the sidebar is a real URL and the sidebar always renders,
+/// so the split stays SSR-friendly (`docs/web-workbench-plan.adoc`).
+pub(crate) fn layout_split(
+    repo: &RepoHeader,
+    identity: &str,
+    active: Tab,
+    title: &str,
+    sidebar: Markup,
+    pane: Markup,
+) -> Markup {
+    layout_shell(
+        repo,
+        identity,
+        active,
+        title,
+        html! {
+            div.split {
+                nav.tree { (sidebar) }
+                main.pane {
+                    div.page-header { h1.page-title { (title) } }
+                    (pane)
+                }
+            }
+        },
+    )
+}
+
 /// The signing identity's display label for [`layout`]'s `.id-chip`
 /// (`roots.web-signing`) -- [`crate::identity::SigningIdentity::label`].
 /// Every page reads this off `state` itself rather than `layout` reaching

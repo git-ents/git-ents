@@ -144,6 +144,27 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 .content { max-width: var(--max-width); width: 100%; margin: 0 auto; padding: 2.25rem 1.5rem 3rem; flex: 1; }
+/* Master-detail split (`crate::pages::layout_split`): a sticky `.tree`
+ * sidebar beside a padded `.pane` -- the pane, not the shell, owns the
+ * content padding here, so blob and diff content never sits on the
+ * viewport edge. */
+.split { display: grid; grid-template-columns: 16rem minmax(0, 1fr); flex: 1; align-items: start; }
+.tree { border-right: 1px solid var(--color-border); background: var(--color-surface); padding: .9rem .6rem; font-family: var(--font-mono); font-size: .8rem; position: sticky; top: 52px; height: calc(100vh - 52px); overflow-y: auto; }
+.tree a { display: block; padding: .16rem .5rem; border-radius: 6px; color: var(--color-text); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree a:hover { background: var(--color-code-bg); }
+.tree a.active { background: var(--color-accent-subtle); color: var(--color-accent); font-weight: 600; }
+.tree a span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.tree .dir { color: var(--color-text-muted); font-weight: 600; }
+.tree .i1 { padding-left: 1.3rem; }
+.tree .i2 { padding-left: 2.5rem; }
+.tree .i3 { padding-left: 3.7rem; }
+.tree-note { display: block; padding: .16rem .5rem; color: var(--color-text-muted); }
+.tree .where { font-size: .68rem; font-weight: 400; color: var(--color-text-muted); }
+.pane { padding: 1.4rem 1.75rem 2.5rem; min-width: 0; }
+@media (max-width: 900px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .tree { position: static; height: auto; max-height: 14rem; border-right: none; border-bottom: 1px solid var(--color-border); }
+}
 /* Single-column reading content (an entity's cards, a discussion thread,
  * a form) caps at `--content-narrow` so it never smears across a wide
  * viewport; wide surfaces (the commits table, file lists, diffs) stay at

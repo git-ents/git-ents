@@ -259,12 +259,14 @@ where
     let (diff, truncated) = diff_sections(&repo, old_tree_ref, &new_tree);
     let comments = super::comments::for_commit(&state, object_id);
     let reviews = reviews_section(&state, &session, object_id, &oid);
+    let (sidebar_rows, _older) = commit_rows(&state, None, PAGE_SIZE);
 
-    Ok(super::layout(
+    Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Commits,
         &subject,
+        commits_sidebar(&sidebar_rows, object_id),
         html! {
             (super::child_crumbs("commits", "/commits", &super::short_oid(&object_id)))
             // The commit card, its reviews, and the conversation are
@@ -315,6 +317,25 @@ where
             }
         },
     ))
+}
+
+/// The Review split's `.tree` sidebar (`crate::pages::layout_split`): the
+/// most recent commits, the viewed one active, each row its short oid and
+/// subject on one ellipsized line, closed by a link into the full pager.
+/// A commit older than the newest [`PAGE_SIZE`] simply highlights nothing
+/// -- the sidebar is a recency lane, not a second pager.
+fn commits_sidebar(rows: &[CommitRow], current: ObjectId) -> Markup {
+    html! {
+        @if rows.is_empty() {
+            span.tree-note { "No history to show." }
+        }
+        @for row in rows {
+            a.active[row.oid == current] href={ "/commit/" (row.oid) } {
+                (row.short) " " (row.subject)
+            }
+        }
+        a href="/commits" { "all commits \u{2192}" }
+    }
 }
 
 /// Every review targeting `commit_id` (`ents_forge::review::list` filtered
