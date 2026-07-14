@@ -1159,6 +1159,59 @@ async fn meta_index_and_a_meta_group_page_render_with_the_rail() {
     );
 }
 
+/// `GET /members` and `GET /members/{username}` render an identity card
+/// per member -- username prominent, the key type as a badge, the key
+/// material truncated through the middle with the full line behind a
+/// details toggle -- never the generic entity table an SSH key's base64
+/// body used to shred.
+#[tokio::test]
+async fn members_pages_render_an_identity_card_per_member() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let key = Keypair::from_seed(1);
+    let full_key = key.public_openssh();
+    enroll_member(
+        &refs,
+        &objects,
+        "jdc",
+        &key,
+        Provenance::AdminRegistered,
+        100,
+    );
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(2),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let list = get_body(&router, "/members").await;
+    assert!(list.contains("member-card"), "the identity card renders");
+    assert!(
+        list.contains("class=\"key-badge\"") && list.contains("ssh-ed25519"),
+        "the key type badges"
+    );
+    assert!(
+        list.contains('\u{2026}'),
+        "the key material truncates through the middle"
+    );
+    assert!(
+        list.contains("full key") && list.contains(&full_key),
+        "the full key line stays one details toggle away"
+    );
+    assert!(
+        !list.contains("entity-list"),
+        "the generic table no longer renders here"
+    );
+
+    let show = get_body(&router, "/members/jdc").await;
+    assert!(show.contains("member-card"));
+    assert!(show.contains("class=\"key-badge\""));
+}
+
 /// `GET /files/<path>` renders a `.md` blob as Markdown and a `.adoc` blob
 /// as AsciiDoc -- both a real rendered heading, not the raw source markup.
 #[tokio::test]

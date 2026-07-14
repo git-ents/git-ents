@@ -2,13 +2,15 @@
 //! body, mirroring `git_ents::commands`'s "one module per subcommand
 //! family" convention on the web side.
 //!
-//! [`dashboard`], [`members`], [`account`], [`effects`], [`redactions`],
+//! [`account`], [`effects`], [`redactions`],
 //! and [`inbox`] are the generic pages: they read a kernel entity and
 //! render it through [`crate::render`]'s reflection-driven mechanism,
-//! never matching on which entity type they were handed.
-//! [`toolchains`], [`comments`], and [`issues`] are legitimate custom pages
-//! (`ents-kiln`'s recipe provenance and `ents-forge`'s anchor projection
-//! and issue threads all need domain-specific rendering no generic
+//! never matching on which entity type they were handed. [`dashboard`],
+//! [`toolchains`], [`comments`], [`issues`], and [`members`] are
+//! legitimate custom pages
+//! (`ents-kiln`'s recipe provenance, `ents-forge`'s anchor projection
+//! and issue threads, and a member's SSH-key identity card all need
+//! domain-specific rendering no generic
 //! reflection walk should grow special cases for). [`members`],
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
 //! share one `meta` rail item and `META_SECTIONS` rail rather than each

@@ -30,16 +30,19 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --max-width: 78rem;
   --content-narrow: 58rem;
-  --color-bg: #faf8f4;
-  --color-surface: #fff;
+  /* The brighter "Proposal C" pass (the workbench mocks' proposal-c.css
+   * token overrides, merged in as THE tokens rather than layered over the
+   * old, dimmer pre-redo values). */
+  --color-bg: #fdfcf8;
+  --color-surface: #ffffff;
   --color-text: #2a2518;
   --color-text-muted: #8a7e6a;
-  --color-link: #b07d10;
-  --color-link-hover: #96690a;
-  --color-border: #ede9de;
-  --color-code-bg: #f5f3eb;
-  --color-accent: #b07d10;
-  --color-accent-subtle: #b07d100f;
+  --color-link: #c08a12;
+  --color-link-hover: #a8760c;
+  --color-border: #e9e4d6;
+  --color-code-bg: #f6f4ec;
+  --color-accent: #c08a12;
+  --color-accent-subtle: #c08a120f;
   --shadow-sm: 0 1px 3px #0000000d;
   --shadow-md: 0 4px 16px #0000000f;
   --radius-sm: 10px;
@@ -57,16 +60,16 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #171510;
-    --color-surface: #211f17;
-    --color-text: #ede8d8;
+    --color-bg: #1d1b15;
+    --color-surface: #282419;
+    --color-text: #f3eedd;
     --color-text-muted: #a89e88;
-    --color-link: #d4a030;
-    --color-link-hover: #e4b850;
-    --color-border: #383324;
-    --color-code-bg: #211f17;
-    --color-accent: #d4a030;
-    --color-accent-subtle: #d4a03012;
+    --color-link: #e8b23c;
+    --color-link-hover: #f2c55c;
+    --color-border: #453e2a;
+    --color-code-bg: #322d1e;
+    --color-accent: #e8b23c;
+    --color-accent-subtle: #e8b23c12;
     --shadow-sm: 0 1px 3px #00000040;
     --shadow-md: 0 4px 16px #0000004d;
     --s-comment: #928374;
@@ -312,6 +315,21 @@ ul:not(.string-list) { list-style: none; font-family: var(--font-mono); font-siz
 ul:not(.string-list) li { padding: .35rem 0; }
 
 .badge { font-family: var(--font-mono); font-size: .68rem; color: var(--color-text-muted); background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: var(--radius-pill); padding: 0 .5rem; margin-left: .5rem; }
+
+/* Member identity cards (`crate::pages::members::member_card`): username
+ * prominent, key type as an accent badge, key material truncated through
+ * the middle with the full line behind a details toggle. */
+.member-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; padding: .8rem 1.1rem; }
+.member-head .badge { margin-left: 0; }
+.member-name { font-family: var(--font-mono); font-weight: 700; font-size: 1.05rem; color: var(--color-text); }
+a.member-name { text-decoration: none; }
+a.member-name:hover { color: var(--color-accent); }
+.key-badge { font-family: var(--font-mono); font-size: .68rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: 0 .55rem; white-space: nowrap; }
+.member-key { padding: 0 1.1rem .8rem; font-family: var(--font-mono); font-size: .82rem; }
+.member-key code { color: var(--color-text-muted); background: var(--color-code-bg); border-radius: 5px; padding: .1rem .45rem; }
+.member-key details { margin-top: .4rem; }
+.member-key summary { font-size: .72rem; color: var(--color-text-muted); cursor: pointer; user-select: none; -webkit-user-select: none; }
+.member-key pre { margin-top: .3rem; padding: .5rem .7rem; background: var(--color-code-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); white-space: pre-wrap; word-break: break-all; font-size: .74rem; }
 
 /* Forms (`account`, `comments`, `issues`, the review form): each labeled
  * field is a compact two-column grid row -- the label in a fixed left
