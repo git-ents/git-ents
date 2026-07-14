@@ -13,7 +13,7 @@
  * stacks, so this sheet never depends on a network fetch. Added beyond the
  * pre-redo sheet: `.meta-layout`/`.meta-rail` for the `meta` tab's
  * page-family rail (`crate::pages::META_SECTIONS`) and `.id-chip` for the
- * header's signing-identity link, both new to this crate's own four-tab
+ * header's signing-identity link, both new to this crate's own tab
  * restructure; `.comment-meta`/`.outdated` for the file-anchored
  * comment cards `crate::pages::comments::comments_section` renders below a
  * blob view, which otherwise reuse `.card`/`.doc-body` as-is; and
@@ -122,7 +122,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .branch { font-family: var(--font-mono); font-size: .72rem; font-weight: 600; color: var(--color-accent); background: var(--color-accent-subtle); border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent); border-radius: var(--radius-pill); padding: .1rem .6rem; display: inline-flex; align-items: center; gap: .3rem; }
 .branch .icon { width: 13px; height: 13px; color: var(--color-accent); }
 
-.tabs { display: flex; gap: .15rem; max-width: var(--max-width); margin: 0 auto; padding: 0 1.5rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; }
+/* `overflow-x: auto` keeps the strip scrollable on a narrow viewport;
+ * `scrollbar-width: none` (and the WebKit pseudo-element below) hides the
+ * scrollbar itself, which otherwise renders as a stray artifact under the
+ * strip on macOS. */
+.tabs { display: flex; gap: .15rem; max-width: var(--max-width); margin: 0 auto; padding: 0 1.5rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tab { display: inline-flex; align-items: center; gap: .4rem; padding: 10px 14px; font-size: .88rem; color: var(--color-text-muted); text-decoration: none; white-space: nowrap; position: relative; transition: color .15s; }
 .tab:hover { color: var(--color-text); text-decoration: none; }
 .tab.active { color: var(--color-text); font-weight: 600; }

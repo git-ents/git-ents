@@ -148,6 +148,7 @@ where
         super::Tab::Comments,
         ents_forge::abbreviate_id(&id),
         html! {
+            (super::child_crumbs("comments", "/comments", ents_forge::abbreviate_id(&id)))
             dl {
                 dt { "state" } dd { (comment.state) }
                 @if let Some(context) = &comment.context {

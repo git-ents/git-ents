@@ -9,15 +9,15 @@
 //! [`toolchains`], [`comments`], and [`issues`] are legitimate custom pages
 //! (`ents-kiln`'s recipe provenance and `ents-forge`'s anchor projection
 //! and issue threads all need domain-specific rendering no generic
-//! reflection walk should grow special cases for). [`issues`], [`members`],
+//! reflection walk should grow special cases for). [`members`],
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
 //! share one `meta` tab and `META_SECTIONS` rail rather than each carrying
 //! its own top-level tab (see `Tab`'s own doc); [`meta`] is that group's
-//! `GET /meta` landing page. [`commits`] is a view of the code, not a tab of its own -- both
-//! its routes render with `Tab::Files` active, reached from
-//! [`files`]'s own "history" link. [`search`] renders with no tab active
-//! at all, like [`account`]; it is reached from `layout`'s own nav
-//! search form rather than any tab.
+//! `GET /meta` landing page. [`commits`] and [`issues`] are tabs of their
+//! own -- `Tab::Commits` and `Tab::Issues` in [`layout`]'s six-tab strip,
+//! alongside overview, files, comments, and meta. [`search`] renders with
+//! no tab active at all, like [`account`]; it is reached from `layout`'s
+//! own nav search form rather than any tab.
 
 pub mod account;
 pub mod comments;
@@ -105,10 +105,10 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// [`layout`]'s nav bar, so a handler can name which tab it renders behind
 /// without `layout` re-deriving it from the request path (mirrors
 /// `pre-redo:crates/git-ents-server/src/web/pages.rs`'s own `Tab` enum,
-/// trimmed to four primary tabs). `Meta` covers six page families
-/// ([`super::issues`], [`super::members`], [`super::effects`],
-/// [`super::toolchains`], [`super::redactions`], [`super::inbox`]) behind
-/// one tab and the
+/// at this crate's own six primary tabs: overview, files, commits, issues,
+/// comments, meta). `Meta` covers five page families ([`super::members`],
+/// [`super::effects`], [`super::toolchains`], [`super::redactions`],
+/// [`super::inbox`]) behind one tab and the
 /// [`META_SECTIONS`] rail (see [`layout_meta`]) rather than a tab each --
 /// nine equal tabs did not scale as page families grew. `Account` matches
 /// none of [`layout`]'s tab-strip arms, so it highlights nothing there;
@@ -120,6 +120,8 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 pub(crate) enum Tab {
     Overview,
     Files,
+    Commits,
+    Issues,
     Comments,
     Meta,
     Account,
@@ -147,11 +149,6 @@ pub(crate) struct MetaSection {
 
 /// The `meta` tab's registry (see [`MetaSection`]'s own doc).
 pub(crate) const META_SECTIONS: &[MetaSection] = &[
-    MetaSection {
-        name: "issues",
-        href: "/issues",
-        blurb: "Filed issues and their discussion threads.",
-    },
     MetaSection {
         name: "members",
         href: "/members",
@@ -271,6 +268,8 @@ pub(crate) fn layout(
                 nav.tabs {
                     a.tab.active[active == Tab::Overview] href="/" { "overview" }
                     a.tab.active[active == Tab::Files] href="/files" { "files" }
+                    a.tab.active[active == Tab::Commits] href="/commits" { "commits" }
+                    a.tab.active[active == Tab::Issues] href="/issues" { "issues" }
                     a.tab.active[active == Tab::Comments] href="/comments" { "comments" }
                     a.tab.active[active == Tab::Meta] href="/meta" { "meta" }
                 }
@@ -388,6 +387,23 @@ fn ago_plural(n: i64, unit: &str) -> String {
         format!("1 {unit} ago")
     } else {
         format!("{n} {unit}s ago")
+    }
+}
+
+/// The one-level breadcrumb trail every `/{id}` child page renders above
+/// its own content -- "parent \u{203a} here", reusing the `.crumbs` markup
+/// pattern [`super::files`]'s own multi-level path trail already renders
+/// (same `nav.crumbs`/`span.sep`/`span.here` classes, so the stylesheet
+/// needs no second breadcrumb rule). `parent` links back to the family's
+/// list page at `parent_href`; `here` is the child's own display name, a
+/// plain non-link "you are here" crumb.
+pub(crate) fn child_crumbs(parent: &str, parent_href: &str, here: &str) -> Markup {
+    html! {
+        nav.crumbs {
+            a href=(parent_href) { (parent) }
+            span.sep { (crate::assets::icon_chevron()) }
+            span.here { (here) }
+        }
     }
 }
 

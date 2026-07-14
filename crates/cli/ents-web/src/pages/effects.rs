@@ -77,7 +77,10 @@ where
         &super::identity_label(&state),
         "/effects",
         &name,
-        body,
+        html! {
+            (super::child_crumbs("effects", "/effects", &name))
+            (body)
+        },
     ))
 }
 

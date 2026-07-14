@@ -966,6 +966,43 @@ async fn files_blob_view_syntax_highlights_a_rust_file() {
     assert!(body.contains("class=\"keyword\""));
 }
 
+/// The tab strip (`crate::pages::layout`) names every top-level page
+/// family truthfully: six tabs -- overview, files, commits, issues,
+/// comments, meta -- and the issues family no longer renders behind the
+/// `META_SECTIONS` rail (it is a tab of its own; see `crate::pages::mod`'s
+/// own doc).
+#[tokio::test]
+async fn the_tab_strip_carries_all_six_tabs_and_issues_left_the_meta_rail() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(state);
+
+    let overview = get_body(&router, "/").await;
+    for href in ["/", "/files", "/commits", "/issues", "/comments", "/meta"] {
+        assert!(
+            overview.contains(&format!("href=\"{href}\"")),
+            "the tab strip links {href}"
+        );
+    }
+
+    let issues = get_body(&router, "/issues").await;
+    assert!(
+        !issues.contains("class=\"meta-rail\""),
+        "issues renders as its own tab, not behind the meta rail"
+    );
+
+    // The rail renders a bare (classless when inactive) link per section;
+    // the tab strip's own issues link always carries `class="tab..."`, so
+    // this exact form only ever comes from the rail.
+    let members = get_body(&router, "/members").await;
+    assert!(
+        !members.contains("<a href=\"/issues\">issues</a>"),
+        "the meta rail no longer lists issues"
+    );
+}
+
 /// The `meta` tab restructure (`crate::pages::mod`'s own doc): `GET /meta`
 /// is reachable as the tab's index page, and `GET /members` -- one of the
 /// five page families that group now shares -- renders with the

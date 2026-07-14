@@ -1,7 +1,7 @@
 //! `GET /commits`, `GET /commit/{oid}`: a read-only commit history and
-//! per-commit unified diff over `HEAD` -- a view of the code, not a tab of
-//! its own (both routes render with `super::Tab::Files` active; see
-//! [`super`]'s own doc), reached from [`super::files`]'s "history" link.
+//! per-commit unified diff over `HEAD` -- a tab of its own (both routes
+//! render with `super::Tab::Commits` active; see [`super`]'s own doc),
+//! also reached from [`super::files`]'s "history" link.
 //!
 //! Reads go through `gix`'s high-level `Repository`/`Commit`/`Tree` types,
 //! opened fresh per request from `state.path`, exactly as
@@ -93,7 +93,7 @@ where
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
-        super::Tab::Files,
+        super::Tab::Commits,
         "commits",
         html! {
             @if rows.is_empty() {
@@ -259,9 +259,10 @@ where
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
-        super::Tab::Files,
+        super::Tab::Commits,
         &subject,
         html! {
+            (super::child_crumbs("commits", "/commits", &super::short_oid(&object_id)))
             div.card {
                 div.card-header { "commit " code { (super::short_oid(&object_id)) } }
                 div.commit {

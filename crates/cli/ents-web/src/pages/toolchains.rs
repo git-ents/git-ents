@@ -126,6 +126,9 @@ where
         &super::identity_label(&state),
         "/toolchains",
         &name,
-        body,
+        html! {
+            (super::child_crumbs("toolchains", "/toolchains", &name))
+            (body)
+        },
     ))
 }

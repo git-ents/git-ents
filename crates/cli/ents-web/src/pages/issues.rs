@@ -1,8 +1,9 @@
 //! `GET /issues`, `GET /issues/{id}`, `POST /issues`,
 //! `POST /issues/{id}`, `POST /issues/{id}/comment`: the issue surface
-//! (`model.issue`), an entity family under the `meta` tab's registry
-//! (`crate::pages::META_SECTIONS`) exactly as members, effects, and the
-//! rest are.
+//! (`model.issue`), a top-level tab of its own (`crate::pages::Tab::Issues`;
+//! see [`super`]'s own doc) rather than an entry in the `meta` tab's
+//! registry -- issues are a working surface like comments, not repository
+//! metadata.
 //!
 //! Every read is `ents_forge::issue::{list,show}` and every mutation is
 //! `ents_forge::issue::{new,edit}` or `ents_forge::comment::add` -- the web
@@ -44,10 +45,10 @@ where
     O: Find + Write + Send + 'static,
 {
     let rows = issue::list(state.refs.as_ref(), &*state.objects())?;
-    Ok(super::layout_meta(
+    Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
-        "/issues",
+        super::Tab::Issues,
         "issues",
         html! {
             @if rows.is_empty() {
@@ -101,12 +102,13 @@ where
     let body =
         crate::asciidoc::to_html(&issue.body).unwrap_or_else(|_| html! { p { (issue.body) } });
     let return_to = format!("/issues/{id}");
-    Ok(super::layout_meta(
+    Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
-        "/issues",
+        super::Tab::Issues,
         &issue.title,
         html! {
+            (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))
             div.card {
                 dl {
                     dt { "state" } dd { span.comment-state { (issue.state) } }

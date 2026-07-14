@@ -61,7 +61,10 @@ where
         &super::identity_label(&state),
         "/redactions",
         &id,
-        body,
+        maud::html! {
+            (super::child_crumbs("redactions", "/redactions", &id))
+            (body)
+        },
     ))
 }
 
