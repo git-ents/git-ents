@@ -60,7 +60,8 @@ pair, materializing each of the effect's declared toolchains from
 effect's command inside a sandbox.
 Sandboxed execution MUST sit behind one `Executor` trait with multiple
 backends, selected only at a composition root (<<roots.local>>,
-<<roots.hosted>>), so no execution logic is duplicated per backend.
+<<roots.single-node-hosted>>, <<roots.hosted>>), so no execution logic is
+duplicated per backend.
 Host-direct execution, with no sandbox, MUST require an explicit
 `--unsandboxed` flag and MUST be available only locally, never on canonical
 hosted infrastructure.
@@ -147,7 +148,7 @@ runtime property of the machine that produced the result.
 --
 Any member MAY run any effect on their own executor and account.
 Such a member's results MUST land under the self-run namespace
-`refs/meta/results/~<member>/<effect>/<short-oid>` (<<meta-ref.inbox>>),
+`refs/meta/self/<member>/<effect>/<short-oid>` (<<meta-ref.inbox>>),
 never directly on the canonical results ref, and MUST be adoptable onto
 the canonical ref only through the same
 adoption merge as any other contribution (<<gate.adoption-merge>>,

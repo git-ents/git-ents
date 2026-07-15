@@ -1,6 +1,21 @@
 [workspace]
 resolver = "3"
-members = []
+members = [
+    "crates/kernel/ents-anchor",
+    "crates/kernel/ents-effect",
+    "crates/kernel/ents-gate",
+    "crates/kernel/ents-model",
+    "crates/kernel/ents-query",
+    "crates/kernel/ents-receive",
+    "crates/kernel/ents-sync",
+    "crates/kernel/ents-testutil",
+    "crates/cli/ents-lens",
+    "crates/cli/ents-web",
+    "crates/cli/git-ents",
+    "crates/forge/ents-forge",
+    "crates/kiln/ents-kiln",
+    "crates/substrate/gix-ref-store",
+]
 
 [workspace.package]
 edition = "2024"
@@ -12,6 +27,19 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.dependencies]
+ents-anchor = { path = "crates/kernel/ents-anchor" }
+ents-effect = { path = "crates/kernel/ents-effect" }
+ents-forge = { path = "crates/forge/ents-forge" }
+ents-gate = { path = "crates/kernel/ents-gate" }
+ents-kiln = { path = "crates/kiln/ents-kiln" }
+ents-lens = { path = "crates/cli/ents-lens" }
+ents-model = { path = "crates/kernel/ents-model" }
+ents-query = { path = "crates/kernel/ents-query" }
+ents-receive = { path = "crates/kernel/ents-receive" }
+ents-sync = { path = "crates/kernel/ents-sync" }
+ents-testutil = { path = "crates/kernel/ents-testutil" }
+ents-web = { path = "crates/cli/ents-web" }
+gix-ref-store = { path = "crates/substrate/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [
     "lang-rust",
     "lang-toml",
@@ -37,6 +65,7 @@ acdc-converters-html = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2
 acdc-converters-terminal = { git = "https://github.com/nlopes/acdc", rev = "6ae19bc2e6f0fa4254a3e9ebd1c3d2f6c7caafde" }
 askama = "0.16"
 axum = "0.8"
+cargo_metadata = "0.23"
 figue = "5.0.0-rc.5"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
 facet-pretty = "0.50.0-rc.5"
@@ -48,19 +77,25 @@ gix-actor = "0.41"
 gix-date = "0.15"
 gix-features = { version = "0.48", features = ["zlib"] }
 gix-hash = { version = "0.25", features = ["sha1"] }
+gix-lock = "23.0"
 gix-object = "0.61"
 gix-odb = "0.81"
 gix-pack = "0.71"
 iddqd = "0.4"
+lsp-server = "0.9"
+lsp-types = "0.94"
 object_store = { version = "0.14", default-features = false, features = [
     "aws",
 ] }
 maud = { version = "0.27", features = ["axum"] }
+proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 rayon = "1"
 rstest = "0.26"
 semver = "1"
+serde_json = "1"
 spdx = "0.13"
+ssh-key = { version = "0.6", features = ["ed25519"] }
 target-lexicon = "0.13"
 tempfile = "3"
 thiserror = "2"
@@ -75,7 +110,6 @@ tokio = { version = "1", features = [
 tokio-postgres = { version = "0.7", default-features = false, features = [
     "runtime",
 ] }
-uuid = { version = "1", features = ["v4"] }
 
 # These lint configurations were originally pulled from [Evan Schwartz][1].
 # [1]: https://emschwartz.me/your-clippy-config-should-be-stricter/

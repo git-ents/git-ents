@@ -1,0 +1,44 @@
+[package]
+name = "ents-web"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+acdc-converters-core = { workspace = true }
+acdc-converters-html = { workspace = true }
+acdc-parser = { workspace = true }
+arborium = { workspace = true }
+ents-anchor = { workspace = true }
+ents-effect = { workspace = true }
+ents-forge = { workspace = true }
+ents-gate = { workspace = true }
+ents-kiln = { workspace = true }
+ents-model = { workspace = true }
+ents-query = { workspace = true }
+ents-receive = { workspace = true }
+facet = { workspace = true }
+facet-git-tree = { workspace = true }
+facet-reflect = "0.50.0-rc.5"
+getrandom = { workspace = true }
+gix = { workspace = true }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
+gix-ref-store = { workspace = true }
+axum = { workspace = true }
+maud = { workspace = true }
+pulldown-cmark = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+ents-testutil = { workspace = true }
+http-body-util = "0.1"
+rstest = { workspace = true }
+tempfile = { workspace = true }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[lints]
+workspace = true

@@ -15,6 +15,15 @@ through which a meta-ref or branch ref is mutated.
 Gate evaluation (<<gate.tip-signed>> through <<gate.atomic-cas>>), effect
 matching, and enqueue MUST live inside `receive`, above its trait
 parameters, never duplicated in a caller.
+This requirement governs origination — proposing new state to a store.
+Replicating refs a trusted remote has already admitted through its own
+`receive` (<<sync.forge-transfer>>) MAY apply them directly: the source's
+gate already judged that state, so re-verification on fetch is an opt-in
+audit rather than an obligation, and the work set stays reconstructible
+by scan regardless (<<receive.reconstructible>>).
+Commits the replicating machinery authors itself — divergence and
+adoption merges (<<gate.same-actor-divergence>>, <<gate.adoption-merge>>)
+— are origination, not replication.
 --
 
 [role="requirement", id="receive.proposal-shape"]
@@ -32,6 +41,29 @@ This transport-auth evidence is a connection-level ACL input for
 `refs/heads/*` (<<gate.principled-split>>) only; gate evaluation for
 meta-ref admission MUST ignore it entirely and MUST NOT consult it in
 place of the tip invariant (<<gate.signature-artifact>>).
+No policy for that `refs/heads/*` ACL input is specified yet
+(<<gate.branch-acl-undefined>>); `receive` MUST thread the evidence
+through uninterpreted until one is.
+--
+
+[role="requirement", id="receive.multi-ref-atomicity"]
+.An Entity Declared Across Multiple Refs Writes Them as One Proposal
+--
+Some entities are declared to require more than one ref at once as part
+of their canonical shape — a review and its retention pin are the
+motivating case: two refs that MUST both exist for the review to exist
+at all.
+Creating or updating such an entity MUST carry every one of its refs'
+transitions in a single `Proposal` (<<receive.proposal-shape>>) through
+one call to `receive`, never as two or more independent proposals.
+The ref-store's atomic multi-ref compare-and-swap
+(<<arch.refstore-read-cas-split>>) then admits or refuses the whole
+batch together, so such an entity is never observable with only some of
+its refs written.
+This is distinct from the inbox/canonical relationship
+(<<meta-ref.inbox>>), where a contributor's ref and the canonical ref
+are deliberately written at different times by different actors, not as
+one unit.
 --
 
 [role="requirement", id="receive.shared-path"]
@@ -132,8 +164,15 @@ single refname glob `refs/meta/redactions/*`, mirroring
 `receive` MUST check every incoming object against the redaction list
 recorded under `refs/meta/redactions/*` at ingest time, so a redacted hole
 cannot be silently refilled by re-pushing the same bytes.
+This binds new admission only: for an object redacted after it was already
+accepted, `receive` refusing future pushes of the same bytes does not by
+itself withhold the bytes already sitting in the object store.
 A redacted object's bytes MUST be withheld from the object store and from
 every generated pack; the oid MUST remain in history as evidence.
+Guaranteeing this for bytes already stored before their redaction is not
+`receive`'s job — it belongs to whichever component actually generates
+outgoing packs, which is not yet specified for every root
+(<<roots.redaction-pack-serving>>).
 A reader resolving a redacted object MUST receive a redaction marker,
 never an error.
 --

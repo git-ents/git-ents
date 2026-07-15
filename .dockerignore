@@ -1,2 +1,6 @@
-fly.toml
-.git/
+# The Dockerfile only ever COPYs docker/*; ignore everything else so the
+# build context stays a few KB instead of the whole workspace (including
+# target/, which alone can run into the tens of GB).
+*
+!docker/
+!docker/**

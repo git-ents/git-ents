@@ -25,7 +25,7 @@ Writes stay conflict-free; reads aggregate refs into views.
 Two namespaces are consequences of the granularity rule plus the gate (5):
 
 * `refs/meta/inbox/*` — entities authored by someone not authorized for a canonical ref, awaiting adoption.
-* `refs/meta/results/~<member>/*` — results produced by a member's own executor rather than a designated worker.
+* `refs/meta/self/<member>/*` — results produced by a member's own executor rather than a designated worker.
 
 Both hold the same typed trees as their canonical counterparts; only the refname rule differs.
 
@@ -38,9 +38,8 @@ Changing a struct is a storage migration, not a refactor — and a migration is 
 History keeps the old encoding as archive.
 Trees stay pure struct representations — no version marker entry.
 
-Ref-level metadata that is not entity content belongs in commit-message trailers, because the commit is already the storage unit.
-Two trailers are reserved: `Schema-Version:` for explicit encoding detection if it is ever needed, and `Ents-Ref:` for refname binding (see 4).
-Versioning or binding in the tree would pollute both the schema and the merge path.
+Ref-level metadata that is not entity content — who, when, the signature — lives in the commit header, because the commit is already the storage unit; no reserved trailer exists.
+Refname binding needs no stored metadata at all: the refname is a total function of signed content, recomputed at verification (see 4).
 
 *Tip invariant:* the tip of a meta-ref is always readable by the binary that owns the entity type; a non-owning binary treats the tree as opaque and degrades to generic display (`git store show`); history is archival.
 (Redacted entries are the one qualification: readers surface a withheld object as a redaction marker, never an error — see Derived.)
@@ -67,7 +66,7 @@ Push certificates are demoted to transport concerns; they carry no meta-ref sema
 A commit signature proves authorship; it does not prove placement.
 The difference is recovered explicitly:
 
-* *Refname binding* — an `Ents-Ref:` trailer names the ref the commit was authored for, checked at verification; without it, a signed commit could be replayed as the tip of a different meta-ref.
+* *Refname binding* — the refname is recomputed from the commit's own signed content (a genesis oid, a natural-key tree field, a composite of fields and signer) and a mismatch refuses; without this, a signed commit could be replayed as the tip of a different meta-ref.
 * *Anti-replay* — meta-refs advance fast-forward-only in the DAG sense (the new tip descends from the old), enforced by atomic CAS on the ref store; the parent hash is the freshness binding, so no nonce is needed.
 
 *Tip invariant:* the tip of a meta-ref is signed by a member authorized for that refname.
@@ -91,7 +90,7 @@ Verification is a pure function over ref-store reads:
 
 [arabic]
 . The new tip is signed by a member authorized for this refname.
-. The `Ents-Ref:` trailer matches the refname.
+. The refname recomputes from the tip's signed content.
 . The new tip descends from the old tip.
 . The update commits via atomic CAS.
 
@@ -172,7 +171,7 @@ Host-direct exists only behind an explicit `--unsandboxed`.
 
 *Identity discipline:* the runner is a member, not an ambient authority.
 A result signature proves who pushed the result, not that the run was faithful; official results are official because canonical results refs are writable only by designated worker keys — a refname rule, not a runtime property.
-Any member may run any effect on their own executor and account; their results land in `refs/meta/results/~<member>/*` or the inbox, adoptable by merge like everything else, with the trust decision explicit in the adoption.
+Any member may run any effect on their own executor and account; their results land in `refs/meta/self/<member>/*` or the inbox, adoptable by merge like everything else, with the trust decision explicit in the adoption.
 Anyone can run CI; nobody can impersonate the verdict.
 
 *Where the line holds:* no content predicates beyond `results(…, status)`, no time atoms, no external-event atoms.
@@ -230,6 +229,35 @@ Config selects trait impls at the root and never leaks past it; core code readin
 
 Store and executor are orthogonal axes, so the matrix has quadrants nobody designs: local store plus Sprite executor is `git effect run --executor sprite` with your own Fly token, and it works because everything the run needs is repo data.
 The honesty test for the seams: a third root — say single-node self-hosting on SQLite, local fs, and Docker — must be constructible without touching the library.
+
+'''''
+
+== Layering (consequence of the abstractions)
+
+The crate graph is four layers, each depending only on the layer(s) before it: substrate, kernel, package, CLI.
+Dependencies point one way; a lower layer never depends on a higher one, checked mechanically (`layering.rs`, run in CI alongside every other test).
+
+* *Substrate* — `gix-ref-store`: the pluggable `RefStore` seam gitoxide itself does not provide.
+Extends git, not the forge; carries the `gix-` prefix per the Composition section's own rule.
+* *Kernel* — `ents-model`, `ents-anchor`, `ents-gate`, `ents-effect`, `ents-query`, `ents-receive`, `ents-sync`, `ents-testutil`.
+Owns mechanism: typed ref-store access and refs/meta layout primitives, signing and authorship, the entity envelope (typed trees, id assignment), gate execution and composition semantics, effect dispatch, adoption/inbox mechanics, yank, sync/receive plumbing, hooks.
+The kernel is declarative and generic — it defines *how* any entity is stored, verified, and run, never *which* entities exist.
+* *Package* — `ents-forge` (issues, comments, review/release/check types as they land), `ents-kiln` (toolchains).
+Owns types and policy: the domain entity structs, and any package-specific gate or effect definitions.
+A package depends on kernel crates freely, and on other packages never — `ents-forge` and `ents-kiln` do not depend on each other.
+* *CLI* — the leaf layer, two sibling occupants: `git-ents` and `ents-web`, the composition roots and their direct consumers.
+`git-ents` depends on the kernel directly (for kernel-owned commands: `setup`, `members`, `account`, `effect`, `inbox`, `redact`, `hook`) and on every installed package (for `comment`, from `ents-forge`; `toolchain`, from `ents-kiln`).
+Mounts each package's subcommand grammar through one convention (`crate::package::Package`, in `git-ents`): a package owns its own figue action enum, defined in its own crate, and the CLI's top-level subcommand enum references that type directly — a compile-time pairing, not a runtime plugin registry, because the argument grammar is resolved from a `#[derive(Facet)]` shape at compile time, with nothing to register dynamically.
+`ents-web` (phase 7) is a second leaf, not a third layer: it depends on kernel crates and, for v1, directly on `ents-forge` and `ents-kiln` too, hardcoding a custom page per package where one is genuinely needed (a toolchain's recipe provenance, a comment's anchor projection) — legitimate for a leaf consumer exactly as `git-ents`'s own package-specific subcommands are, not a layering violation.
+The one rule that binds inside `ents-web` itself is narrower than the crate-level layering rule: its *generic* rendering path — the schema-driven list/view mechanism driven by `facet::Shape` reflection, the UI analog of the gate executor — must never match on which concrete entity type it was handed.
+A generic-path need to know a concrete type is a missing generic capability to add to that mechanism, or grounds for a legitimate custom page; it is never grounds for a `match` inside the generic renderer.
+`git-ents` depends on `ents-web` (for its `serve` subcommand), the one edge between the two leaves; `ents-web` never depends back on `git-ents`.
+
+The one-way rule is absolute, not just directional-on-average: a kernel crate must not depend on a package crate in any form — not a normal dependency, not a dev-dependency, not a build-dependency, not behind a feature flag.
+`ents-testutil` in particular must not know a package's types; a package needing test fixtures beyond the kernel's generic ones adds them inside its own crate, not by teaching `ents-testutil` its vocabulary.
+
+Ref-namespace segments (`refs/meta/issues/*`, `refs/meta/comments/*`, `refs/meta/toolchains/*`, and so on) stay kernel-reserved regardless of which layer owns the entity stored there: every namespace is minted by one function in `ents_model::namespace`, and a package calls that function rather than inventing its own ref layout.
+This is what keeps `meta-ref.granularity` and `meta-ref.namespace` a single, auditable surface even as entity types move between crates — a package can gain or lose ownership of a type without the ref layout itself ever needing to change.
 
 '''''
 

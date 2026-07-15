@@ -1,0 +1,13 @@
+= Ideas
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[NOTE]
+This document, unlike other documents in this (highly experimental) repository at this time, is entirely written by humans.
+
+. REST API from Facet types --> `progenitor` --> OpenAPI --> custom clients for Git and forge.
+. Anchors can provide read-only targets for watching.
+  Imagine a `trustfall` query which presupposes a specific anchor at a specific commit.
+  The forge could support an endpoint that asks _given this anchor, return if the code has changed since_.
+  This could be a new form of verification, and it doesn't go against the spirit of `git-ents` because the information still is sourced from Git.
+. We can automatically vendor open-source references from common lock files, and cache them for speed.
+.

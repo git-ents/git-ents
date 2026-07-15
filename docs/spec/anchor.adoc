@@ -72,3 +72,22 @@ outcomes, recovered approximately rather than exactly.
 An outdated or deleted projection MUST NOT lose the anchor: the original
 anchor remains displayable.
 --
+
+[role="requirement", id="anchor.working-tree"]
+.The Working Tree Is a Source and a Target
+--
+Capturing an anchor MUST support the working tree as its source: the
+file's current on-disk bytes are written to the object database as a
+blob and embedded per <<anchor.retention>>, so an anchor to uncommitted
+content survives that content being committed, amended, or discarded.
+Such an anchor MUST record `HEAD`'s commit in its commit field — the
+same best-effort, never-load-bearing data field <<anchor.immutable>>
+already makes it.
+Projection MUST support the working tree as its target, diffing the
+anchored blob against the path's current on-disk bytes — or against a
+caller-supplied buffer standing in for them (<<lens.working-tree>>) —
+and reporting the same four outcomes as <<anchor.projection>>.
+A working-tree projection MAY degrade rename following to the context
+fallback (<<anchor.fuzzy-fallback>>): there is no commit on the target
+side to diff trees against.
+--

@@ -67,17 +67,19 @@ mutated; see `anchor.adoc`.
 
 Every meta-ref mutation is an author-signed commit whose signature
 replicates with the repository and verifies offline in any clone.
-A signature proves authorship, not placement, so an `Ents-Ref:` trailer
-binds the commit to the ref it was authored for, and adopting someone
-else's commit onto a canonical ref is always a merge, never a
+A signature proves authorship, not placement, so the refname is bound by
+recomputation from the commit's own signed content — a genesis oid, a
+natural-key tree field, a composite of fields and signer — and adopting
+someone else's commit onto a canonical ref is always a merge, never a
 cherry-pick, so the author's signature survives intact in ancestry.
 
 === 5. Gate
 
 Verification is a pure function over ref-store reads — is the new tip
-signed by a member authorized for this refname, does its `Ents-Ref:`
-trailer match, does it descend from the old tip, does the update commit
-via atomic CAS — evaluated identically at three call sites: hosted CAS
+signed by a member authorized for this refname, does the refname
+recompute from its signed content, does it descend from the old tip,
+does the update commit via atomic CAS — evaluated identically at three
+call sites: hosted CAS
 (mandatory, failure aborts the write), local UI verdict (advisory), and
 push pre-flight (advisory).
 
@@ -154,12 +156,18 @@ implementation.
 
 | `ents-web`
 | The local and hosted web UI.
-| `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`
+| `ents-receive`, `ents-model`, `ents-anchor`, `ents-query`, `ents-forge`,
+`ents-kiln`
+
+| `ents-lens`
+| The editor surface: comments projected over open buffers as a language
+server.
+| `ents-receive`, `ents-model`, `ents-anchor`, `ents-forge`
 
 | `git-ents` (bin)
 | Local composition root.
-| `ents-receive`, `ents-effect`, `ents-web`, `ents-anchor`, `ents-sync`,
-`gix-ref-store`
+| `ents-receive`, `ents-effect`, `ents-web`, `ents-lens`, `ents-anchor`,
+`ents-sync`, `gix-ref-store`
 
 | `git-ents-server` (bin)
 | Hosted composition root.

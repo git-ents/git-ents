@@ -150,7 +150,7 @@ Enrollment is repository state; there is no user database beside the repo.
 Revocation is a state, never a deletion — deleting the entity would merely make their old signatures unverifiable, which is the opposite of what an audit needs.
 
 *I want to verify that nobody tampered with forge state.*
-Every meta-ref tip must be signed by a member authorized for that refname, bound to the ref by an `Ents-Ref:` trailer, descending from the previous tip.
+Every meta-ref tip must be signed by a member authorized for that refname, bound to the ref by recomputing the refname from the tip's own signed content, descending from the previous tip.
 `git ents members check` verifies this from any clone, with no server's cooperation.
 
 *I want to know who did what, and when.*
@@ -178,7 +178,7 @@ Their merge satisfies the tip invariant; your signature survives intact in ances
 Cherry-pick is forbidden as an adoption verb because it would destroy the signature it is meant to honor.
 
 *I want to prove my patch passes CI, without any access.*
-Run the project's real effects on your own executor; results land in your namespace (`refs/meta/results/~you/*`), signed by you, shareable and verifiable.
+Run the project's real effects on your own executor; results land in your namespace (`refs/meta/self/you/*`), signed by you, shareable and verifiable.
 A maintainer can adopt them, with the trust decision explicit in the adoption merge.
 
 *I want to know why this feels like the old email-patch workflow.*

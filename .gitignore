@@ -1,6 +1,5 @@
+.DS_Store
 target/
-.claude/
-PROMPT.md
-*.html
-# Askama view templates are source, not generated HTML output.
-!crates/git-ents-server/templates/*.html
+# Materialized from refs/meta/releases/<sha> just before `docker build`;
+# never a normal tracked file.
+docker/bin/

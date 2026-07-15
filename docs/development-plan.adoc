@@ -87,7 +87,8 @@ the coverage dashboard is a later call.
 | sonnet
 | Entity structs, namespaces, trailers, taxonomy — declarative, but it is
   the vocabulary every crate imports, so spec fidelity and the public API
-  review matter more than the code. Absorbs git-metadata's trailer work.
+  review matter more than the code. Trailer parsing is new work, not a
+  port: no `git-metadata` crate exists at `pre-redo`.
 
 | `ents-gate`
 | 3
@@ -152,22 +153,42 @@ the coverage dashboard is a later call.
 | Local root wiring (~50 lines) plus the real cost: subcommand surface
   and the `denyCurrentBranch=updateInstead` worktree edge. Headless — no
   `serve` subcommand yet (arrives Phase 7 with `ents-web`). Doubles as
-  the single-node hosted root: loose refs and a real odb on a Fly volume,
-  served behind git's own `receive-pack` — the same stock-git transport
-  Phase 0 bootstraps, now invoking `receive()` from a hook — with an
-  in-memory `EventSink` and a boot-time reconciliation scan, and the
-  Sprite executor, deployed at `git.ents.cloud`. Milestone: CLI-complete.
+  the single-node hosted root (`roots.single-node-hosted`): loose refs
+  and a real odb on a Fly volume, served behind git's own `receive-pack`
+  — the same stock-git transport Phase 0 bootstraps, now invoking the
+  gate from a hook — with an in-memory `EventSink` and a boot-time
+  reconciliation scan, and the Sprite executor, deployed at
+  `git.ents.cloud`. Milestone: CLI-complete. Two gaps ship unclosed,
+  neither assigned a phase: no porcelain command or root bootstrap sets
+  `refs/meta/config`'s verification epoch, so the hosted root's Mandatory
+  gate stays archival until one is designed (`gate.epoch-bootstrap`); and
+  `meta-ref.tip-invariant`'s generic escape-hatch display for an
+  unrecognized meta-ref, and anchor resolution, have no command anywhere
+  in this binary, despite `ents-model` (phase 2) forward-referencing them
+  to "the `git-ents` binary" by name.
 
 | `ents-web`
 | 7
 | Medium
 | sonnet
-| Broad surface, low algorithmic depth. Lands `serve` in `git-ents`,
-  turning the single-node hosted root into a hosted web UI with
-  sessions/CSRF (`roots.web-session`). Signing identity is injected by
-  the composition root; the crate assumes nothing about network
+| Broad surface, low algorithmic depth. Lands `serve` in `git-ents`
+  (`roots.local`): the local root's own wiring, plus sessions/CSRF
+  (`roots.web-session`) and signed mutations (`roots.web-signing`)
+  layered on top, the user's own key standing in for whichever identity
+  a composition root injects. Signing identity is injected by the
+  composition root; the crate assumes nothing about network
   reachability, so in-process webview embedding stays a supported
-  deployment (`roots.web-agnostic`).
+  deployment (`roots.web-agnostic`). Gap this phase does not close, not
+  assigned to any later phase either: no composition root actually wires
+  `ents-web` onto a hosted root — not the single-node hosted root this
+  binary already doubles as, deployed at `git.ents.cloud` since Phase 6,
+  and not `git-ents-server` (phase 8, whose own row below merely reuses
+  this phase's sessions/CSRF code, never mounts the web UI).
+  `roots.web-signing`'s server-key indirection is proven only
+  against fixture identities in this crate's own tests; "turning the
+  single-node hosted root into a hosted web UI," which an earlier
+  version of this row asserted as delivered, describes the crate's
+  capability, not a running deployment.
 
 | `gix-receive`
 | 8
@@ -192,6 +213,91 @@ the coverage dashboard is a later call.
   date. Reuses the Sprite executor and sessions/CSRF from `git-ents`;
   salvage the store code and gix-receive framing from the scale-out work
   at `pre-redo`.
+
+| `ents-forge` conversations
+| 9
+| Medium
+| fable
+| Comments become the universal conversational primitive (`model.comment`
+  broadened, `model.comment-state`, `model.comment-context`,
+  `model.comment-thread`, `model.review`): the Comment struct broadens as
+  a clean break (experimental repo, no on-disk data to preserve, so no
+  back-compat reader), working-tree capture and projection in
+  `ents-anchor` (`anchor.working-tree`), the
+  Review entity plus its retention pin ref (`model.review-pin` —
+  `refs/meta/pins/reviews/<target>/<member>`, an empty-tree signed commit whose
+  parents include the reviewed commit; verify the gate's tip-signed and
+  fast-forward checks accept the merge-shaped pin advance), and
+  porcelain — `comment reply/resolve/reopen`,
+  `comment list --worktree` with a machine-readable form (`lens.parity`),
+  `issue` and `review` actions.
+
+| `ents-lens`
+| 9
+| High
+| opus
+| The LSP frontend (`lens.adoc`, all rules): `git ents lsp` reusing the
+  local root's wiring the way `serve` does, code lenses + hint
+  diagnostics + hover derived per-request from anchor projection onto
+  the working tree, and the editor-file compose flow. No network, no
+  state of its own.
+
+| `ents-zed` (extension)
+| 9
+| Low
+| sonnet
+| Zed extension at `editors/zed`, outside the workspace (wasm target):
+  registers the `ents-lsp` language server running `git ents lsp`.
+  Verify current Zed LSP capability coverage against the real
+  `zed_extension_api` — `lens.diagnostics` exists precisely so a client
+  without code-lens rendering still shows the conversation.
+
+| `ents-web` conversations
+| 9
+| Medium
+| opus
+| Issues index and detail with threads as context queries
+  (`model.comment-context`), review creation and verdict display on
+  commit pages (`model.review`), reply/resolve on the existing comment
+  views. Reuses the registry-driven meta rail and session/CSRF machinery
+  already in place.
+
+| kernel identity binding (`ents-model`, `ents-gate`, `ents-receive`,
+  `ents-sync`, `ents-effect`, `ents-testutil`)
+| 10
+| High
+| fable
+| One atomic migration — the kernel cannot build half-converted. Retire
+  `trailer.rs` (`Advance-ref` and the never-used `Schema-Version`) in
+  favor of `meta-ref.identity-binding`: the gate recomputes each refname
+  from signed content — the parentless-roots walk for hash-identified
+  namespaces (never applied to pins, whose ancestry reaches code
+  history), natural-key tree fields (`Member` and `Effect` gain their
+  name field), composite review segments, and result trees gaining
+  effect + target (`model.result-identity`, closing a result-forgery
+  replay). Strict genesis decode for the gate's own types (a result)
+  plus the pairwise schema-disjointness test across every genesis-borne
+  struct; `gate.owner-mutation`; `propose_*` grows the sign-then-name
+  genesis flow (the ref named from the signed commit's own oid — no
+  circularity, since no commit names its own ref anymore). Two gaps ship
+  unclosed, neither assigned a phase: a comment or an issue's type lives
+  outside the gate's own crate, so strict decode never runs for those
+  namespaces (`gate.non-kernel-strict-decode`); and the binding's
+  redaction-vouching clause has no implementation
+  (`gate.redaction-vouching-undefined`).
+
+| forge and surface identity migration (`ents-forge`, `git-ents`,
+  `ents-web`, `ents-lens`, skills)
+| 10
+| Medium
+| sonnet
+| `uuid` leaves the workspace: comment and issue ids are genesis commit
+  oids, reviews move to the composite `reviews/<target>/<member>` key
+  with re-review's fast-forward advance now a reachable CLI path; the
+  CLI's plain display and the web UI abbreviate ids the way git
+  abbreviates oids, while the `--porcelain` and lens machine-readable
+  forms keep the full id (`lens.parity`); lens and agent skills updated
+  for the id format.
 |===
 
 == Phase gates
@@ -211,13 +317,55 @@ the coverage dashboard is a later call.
 * *Phase 6 exit*: the CLI-complete milestone — every porcelain command
   green against the single-node hosted root; the boot-time
   reconciliation scan regenerates obligations correctly after a
-  `kill -9` of the in-memory queue.
+  `kill -9` of the in-memory queue. The two gaps this row's own notes
+  name (`gate.epoch-bootstrap`; `meta-ref.tip-invariant`'s missing
+  reader surface) are known exceptions, not silent ones.
+* *Phase 7 exit*: `git ents serve` (`roots.local`) is loopback-only with
+  no smart-HTTP surface added, drives every state-changing route through
+  a per-session CSRF check (`roots.web-session`), and signs mutations
+  through an identity the composition root injects, never one this
+  crate resolves itself (`roots.web-signing`, `roots.web-agnostic`); the
+  same router is provably reachable with no bound socket, driven
+  in-process via `tower::ServiceExt::oneshot`. This row's own gap is a
+  known exception, not a silent one: no hosted deployment (`git.ents.cloud`
+  or `git-ents-server`) actually mounts this web UI yet, so
+  `roots.web-signing`'s server-key half stays proven only against
+  fixture identities until some later phase's composition root wires it.
 * *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
   Postgres/Tigris/durable-queue root, now served by `gix-receive` in
   place of git's own `receive-pack`, is wired as a new composition root
   with zero library-crate modification; `gix-receive` round-trips a push
   from stock git, and a diff of library-crate contents between phase
   entry and phase exit MUST be empty.
+* *Phase 9 exit*: the comment loop — a comment composed through the
+  lens's editor-file flow against a dirty working tree
+  (`lens.compose`, `anchor.working-tree`) is listed open by the
+  machine-readable `git ents comment list --worktree` form
+  (`lens.parity`), resolved through the CLI (`model.comment-state`),
+  and gone from the lens's next publish; an issue and a review each
+  round-trip CLI ↔ web with their threads rendered as context queries
+  (`model.comment-context`, `model.review`). This being an experimental
+  repository with no on-disk data to preserve, a struct change is a
+  clean break: entities read only as their current shape, and no
+  back-compat reader is kept — `meta-ref.migration`'s forward rewrite
+  applies whenever data actually needs carrying, not a permanent legacy
+  code path.
+* *Phase 10 exit*: identity is derivation — no minted id and no binding
+  trailer exists anywhere in the workspace. The doppelgänger replay (a
+  signed mutation commit proposed as the genesis of a new entity) and
+  the result replay (a signed `pass` proposed for a different effect or
+  commit) are refused by tests driving `receive`
+  (`gate.identity-binding`, `model.result-identity`); entity structs
+  prove pairwise disjoint under strict decode; a comment created,
+  replied to, and resolved, and a commit reviewed then re-reviewed
+  (the pin advancing fast-forward), round-trip through CLI and web
+  under genesis-oid and composite ids (`model.comment`,
+  `model.review`). Same clean-break rule as phase 9: no legacy reader,
+  ids regenerate with the data. The two gaps this row's own notes name
+  (`gate.non-kernel-strict-decode`; `gate.redaction-vouching-undefined`)
+  are known exceptions, not silent ones: a comment or issue genesis is
+  not yet refused from double-admission across namespaces, and the
+  binding's redaction-vouching clause is unimplemented.
 
 Backend conformance tests are shared suites written once against each
 trait (`RefStore`, `EventSink`, `Executor`) and run per implementation —

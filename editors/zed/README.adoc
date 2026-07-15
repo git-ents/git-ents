@@ -1,0 +1,24 @@
+= `ents` for Zed
+
+A Zed extension that projects git-ents comments into the editor.
+It registers a language server named `ents-lsp` whose command is `git ents lsp`, resolved from `$PATH`.
+The extension does no downloading and bundles no binary: it is a thin registration over a command the user's `git-ents` install already provides.
+`git ents lsp` speaks the Language Server Protocol over stdio and reuses the local composition root's wiring, so a comment left through Zed, the web UI, or the CLI is one and the same entity (see `docs/spec/lens.adoc`).
+
+== Requirements
+
+`git ents lsp` must be on `$PATH`, meaning a `git-ents` build recent enough to provide the `lsp` subcommand.
+This extension does not check for or install it; if `git` cannot resolve `ents lsp`, the language server simply fails to start and Zed reports that in its language server logs.
+
+== Installing as a dev extension
+
+. Open Zed's command palette and run `zed: install dev extension`.
+. Pick this directory, `editors/zed`, from the file picker.
+. Zed compiles the extension to WebAssembly and loads it; no restart is required.
+
+== What Zed renders today
+
+The lens server publishes four kinds of surfaces (`docs/spec/lens.adoc`): code lenses, hint-severity diagnostics, hover content, and a code action that composes a new comment.
+Current Zed (1.1.5 and later) renders all four, but code lenses are opt-in: they are disabled by default and only appear once the user enables `"code_lens": "on"` in settings, or toggles them on with the `editor: toggle code lens` action.
+Diagnostics, hover, and code actions are all rendered unconditionally by Zed's built-in LSP client, with no extension-specific work required beyond registering the server.
+This is exactly why `lens.diagnostics` exists as its own requirement: a client that never enables code lenses, or an older Zed that predates them, still surfaces every comment as an inline hint diagnostic.

@@ -5,15 +5,12 @@
 # backend) race and flake when several test binaries hit the Docker daemon
 # at once at default parallelism. Serialize exactly those tests through
 # one test group; everything else keeps full parallelism.
+#
+# The `docker` group and its filter are reinstated as the crates that need
+# it (refstore-postgres, effect-dispatcher, git-ents-server, git-effect)
+# land in their own phases; none exist yet in the post-redo workspace, and
+# a filter naming an absent package is a hard nextest config error, not a
+# no-op.
 
 [test-groups]
 docker = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = '''
-package(refstore-postgres)
-| package(effect-dispatcher)
-| (package(git-ents-server) & binary(hydrate))
-| (package(git-effect) & test(docker_backend_runs_a_trivial_effect))
-'''
-test-group = "docker"

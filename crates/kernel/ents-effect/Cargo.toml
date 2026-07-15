@@ -1,0 +1,36 @@
+[package]
+name = "ents-effect"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Neither backend needs an extra crate dependency — both shell out to an
+# already-installed CLI (`docker`, `sprite`), the same pattern `pre-redo`
+# used and this phase ports. The features exist so a composition root pulls
+# in only the backend(s) it deploys (`roots.local`: Docker only;
+# `roots.hosted`: Sprite only), never both in one binary by accident.
+docker = []
+sprite = []
+
+[dependencies]
+ents-model = { workspace = true }
+ents-query = { workspace = true }
+ents-receive = { workspace = true }
+facet-git-tree = { workspace = true }
+gix = { workspace = true }
+gix-hash = { workspace = true }
+gix-object = { workspace = true }
+gix-ref-store = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ents-gate = { workspace = true }
+ents-testutil = { workspace = true }
+facet = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

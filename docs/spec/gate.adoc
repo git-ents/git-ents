@@ -13,17 +13,103 @@ or machine, is admitted or refused by this same function (see
 .Tip Signature
 --
 The new tip of a meta-ref MUST be signed by a member authorized for that
-refname.
-This is checkable after the fact by anyone with a clone, not only by
-whoever ran the server.
+refname, judged against the member entity in force at acceptance time —
+the member ref's tip in the same snapshot the gate reads
+(<<model.member-revocation>>).
+Anyone with a clone can run the same judgment against the same snapshot,
+not only whoever ran the server; reconstructing what a past acceptance
+saw is an audit function over the deployment's out-of-scope op log, not
+a gate path.
 --
 
-[role="requirement", id="gate.refname-binding"]
-.Refname Binding
+[role="requirement", id="gate.identity-binding"]
+.Identity Binding
 --
-The commit's `Ents-Ref:` trailer MUST match the refname being updated.
+The refname being updated MUST be recomputable from the proposed tip's
+signed content, per namespace exactly as <<meta-ref.identity-binding>>
+tabulates; a mismatch MUST refuse.
 Without this check a signed commit could be replayed as the tip of a
-different meta-ref than the one its author signed for.
+different meta-ref than the one its author created it for — including
+a signed pass replayed as the result of a different effect or commit,
+which is why a result's effect and target are tree fields
+(<<model.result-identity>>).
+The creation of a hash-identified entity whose type the gate crate
+itself owns MUST strictly decode as that type, an unknown tree entry
+refusing; the gate-owned entity structs MUST stay pairwise disjoint
+under this decode, a property held by test rather than by a stored
+marker (<<meta-ref.typed-tree>>).
+A hash-identified entity whose type lives outside the gate's own crate
+(a comment, an issue) binds by genesis oid and the all-roots walk
+alone (<<meta-ref.identity-binding>>): the gate cannot strictly decode
+a type it does not depend on, so the same signed genesis commit is not
+yet refused from being admitted a second time under a different such
+namespace (<<gate.non-kernel-strict-decode>>).
+When an object the binding needs is withheld by redaction, the binding
+MUST be vouched by the admin-signed redaction record instead of
+recomputed, and a redacted object MUST NOT be re-admitted
+(<<receive.redaction-ingest>>, <<model.redaction>>); this vouching has
+no implementation yet (<<gate.redaction-vouching-undefined>>).
+--
+
+[role="requirement", id="gate.owner-mutation"]
+.Ownership Keys Mutation
+--
+Advancing a hash-identified entity's ref MUST be authorized only for
+the member whose signature its genesis carries — ownership intrinsic
+to the id, which is the genesis commit's oid — or for an
+admin-registered member; a review ref MUST advance only under the
+signature of the member its refname names (<<model.review>>).
+Creation stays provenance-keyed exactly as <<model.member-provenance>>
+routes it: a self-attested member creates and mutates through its own
+inbox, adopted onto the canonical ref by merge
+(<<gate.adoption-merge>>), which satisfies the parentless-roots walk
+because the contributor's genesis remains the history's sole root.
+--
+
+=== Identity Binding Gaps
+
+[role="requirement", id="gate.non-kernel-strict-decode"]
+.Non-Kernel Hash-Identified Types Have No Strict-Decode Enforcement (Deferred)
+--
+<<gate.identity-binding>>'s strict-decode refusal only runs for a
+hash-identified entity whose Rust type the gate crate itself owns
+(today, a result); a comment or an issue's type lives in a higher-layer
+crate the gate MUST NOT depend on, so the gate's binding for those
+namespaces checks only the genesis oid and the all-roots walk, never
+the tree's shape.
+The workspace-level pairwise-disjointness test (<<meta-ref.typed-tree>>)
+proves the *types* cannot both decode one tree; it does not by itself
+stop the *gate* from admitting the identical signed genesis commit as
+the tip of two different such namespaces (for example
+`refs/meta/comments/<oid>` and `refs/meta/issues/<oid>`), since neither
+admission path ever calls either type's decoder.
+Closing this gap needs either a decoder a non-kernel crate can register
+with the gate, or moving strict decode to a layer that already depends
+on every entity type (`receive` or above); this is chosen direction,
+not yet designed, the same acknowledged-gap shape as <<gate.bootstrap>>.
+--
+
+[role="requirement", id="gate.redaction-vouching-undefined"]
+.Redaction Vouching for the Binding Has No Implementation (Deferred)
+--
+<<gate.identity-binding>> requires that when an object the binding
+needs has been redacted, the gate vouch by the admin-signed redaction
+record rather than fail trying to re-read withheld bytes.
+No such check exists: the gate treats a redacted (missing) object the
+same as any other unreadable one — for a walk like the all-roots
+reachability check this ends that path early rather than consulting
+`refs/meta/redactions/*`, and for a required tree-entry read it
+surfaces as an evaluation error the mandatory call site MUST block on
+(<<gate.mandatory-hosted>>), not the vouched pass-through the
+requirement describes.
+`receive.redaction-ingest`'s refusal to re-admit already-redacted bytes
+is a different guarantee — it stops refilling a yanked object at
+ingest — and does not give the gate a way to keep verifying later,
+unrelated mutations on a ref whose history happens to reach a redacted
+object.
+Which component consults the redaction list on the gate's behalf, and
+how, is chosen direction, not yet designed, the same acknowledged-gap
+shape as <<gate.bootstrap>>.
 --
 
 [role="requirement", id="gate.fast-forward"]
@@ -45,8 +131,12 @@ read in <<gate.fast-forward>>.
 .Signature as Repository Data
 --
 A commit signature MUST be treated as a data artifact, not a transport
-artifact: it replicates with the repository and MUST verify offline in
-every clone, so verification evidence is itself repository state.
+artifact: it replicates with the repository and MUST verify
+cryptographically offline in every clone, so the signature evidence is
+itself repository state.
+Whether the signing key was authorized is a property of the snapshot the
+gate reads (<<gate.policy-as-state>>, <<model.member-revocation>>), not
+of the signature bytes.
 A push certificate carries no meta-ref semantics; it MUST NOT be consulted
 by the gate.
 --
@@ -115,9 +205,23 @@ Every advisory call site (<<gate.advisory-local>>, <<sync.pre-flight>>)
 MUST render this reason to the user — for example, "your signing key is
 not authorized for `refs/heads/main`" — so a negative verdict is
 actionable before a push is ever attempted.
+This guarantee is scoped to `refs/meta/*`: the enumerated requirements
+never fire against `refs/heads/*` (<<gate.principled-split>>), whose own
+authorization mechanism is not yet specified
+(<<gate.branch-acl-undefined>>), so the illustrative refname above is
+aspirational until that mechanism exists.
 --
 
 === Adoption
+
+The requirements below are consequences the gate enforces by judging only
+the tip plus DAG descent (this file's own introduction: verification is a
+pure function over ref-store reads). The prohibition on cherry-picking as
+an adoption mechanism is not among them: a cherry-picked commit, signed
+by the authorized member placing it, satisfies <<gate.tip-signed>> exactly as
+a hand-authored commit would, so no function over the resulting ref state
+can tell the two apart. That prohibition binds the adoption tooling
+instead — <<sync.adoption-no-cherry-pick>>.
 
 [role="requirement", id="gate.adoption-merge"]
 .Adoption Is a Merge
@@ -128,14 +232,6 @@ merging the contributor's signed commit onto the canonical ref, even when
 the merge is trivial.
 The merge commit satisfies the tip invariant; the contributor's signed
 commit remains in ancestry with attribution intact.
---
-
-[role="requirement", id="gate.adoption-no-cherry-pick"]
-.Cherry-Pick Forbidden as Adoption
---
-Cherry-picking a contributor's commit MUST NOT be used as an adoption
-mechanism: it creates a new commit object and destroys the original
-author's signature.
 --
 
 [role="requirement", id="gate.adoption-no-fast-forward"]
@@ -168,6 +264,25 @@ so branch refs MUST keep transport-level authorization instead of the tip
 invariant.
 --
 
+[role="requirement", id="gate.branch-acl-undefined"]
+.Branch-Ref Transport Authorization Is Unspecified (Deferred)
+--
+<<gate.principled-split>> requires `refs/heads/*` to keep transport-level
+authorization instead of the tip invariant, but no document in this spec
+defines that mechanism: what evidence it consults, where its policy lives,
+or how a verdict is derived from it.
+`receive.proposal-shape`'s connection-level ACL input for `refs/heads/*`
+MUST therefore be threaded through uninterpreted — never substituted for
+the tip invariant on a `refs/meta/*` update, which remains fully specified
+— until a future spec addition defines this policy.
+No advisory call site (<<gate.advisory-local>>, <<sync.pre-flight>>) MAY
+render a `refs/heads/*` verdict in the meantime; the illustrative
+verdict-reason examples in this file and `roots.adoc` describe tip-invariant
+predictions against meta-refs only.
+This direction is chosen but not yet designed, the same acknowledged gap
+as <<gate.bootstrap>>.
+--
+
 === Bootstrap
 
 [role="requirement", id="gate.bootstrap"]
@@ -179,4 +294,22 @@ A member set that exists but whose keys are all revoked MUST fail
 closed: revoking every key MUST NOT reopen this self-admitting window.
 Closing "first push owns the repo" beyond this bootstrap admission is a
 hosted-deployment concern, deferred to <<roots.bootstrap>>.
+--
+
+[role="requirement", id="gate.epoch-bootstrap"]
+.Epoch Establishment Has No Assigned Trigger (Deferred)
+--
+<<gate.epoch>> defines what the epoch-setting commit to `refs/meta/config`
+must be, but no composition root or porcelain command is specified to
+produce one.
+A Mandatory-mode root (<<gate.mandatory-hosted>>, <<roots.single-node-hosted>>,
+<<roots.hosted>>) that never receives that commit runs with verification
+permanently off: every `refs/meta/*` push stays archival, indistinguishable
+from pre-epoch history, and the "abort before any ref is updated" guarantee
+never actually engages.
+A root establishing its own epoch as part of first boot — before any
+member exists to author a porcelain command — is the likely shape,
+mirroring this section's own self-admitting first enrollment, but this is
+chosen direction, not yet designed or enforced, the same acknowledged gap
+as <<gate.bootstrap>>.
 --

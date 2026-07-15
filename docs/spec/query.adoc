@@ -39,10 +39,20 @@ own syntax is defined by <<query.rev>>, <<effect.definition>>, and
 [role="requirement", id="query.rev"]
 .rev() Over Code Refs
 --
-`rev(expr)` MUST denote the commit set produced by evaluating `expr` as an
-ordinary Git revspec or ref glob against refs outside `refs/meta/*` —
-`refs/heads/*`, `refs/tags/*`, a range such as `main ^release`, an ancestry
-expression, or a merge-base expression.
+`rev(expr)` MUST denote the commit set produced by evaluating `expr`
+against refs outside `refs/meta/*` using the rev-list-shaped subset of
+gitrevisions(7): a refname, short (resolved through the standard
+gitrevisions lookup order) or full, such as `refs/heads/main`; a ref glob
+in full `refs/...` form, such as `refs/heads/*`; a full hex object id; a
+`^`-negated term excluding its ancestry; and `A..B` two-dot sugar for
+`^A B` — a range such as `main ^release`.
+`~n`/`^n` ancestry suffixes, `A...B` merge-base (symmetric-difference)
+expressions, `@{...}` reflog or upstream syntax, and abbreviated hex MUST
+each be rejected as a malformed query (<<effect.validation>>), never
+silently evaluated to the empty set or to the wrong set. Growing this
+subset to cover more of gitrevisions(7) is a compatible, additive
+extension to this requirement; nothing about the query language depends
+on the subset staying this size.
 `refs/meta/*` MUST be outside `rev()`'s domain by definition: an `expr`
 naming a `refs/meta/*` pattern MUST be rejected as a malformed query
 (<<effect.validation>>), never silently evaluated to the empty set.
@@ -58,6 +68,15 @@ Resolving `results(effect, status)` MUST be cheap: because the results
 refname encodes the tested commit's oid (<<effect.results-writeback>>),
 resolution MUST be a scan of refname patterns under the effect's results
 namespace, never a walk of commit history.
+A commit's membership in `results(effect, status)` MUST be decided solely
+by whether a matching results ref exists, never by the commit's
+reachability from `refs/heads/*` or any other ref outside the query's own
+footprint (<<query.footprint>>); a transition on such an outside ref —
+including deleting and recreating it at that same commit — is a non-event
+for this atom's entry set.
+A recorded result is already the computed answer for that commit, which is
+why its results ref, not the commit's standing in unrelated ref history, is
+what membership tracks.
 --
 
 [role="requirement", id="query.meta"]
