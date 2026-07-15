@@ -1,4 +1,29 @@
 /*
+ * The shell's `⌘K` shortcut: focus the top bar's `.palette` search input
+ * (the `kbd` hint every page renders beside it -- `crate::pages`'s
+ * `layout_shell`). Cmd+K on macOS, Ctrl+K elsewhere; Escape hands focus
+ * back. Enhancement only: the form is a plain GET to `/search` with or
+ * without this handler.
+ */
+(function () {
+  "use strict";
+
+  var input = document.querySelector('.palette input[name="q"]');
+  if (!input) {
+    return;
+  }
+  document.addEventListener("keydown", function (event) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      input.focus();
+      input.select();
+    } else if (event.key === "Escape" && document.activeElement === input) {
+      input.blur();
+    }
+  });
+})();
+
+/*
  * Progressive enhancement for `crate::pages::files`'s raw-source blob view
  * (`div.blob[data-path][data-rev]`): click a gutter line number to select
  * it, shift-click to extend the selection to a range, and open an inline
