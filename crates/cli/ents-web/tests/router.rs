@@ -586,6 +586,54 @@ async fn dashboard_degrades_every_section_on_an_unborn_head() {
     assert!(body.contains("No commits yet."));
 }
 
+/// `GET /account` states who the session is (`roots.web-signing`): with
+/// the serving identity's key enrolled, the page renders that member's
+/// own identity card (never a login or signup form -- the signing key is
+/// the identity); with no matching member, it shows the unenrolled key
+/// itself.
+#[tokio::test]
+// @relation(roots.web-signing, scope=function, role=Verifies)
+async fn account_page_names_the_signed_in_member() {
+    let key = Keypair::from_seed(1);
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    enroll_member(
+        &refs,
+        &objects,
+        "joey",
+        &key,
+        Provenance::AdminRegistered,
+        100,
+    );
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let body = get_body(&ents_web::router(state), "/account").await;
+    assert!(
+        body.contains("Signed in as the member below"),
+        "the page states the session's identity"
+    );
+    assert!(
+        body.contains(">joey</a>"),
+        "the enrolled member's card renders"
+    );
+
+    let stranger = build_state(FixtureIdentity {
+        name: "stranger",
+        key: Keypair::from_seed(2),
+    });
+    let body = get_body(&ents_web::router(stranger), "/account").await;
+    assert!(
+        body.contains("not enrolled as a"),
+        "an unenrolled key is stated, not hidden behind a signup form"
+    );
+}
+
 /// `roots.web-session`: a state-changing request with no CSRF token at
 /// all is a bad request (axum's own `Form` rejection); one with the wrong
 /// token is refused by this crate's own check; the session cookie a `GET`

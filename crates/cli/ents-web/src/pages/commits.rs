@@ -673,6 +673,7 @@ where
 fn reviewer_member_id<O: Find>(state: &AppState<O>) -> ents_model::MemberId {
     let pubkey = state.identity.public_openssh();
     super::account::resolve_member_by_key(state, &pubkey)
+        .map(|(id, _member)| id)
         .unwrap_or_else(|_source| ents_model::MemberId::new(short_key_fingerprint(&pubkey)))
 }
 

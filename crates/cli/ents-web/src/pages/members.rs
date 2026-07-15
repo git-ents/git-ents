@@ -101,8 +101,9 @@ where
 /// through the middle ([`truncate_middle`]) with the full key line behind
 /// a `<details>` toggle -- no digest dependency, so no fingerprint; the
 /// truncated material plus the expandable full line is the identity a
-/// reader compares.
-fn member_card(username: &str, member: &Member, link: bool) -> Markup {
+/// reader compares. Also `crate::pages::account`'s signed-in-as card, so
+/// "you" and "a member" render identically.
+pub(crate) fn member_card(username: &str, member: &Member, link: bool) -> Markup {
     let (key_type, material) = split_key(&member.key);
     html! {
         div.card.member-card {

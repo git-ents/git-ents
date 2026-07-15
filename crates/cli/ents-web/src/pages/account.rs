@@ -1,8 +1,11 @@
-//! `GET /account`, `POST /account`: the generic *view* of
-//! [`ents_model::Account`] (`crate::render::view`, reflection-driven, the
-//! same mechanism [`super::members`] and [`super::redactions`] use), paired
-//! with this crate's one demonstrated generic-edit write flow
-//! (`roots.web-session`'s signed, CSRF-checked mutation path).
+//! `GET /account`, `POST /account`: who the current session is (the
+//! serving identity's enrolled member, `roots.web-signing` -- there is no
+//! login flow, the signing key *is* the identity), followed by the
+//! generic *view* of [`ents_model::Account`] (`crate::render::view`,
+//! reflection-driven, the same mechanism [`super::members`] and
+//! [`super::redactions`] use), paired with this crate's one demonstrated
+//! generic-edit write flow (`roots.web-session`'s signed, CSRF-checked
+//! mutation path).
 //!
 //! Account is the write-flow demo rather than every entity because it is
 //! the simplest possible case -- two string-shaped fields, one fixed ref,
@@ -28,8 +31,14 @@ use crate::error::{Error, Result};
 use crate::session::Session;
 use crate::state::AppState;
 
-/// `GET /account`: the current account (if one exists), plus a form to
-/// create or update it.
+/// `GET /account`: who the current session is, first -- the enrolled
+/// member whose key the serving identity signs with, as the same identity
+/// card `crate::pages::members` renders, or the unenrolled key itself --
+/// then the recorded [`Account`] (the hosted login mapping) with its edit
+/// form. There is no login flow to land on: a local root's identity *is*
+/// the signing key `git ents serve` resolved at startup
+/// (`roots.web-signing`), so this page states that rather than asking for
+/// credentials.
 ///
 /// # Errors
 ///
@@ -41,6 +50,8 @@ pub async fn show<O>(
 where
     O: Find + Write + Send + 'static,
 {
+    let pubkey = state.identity.public_openssh();
+    let enrolled = resolve_member_by_key(&state, &pubkey).ok();
     let current = read(&state)?;
     let (member_value, login_value) = match &current {
         Some(account) => (account.member.as_str().to_owned(), account.login.clone()),
@@ -49,7 +60,7 @@ where
     let view = current
         .as_ref()
         .map(crate::render::view)
-        .unwrap_or_else(|| html! { p { "no account created yet" } });
+        .unwrap_or_else(|| html! { p.muted { "No login mapping recorded." } });
 
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
@@ -58,13 +69,44 @@ where
         "Account",
         html! {
             div.readable {
+                @match &enrolled {
+                    Some((username, member)) => {
+                        p {
+                            "Signed in as the member below. Every web edit is a "
+                            "mutation commit signed with this key, exactly as "
+                            code { "git ents" }
+                            " itself would sign it -- a local root has no separate login."
+                        }
+                        (super::members::member_card(username.as_str(), member, true))
+                    }
+                    None => {
+                        div.card {
+                            p {
+                                "This signing key is not enrolled as a "
+                                a href="/members" { "member" }
+                                " of this repository. Edits still sign with it; enroll "
+                                "the key to have them attributed to a username."
+                            }
+                            pre { (pubkey) }
+                        }
+                    }
+                }
+                h2 { "Hosted login" }
+                p.muted {
+                    "A hosted deployment maps an external login to an enrolled "
+                    "member so its pushes can be attributed. A local root never "
+                    "needs one -- the key above is the identity."
+                }
                 (view)
-                h2 { "Create or Update" }
-                form method="post" action="/account" {
-                    (super::csrf_input(&session))
-                    label { "member" input type="text" name="member" value=(member_value); }
-                    label { "login" input type="text" name="login" value=(login_value); }
-                    button type="submit" { "Save" }
+                details {
+                    summary { "Edit" }
+                    form method="post" action="/account" {
+                        (super::csrf_input(&session))
+                        label { "member" input type="text" name="member" value=(member_value) list="members"; }
+                        label { "login" input type="text" name="login" value=(login_value); }
+                        button type="submit" { "Save" }
+                    }
+                    (super::members_datalist(&state))
                 }
             }
         },
@@ -107,7 +149,7 @@ where
     super::require_csrf(&session, &form.csrf)?;
 
     let member = if form.member.trim().is_empty() {
-        resolve_member_by_key(&state, &state.identity.public_openssh())?
+        resolve_member_by_key(&state, &state.identity.public_openssh())?.0
     } else {
         MemberId::new(form.member.trim())
     };
@@ -159,11 +201,12 @@ fn read<O: Find>(state: &AppState<O>) -> Result<Option<Account>> {
     )?))
 }
 
-/// Resolve `pubkey` to the enrolled member whose stored key matches it, or
-/// [`Error::NotFound`] when none does — shared with
-/// `crate::pages::commits::review`, which needs the same "which member is
-/// this session" lookup to key a review's composite
-/// `refs/meta/reviews/<target>/<member>` ref (`model.review`).
+/// Resolve `pubkey` to the enrolled member whose stored key matches it
+/// (its id and full [`Member`] record), or [`Error::NotFound`] when none
+/// does — shared with `crate::pages::commits::review`, which needs the
+/// same "which member is this session" lookup to key a review's composite
+/// `refs/meta/reviews/<target>/<member>` ref (`model.review`), and with
+/// [`show`]'s own signed-in-as card.
 ///
 /// # Errors
 ///
@@ -172,7 +215,7 @@ fn read<O: Find>(state: &AppState<O>) -> Result<Option<Account>> {
 pub(crate) fn resolve_member_by_key<O: Find>(
     state: &AppState<O>,
     pubkey: &str,
-) -> Result<MemberId> {
+) -> Result<(MemberId, Member)> {
     for entry in state.refs.iter_prefix("refs/meta/member/")? {
         let (name, tip) = entry?;
         let path = name.as_bstr().to_string();
@@ -183,7 +226,7 @@ pub(crate) fn resolve_member_by_key<O: Find>(
         if let Ok(member) = facet_git_tree::deserialize::<Member>(&tree, &*state.objects())
             && member.key == pubkey
         {
-            return Ok(MemberId::new(username));
+            return Ok((MemberId::new(username), member));
         }
     }
     Err(Error::NotFound {
