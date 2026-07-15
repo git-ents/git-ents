@@ -9,6 +9,9 @@ use zed_extension_api::{self as zed, LanguageServerId, Result};
 
 struct EntsExtension;
 
+pub(crate) static BIN_NAME: &str =
+    "/Users/joey/Workspace/codes/git/ents/git-ents/target/debug/git-ents";
+
 impl zed::Extension for EntsExtension {
     fn new() -> Self {
         Self
@@ -20,12 +23,12 @@ impl zed::Extension for EntsExtension {
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
         let command = worktree
-            .which("git")
-            .ok_or_else(|| "git not found on $PATH".to_string())?;
+            .which(BIN_NAME)
+            .ok_or_else(|| format!("`{}` not found on `$PATH`", BIN_NAME))?;
 
         Ok(zed::Command {
             command,
-            args: vec!["ents".into(), "lsp".into()],
+            args: vec!["lsp".into()],
             env: Default::default(),
         })
     }
