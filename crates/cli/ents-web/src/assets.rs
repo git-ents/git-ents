@@ -21,7 +21,15 @@
 //! search glass, the `.branch` pill) draws from [`sprite`] instead: one
 //! hand-rolled `<symbol>` sprite embedded per page by
 //! `crate::pages::layout`, each use site a tiny [`icon_use`] reference
-//! rather than a repeated inline SVG.
+//! rather than a repeated inline SVG. Every sprite symbol -- the `i-ed-*`
+//! editor marks `crate::pages`'s `editor_open` uses included -- is an
+//! original drawing in the sprite's own stroke style, never a vendored
+//! asset, so no third-party icon license applies to the sprite. The
+//! editor marks are simplified glyphs *evoking* each product's logo
+//! (shown nominatively, naming the editor `$ENTS_EDITOR`/`$EDITOR`
+//! already configured), not copies of the trademarked logo files; the
+//! Octicons under `assets/icons/` remain this module's only third-party
+//! assets.
 
 use std::sync::LazyLock;
 
