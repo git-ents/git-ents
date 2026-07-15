@@ -1,12 +1,13 @@
 [package]
-name = "ents-gate-rules"
+name = "ents-verify"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
-ascent = { workspace = true }
+ents-gate-rules = { workspace = true }
+stateright = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

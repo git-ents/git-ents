@@ -1,7 +1,10 @@
 //! Mechanical check of the one-way crate layering documented in
 //! `docs/abstractions.adoc`'s "Layering" section: substrate -> kernel ->
 //! {forge, kiln} -> cli, with forge and kiln forbidden from depending on
-//! each other.
+//! each other. Extended with one more rule for `crates/verify/*`
+//! (`verify/README.adoc`): that layer is a pure sink above everything
+//! else — `ents-verify` may depend only on `ents-gate-rules`, and no
+//! crate anywhere in the workspace may depend on `ents-verify`.
 //!
 //! The prose in `docs/abstractions.adoc` states the rule, but nothing
 //! stops a future `Cargo.toml` edit from quietly violating it (a kernel
@@ -24,12 +27,15 @@ use cargo_metadata::{MetadataCommand, Package};
 
 /// Layer rank for a workspace package, derived from the `crates/<layer>/*`
 /// prefix of its manifest path: substrate (0) -> kernel (1) ->
-/// forge/kiln (2) -> cli (3).
+/// forge/kiln (2) -> cli (3) -> verify (4).
 ///
 /// A dependency edge is only legal when the depending package's rank is
 /// greater than or equal to the depended-on package's rank — e.g. the CLI
 /// (3) may depend on `ents-forge` (2), but a kernel crate (1) may never
-/// depend on a package crate (2).
+/// depend on a package crate (2). `verify` sits at the top rank alone, so
+/// this general rule already forbids every other layer from depending on
+/// it; [`ents_verify_depends_only_on_ents_gate_rules`] adds the sharper
+/// rule that its own outgoing edges are restricted too.
 fn layer_rank(package: &Package, workspace_root: &Utf8Path) -> u8 {
     let relative = package
         .manifest_path
@@ -52,6 +58,7 @@ fn layer_rank(package: &Package, workspace_root: &Utf8Path) -> u8 {
         Some("kernel") => 1,
         Some("forge") | Some("kiln") => 2,
         Some("cli") => 3,
+        Some("verify") => 4,
         other => panic!(
             "{}'s manifest path {relative} has an unrecognized layer directory {other:?}",
             package.name
@@ -111,6 +118,15 @@ fn dependencies_never_point_upward() {
             if package.name == "ents-kiln" && dependency.name == "ents-forge" {
                 kiln_depends_on_forge = true;
             }
+
+            if package.name == "ents-verify" {
+                assert_eq!(
+                    dependency.name, "ents-gate-rules",
+                    "ents-verify (the verify/ layer's sink crate) may depend on ents-gate-rules only, \
+                     but its manifest also names {}",
+                    dependency.name
+                );
+            }
         }
     }
 
@@ -122,4 +138,33 @@ fn dependencies_never_point_upward() {
         !kiln_depends_on_forge,
         "ents-kiln must not depend on ents-forge: they are sibling package crates"
     );
+}
+
+/// `ents-verify` is a pure sink: nothing in the workspace may depend on
+/// it. The general rank rule in [`dependencies_never_point_upward`]
+/// already forbids this (every other layer ranks below `verify`), but
+/// this test states the sink property directly against the real
+/// dependency graph, rather than relying on that rank arithmetic alone.
+///
+/// See `crates/kernel/ents-model` and the root `Cargo.toml` for the
+/// self-verification this test is designed to catch: temporarily adding
+/// `ents-verify` as a dependency of any other crate must fail this test.
+#[test]
+fn nothing_depends_on_ents_verify() {
+    let metadata = MetadataCommand::new()
+        .manifest_path(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .no_deps()
+        .exec()
+        .expect("cargo metadata");
+
+    for package in metadata.workspace_packages() {
+        if package.name == "ents-verify" {
+            continue;
+        }
+        assert!(
+            package.dependencies.iter().all(|dependency| dependency.name != "ents-verify"),
+            "{} must not depend on ents-verify: verify/ is a sink layer nothing else may depend on",
+            package.name
+        );
+    }
 }

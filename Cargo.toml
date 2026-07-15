@@ -16,6 +16,7 @@ members = [
     "crates/forge/ents-forge",
     "crates/kiln/ents-kiln",
     "crates/substrate/gix-ref-store",
+    "crates/verify/ents-verify",
 ]
 
 [workspace.package]
@@ -40,6 +41,7 @@ ents-query = { path = "crates/kernel/ents-query" }
 ents-receive = { path = "crates/kernel/ents-receive" }
 ents-sync = { path = "crates/kernel/ents-sync" }
 ents-testutil = { path = "crates/kernel/ents-testutil" }
+ents-verify = { path = "crates/verify/ents-verify" }
 ents-web = { path = "crates/cli/ents-web" }
 gix-ref-store = { path = "crates/substrate/gix-ref-store" }
 arborium = { version = "2.18", default-features = false, features = [
@@ -99,6 +101,7 @@ semver = "1"
 serde_json = "1"
 spdx = "0.13"
 ssh-key = { version = "0.6", features = ["ed25519"] }
+stateright = "0.31"
 target-lexicon = "0.13"
 tempfile = "3"
 thiserror = "2"

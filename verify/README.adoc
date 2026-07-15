@@ -1,48 +1,67 @@
 = verify: the formal stocktake harness
 
 This directory holds the scaffolding for the formal stocktaking exercise described in `exercise.md` (copied verbatim; it is the source of truth for phases, obligations, and verdict rules).
-It is documentation-and-tooling only: nothing here is a crate, nothing here appears in any `Cargo.toml`, and nothing here touches refs, trailers, tree layouts, or any string that ends up in a Git object.
 The exercise itself is done by a human, on paper first; these files are the harness, not the proofs.
+
+This harness is Rust-native.
+`crates/verify/ents-verify` and `crates/kernel/ents-gate-rules/tests/prop.rs` call `ents_gate_rules::gate` directly from every layer that checks anything, so the refinement mapping between a model and the code is the function call itself, not a hand-maintained translation of it.
+Nothing in CI depends on anything outside `cargo`.
 
 == What lives here
 
 `ledger.adoc`::
 The verdict ledger — the exercise's one deliverable.
 One row per invariant claim extracted from `docs/abstractions.adoc` and `docs/spec/*.adoc`, with verdicts filled in as the exercise progresses.
+The `model` column names which layer below discharges the claim: `search`, `stateright`, `proptest`, or `alloy-paper`.
 
 `alloy/`::
-Alloy 6 models for the structural claims.
-`objects.als` (Phase 1) and `binding.als` (Phase 2) are deliberately empty stubs that parse but check nothing.
-`gate_rules.als` (Phase 0.5) is the exception: it translates the seven denial rules of `crates/kernel/ents-gate-rules` faithfully and its binding check is expected to produce the known cross-ref replay counterexample.
+Alloy 6 models, demoted to a paper-only design tool — see `alloy/README.adoc`.
+Nothing here runs in CI.
 
-`tla/`::
-TLA+ skeletons for the protocol claims: `Receive.tla` (Phase 3), `Effects.tla` (Phase 4), `Durability.tla` (Phase 5), each with a small TLC `.cfg`.
-Variables and action signatures only; `Receive.tla`'s `GateAdmits` transcribes the seven rules as the gate's enabling condition.
+`../crates/verify/ents-verify`::
+The Rust-native replacement for the old TLA+ skeletons and the Alloy search.
+`src/search.rs` is Phase 0.5's real replacement for `alloy/gate_rules.als`'s `check` commands: an exhaustive `stateright` search over a small bounded universe of transactions, calling `gate()` on each and checking the result against hand-written doc-invariant predicates.
+`src/receive.rs`, `src/effects.rs`, `src/durability.rs` are Phase 3/4/5 skeletons — state and action *signatures* only, `todo!()` bodies, except `receive.rs`'s `gate_admits`, which is real code calling `gate()` directly.
+Run with `cargo test -p ents-verify`.
 
-`bin/`::
-`check-alloy` and `check-tla`, best-effort wrappers that run every model headless when a checker jar is available and warn-and-skip when it is not.
+`../crates/kernel/ents-gate-rules/tests/prop.rs`::
+The cheap floor: `proptest` samples transactions over a small domain (duplicated from `ents-verify`'s vocabulary — the dependency stays one-way) and asserts the same doc-invariant predicates on every run, not just the bounded search's 576 leaves.
+Run with `cargo test -p ents-gate-rules`.
+
+`../crates/kernel/ents-gate-rules/tests/ledger.rs`::
+Gap-pinning tests: a ledger row found FALSIFIED or DIVERGED with a concrete counterexample lands here first, in the crate's own `Facts` vocabulary, before it becomes a denial rule.
 
 == The epistemic split
 
-Three tools, three jobs, deliberately not interchangeable.
-The Datalog in `ents-gate-rules` *evaluates* the admission rules over one supplied transaction's facts; it is executable and type-checked, but it cannot search for the transaction you didn't think of.
-Alloy *searches* for counterexamples: small-scope model finding over the same vocabulary, looking for admitted transactions that break a doc invariant.
-TLA+ checks the *protocol over time*: receive/CAS races, adoption, epochs, effect dispatch, durability ordering — claims about traces, not single transactions.
+Three tools, three jobs, deliberately not interchangeable — none of them substitutes for a human proof, and none of them is Alloy or TLA+ running in CI anymore.
+
+The Datalog in `ents-gate-rules` *evaluates* the seven denial rules over one supplied transaction's facts; it is executable and type-checked, but it cannot search for the transaction nobody thought of.
+
+`tests/prop.rs` *samples* that same search space cheaply, on every `cargo test` run, trading exhaustiveness for near-zero cost — it is the floor, not the ceiling.
+
+`ents-verify::search` *exhausts* a small bounded universe of transactions (`stateright`'s `Model::checker`), the direct replacement for what `verify/alloy/gate_rules.als`'s `check` commands did by external tool; it is what actually rediscovers the cross-ref replay counterexample, by search, not by hand-construction.
+
+`ents-verify::receive`/`effects`/`durability` are where protocol-over-time claims (receive/CAS races, adoption, epochs, effect dispatch, durability ordering) will live once filled in — `stateright` model-checks traces the same way TLC did, just in the same language and dependency graph as the code under test.
+
+Alloy survives only as a paper tool for design-only questions (Phases 1 and 2's structural claims about the object graph and refname binding) — see `alloy/README.adoc`.
+Kani is noted here as a future experiment, not wired: `ascent`'s generated code hashes relations in ways that would need an `Oid` newtype (rather than a bare `String`) to make bounded model checking of the rules themselves tractable, and that is out of scope for this migration.
 
 == The refinement anchor
 
-Models are checked against `ents-gate-rules`, not the other way around.
-Every signature and variable here mirrors the crate's EDB relations one-to-one (`ref_update`, `parent`, `signed_by`, `member`, `anchor`, `context`, `object_exists`), and the seven denial rules are transcribed under their crate names, so a finding in a model is expressible as a `Facts` test in the crate.
-That is also the landing convention: a FALSIFIED or DIVERGED ledger row with a concrete counterexample becomes a test in `crates/kernel/ents-gate-rules/tests/ledger.rs` first (gap-pinning while open), then a denial rule, one rule at a time.
+Models are checked against `ents-gate-rules`, not the other way around — literally, now: `ents-verify` and `tests/prop.rs` both import `ents_gate_rules::gate` and call it.
+The landing convention for a new finding stays the same as before this migration: a FALSIFIED or DIVERGED ledger row with a concrete, transaction-shaped counterexample lands in `crates/kernel/ents-gate-rules/tests/ledger.rs` first (gap-pinning while open), then — where the counterexample is transaction-shaped — loses its exemption in `tests/prop.rs` and its discovery in `ents-verify::search`, and only then becomes a denial rule, one rule at a time.
 
-== Running the checkers
+== Layering
+
+`crates/verify/ents-verify` is a sink in the workspace's crate layering (`docs/abstractions.adoc`'s "Layering" section): it depends on `ents-gate-rules` only, and nothing in the workspace may depend on it.
+`crates/cli/git-ents/tests/layering.rs` enforces both directions mechanically.
+
+== Running the checks
 
 [source,shell]
 ----
-verify/bin/check-alloy   # every .als, headless; needs ALLOY_JAR or a well-known path
-verify/bin/check-tla     # SANY-parse every .tla, TLC-run every .cfg; needs TLA_TOOLS_JAR
+cargo test -p ents-gate-rules   # the crate's own tests, plus tests/ledger.rs and tests/prop.rs
+cargo test -p ents-verify       # the search model's acceptance test (rediscovers the replay)
 ----
 
-Both scripts exit 0 with a warning when no jar or no Java runtime is found, so they never block anything; CI runs them in an optional, non-required job.
-Do not vendor the jars into the repo.
-When `check-alloy` reports a counterexample for `binding_refname_recomputed` in `gate_rules.als`, that is the documented open gap, not a harness failure — see the DIVERGED row in `ledger.adoc`.
+`cargo test --workspace` runs both, since `ents-verify` and the `ents-gate-rules` test targets are ordinary workspace members — no separate CI job, no jar, no optional/skippable step.

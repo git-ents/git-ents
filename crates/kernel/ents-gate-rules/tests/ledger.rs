@@ -10,6 +10,14 @@
 //! time, red test first, per this crate's own discipline — the pinned
 //! assertion is swapped for the inverted one kept alongside it, and the
 //! ledger row's verdict is updated.
+//!
+//! Where the counterexample is transaction-shaped like this one, the
+//! same landing happens in two more places, all three updated together:
+//! `tests/prop.rs`'s matching property loses its exemption branch (it
+//! currently proves the exemption load-bearing by failing without it),
+//! and `crates/verify/ents-verify/src/search.rs`'s matching
+//! [`stateright::Property::always`] — which today has a discovery — is
+//! expected to have none once the rule lands.
 
 use ents_gate_rules::{Facts, Role, gate};
 

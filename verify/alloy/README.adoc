@@ -1,0 +1,5 @@
+= alloy/: paper tool only
+
+These three `.als` files are kept as a design-only paper tool for Phases 1 and 2's structural questions (object graph reachability, refname binding) — nothing here runs in CI.
+`crates/verify/ents-verify` and `crates/kernel/ents-gate-rules/tests/prop.rs` are the harness that actually runs, calling `ents_gate_rules::gate` directly instead of a hand-maintained Alloy translation of it.
+If a human works through Phase 1 or Phase 2 by hand and wants small-scope model finding to double-check a step, the Alloy Analyzer can still open these files directly; see `verify/README.adoc` for the fuller epistemic split.
