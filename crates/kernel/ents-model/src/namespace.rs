@@ -181,12 +181,11 @@ pub fn parse_result_ref(name: &FullNameRef) -> Option<(String, String)> {
     let rest = path.strip_prefix("refs/meta/")?;
     let tail = if let Some(canonical) = rest.strip_prefix("results/") {
         canonical.to_owned()
-    } else if let Some(self_run) = rest.strip_prefix("self/") {
+    } else {
+        let self_run = rest.strip_prefix("self/")?;
         // refs/meta/self/<member>/<effect>/<short-oid>: drop the member.
         let (_, effect_and_oid) = self_run.split_once('/')?;
         effect_and_oid.to_owned()
-    } else {
-        return None;
     };
     let (effect, short_oid) = tail.split_once('/')?;
     if effect.is_empty() || short_oid.is_empty() || short_oid.contains('/') {
