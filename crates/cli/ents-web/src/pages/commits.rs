@@ -365,6 +365,9 @@ fn reviews_section<O: Find + Write>(
     let return_to = format!("/commit/{oid}");
     html! {
         h2 { "Reviews" }
+        @if reviews.is_empty() {
+            p.muted { "No reviews of this commit yet \u{2014} record a verdict below." }
+        }
         @for ((target, member), review) in &reviews {
             div.card {
                 div.comment-meta {

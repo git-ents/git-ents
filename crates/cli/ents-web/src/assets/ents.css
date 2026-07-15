@@ -196,17 +196,17 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .entry-size { margin-left: auto; font-family: var(--font-mono); font-size: .82rem; color: var(--color-text-muted); white-space: nowrap; }
 
 /* The workbench dashboard (`GET /`, `crate::pages::dashboard`): three
- * cards on a `.desk` grid (working tree, needs attention, tickets), then
+ * cards on a `.desk` grid (working tree, needs attention, issues), then
  * a full-width `.desk-wide` History card. `.content` already pads the
  * column, so the desk itself only spaces its cards. */
 .desk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem; align-items: start; margin-bottom: 1.25rem; }
 .desk .card, .desk-wide .card { margin-bottom: 0; }
 .card-header .btn-ghost { margin-left: auto; }
-.card-row.muted { color: var(--color-text-muted); }
+.muted { color: var(--color-text-muted); }
 .btn { display: inline-block; font-size: .78rem; font-weight: 600; color: var(--color-bg); background: var(--color-accent); border: none; border-radius: 8px; padding: .3rem .8rem; cursor: pointer; text-decoration: none; }
 .btn-ghost { color: var(--color-accent); background: transparent; border: 1px solid var(--color-border); text-transform: none; letter-spacing: 0; }
 .btn-ghost:hover { border-color: var(--color-accent); color: var(--color-accent); }
-/* Needs-attention / ticket rows: a block link pairing a `.what` line with
+/* Needs-attention / issue rows: a block link pairing a `.what` line with
  * a muted, mono `.where` locator. */
 .attention-row { display: block; padding: .7rem 1.1rem; color: inherit; text-decoration: none; }
 .attention-row:hover { background: var(--color-code-bg); text-decoration: none; }

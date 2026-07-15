@@ -97,13 +97,8 @@ where
                         html! { "Anchor one to a file with the form below." },
                     ))
                 } @else {
-                    ul {
-                        @for (id, comment) in &rows {
-                            li {
-                                a href=(format!("/comments/{id}")) { (ents_forge::abbreviate_id(id)) }
-                                ": " (comment.body)
-                            }
-                        }
+                    @for (id, comment) in &rows {
+                        (listing_card(&state, id, comment))
                     }
                 }
                 h2 { "Add a Comment" }
@@ -177,6 +172,8 @@ where
     };
     let resolved = comment.state == "resolved";
     let return_to = format!("/comments/{id}");
+    let body =
+        crate::asciidoc::to_html(&comment.body).unwrap_or_else(|_| html! { p { (comment.body) } });
     Ok(super::layout(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -185,25 +182,128 @@ where
         html! {
             (super::child_crumbs("comments", "/comments", ents_forge::abbreviate_id(&id)))
             div.readable {
-                dl {
-                    dt { "state" } dd { (comment.state) }
-                    @if let Some(context) = &comment.context {
-                        dt { "context" } dd { (context) }
+                div.card {
+                    div.comment-meta {
+                        span.comment-state { (comment.state) }
+                        @if let Some(context) = &comment.context {
+                            (context_link(context))
+                        }
+                        @if let Some(parent) = &comment.parent {
+                            a href={ "/comments/" (parent) } {
+                                "in reply to " (ents_forge::abbreviate_id(parent))
+                            }
+                        }
+                        @if let Some((anchor, _)) = &projected {
+                            a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
+                                (anchor.path) (line_label(anchor.lines))
+                            }
+                        }
                     }
-                    @if let Some(parent) = &comment.parent {
-                        dt { "parent" } dd { (parent) }
+                    @if let Some((_, projection)) = &projected {
+                        div.comment-meta {
+                            span { "at " (query.rev) ": " (projection_label(projection)) }
+                        }
                     }
-                    @if let Some((anchor, projection)) = &projected {
-                        dt { "path" } dd { (anchor.path) }
-                        dt { "lines" } dd { (format!("{:?}", anchor.lines)) }
-                        dt { "projection at " (query.rev) } dd { (format!("{projection:?}")) }
-                    }
-                    dt { "body" } dd { (comment.body) }
+                    div.doc-body { (body) }
                 }
                 (action_forms(&session, &id, resolved, &return_to))
             }
         },
     ))
+}
+
+/// The `#L<start>[-L<end>]` fragment a files link carries for an anchored
+/// range, or nothing for a whole-file anchor -- the same fragment shape
+/// `crate::pages::files`'s gutter anchors and `ents.js`'s hash handling
+/// use.
+fn line_fragment(lines: Option<LineRange>) -> String {
+    match lines {
+        Some(range) if range.start == range.end => format!("#L{}", range.start),
+        Some(range) => format!("#L{}-L{}", range.start, range.end),
+        None => String::new(),
+    }
+}
+
+/// The `:21` / `:21-23` suffix a path locator shows for an anchored range,
+/// or nothing for a whole-file anchor.
+fn line_label(lines: Option<LineRange>) -> String {
+    match lines {
+        Some(range) if range.start == range.end => format!(":{}", range.start),
+        Some(range) => format!(":{}-{}", range.start, range.end),
+        None => String::new(),
+    }
+}
+
+/// One human sentence for a projection result (`anchor.projection`) --
+/// never the enum's `Debug` form.
+fn projection_label(projection: &Projection) -> String {
+    match projection {
+        Projection::Current => "anchored lines unchanged".to_owned(),
+        Projection::Relocated { path, lines } => {
+            format!("moved to {path}{}", line_label(*lines))
+        }
+        Projection::Outdated { path } => {
+            format!("outdated \u{2014} the anchored lines in {path} have been edited")
+        }
+        Projection::Deleted => "the anchored file no longer exists".to_owned(),
+    }
+}
+
+/// A context's own page link: `issues/<id>` and `reviews/<target>/<member>`
+/// land on the issue and commit pages that render those threads
+/// (`model.comment-context`); any other context renders as plain text.
+fn context_link(context: &str) -> Markup {
+    if let Some(id) = context.strip_prefix("issues/") {
+        html! { a href={ "/issues/" (id) } { "on issue " (ents_forge::abbreviate_id(id)) } }
+    } else if let Some(rest) = context.strip_prefix("reviews/") {
+        let target = rest.split('/').next().unwrap_or(rest);
+        html! { a href={ "/commit/" (target) } { "on a review of " (ents_forge::abbreviate_id(target)) } }
+    } else {
+        html! { span { (context) } }
+    }
+}
+
+/// One `GET /comments` row: the comment's own card -- an abbreviated-id
+/// link to its page, author and age off its ref's tip commit (best
+/// effort, like [`thread_comment_card`]'s), its state badge, its context
+/// or anchor locator, and its body rendered as AsciiDoc like every other
+/// comment card in this crate.
+fn listing_card<O: Find + Write>(
+    state: &AppState<O>,
+    id: &str,
+    comment: &comment::Comment,
+) -> Markup {
+    let authorship = ents_model::namespace::comment_ref(id)
+        .ok()
+        .and_then(|ref_name| state.refs.get(ref_name.as_ref()).ok().flatten())
+        .and_then(|tip| super::commit_authorship(&*state.objects(), tip).ok());
+    let anchor = comment
+        .anchor
+        .as_ref()
+        .and_then(|raw| facet_git_tree::deserialize::<Anchor>(&raw.oid(), &*state.objects()).ok());
+    let body =
+        crate::asciidoc::to_html(&comment.body).unwrap_or_else(|_| html! { p { (comment.body) } });
+    html! {
+        div.card {
+            div.comment-meta {
+                a href={ "/comments/" (id) } { (ents_forge::abbreviate_id(id)) }
+                @if let Some((author, seconds)) = &authorship {
+                    span.author { (author) }
+                    span { (super::ago(*seconds)) }
+                }
+                span.comment-state { (comment.state) }
+                @if let Some(context) = &comment.context {
+                    (context_link(context))
+                }
+                @if let Some(anchor) = &anchor {
+                    a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
+                        (anchor.path) (line_label(anchor.lines))
+                    }
+                }
+            }
+            div.doc-body { (body) }
+        }
+    }
 }
 
 /// The form fields the reply route accepts.
