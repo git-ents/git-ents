@@ -258,6 +258,7 @@ where
     let old_tree_ref = old_tree.as_ref().unwrap_or(&empty_tree);
     let (diff, truncated) = diff_sections(&repo, old_tree_ref, &new_tree);
     let comments = super::comments::for_commit(&state, object_id);
+    let checks = checks_section(&state, object_id);
     let reviews = reviews_section(&state, &session, object_id, &oid);
     let (sidebar_rows, _older) = commit_rows(&state, None, PAGE_SIZE);
 
@@ -301,6 +302,7 @@ where
                         }
                     }
                 }
+                (checks)
                 (reviews)
             }
             (diff)
@@ -335,6 +337,109 @@ fn commits_sidebar(rows: &[CommitRow], current: ObjectId) -> Markup {
             }
         }
         a href="/commits" { "all commits \u{2192}" }
+    }
+}
+
+/// One row of the commit page's "Checks" card: a recorded result targeting
+/// the shown commit.
+struct CheckRow {
+    /// The recording effect's name ([`ents_model::ResultRecord`]'s own
+    /// `effect` field), the row's `/effects/{name}` link.
+    effect: String,
+    /// The run's outcome, one of the closed taxonomy's three values.
+    status: ents_model::Status,
+    /// The self-run mirror's `<member>` segment when the result lives
+    /// there rather than the canonical namespace (`effect.self-run`).
+    self_run: Option<String>,
+    /// The result ref tip's author time, for [`super::ago`].
+    seconds: Option<i64>,
+}
+
+/// A [`ents_model::Status`]'s display word, doubling as its
+/// `.status-<word>` chip class -- the closed pass/fail/error taxonomy
+/// (`model.result-taxonomy`), spelled out here rather than through
+/// `Debug`.
+fn status_label(status: ents_model::Status) -> &'static str {
+    match status {
+        ents_model::Status::Pass => "pass",
+        ents_model::Status::Fail => "fail",
+        ents_model::Status::Error => "error",
+    }
+}
+
+/// The "Checks" card on `GET /commit/{oid}`: every recorded result
+/// (`model.result-identity`) whose stored `target` field names this
+/// commit -- the canonical `refs/meta/results/<effect>/<short-oid>`
+/// namespace and every member's self-run mirror
+/// (`refs/meta/self/<member>/...`), matched on the tree's own `target`
+/// field (the same binding the gate verifies), never the refname's
+/// short-oid segment. Renders nothing at all when no result targets the
+/// commit: a result is only ever written by a run
+/// (`effect.result-taxonomy`), so "no checks" is the ordinary state of
+/// most commits, not a pending one. Best effort: a result ref whose tree
+/// cannot be read back is skipped from this card (it still lists on
+/// `git ents effect log`).
+// @relation(model.result-identity, model.result-taxonomy, scope=function)
+fn checks_section<O: Find + Write>(state: &AppState<O>, commit_id: ObjectId) -> Markup {
+    let mut rows: Vec<CheckRow> = Vec::new();
+    for prefix in ["refs/meta/results/", "refs/meta/self/"] {
+        let Ok(iter) = state.refs.iter_prefix(prefix) else {
+            continue;
+        };
+        for entry in iter {
+            let Ok((name, tip)) = entry else { continue };
+            // One `state.objects()` lock per read -- the same
+            // non-reentrant-`Mutex` care `crate::pages::effects::read_all`
+            // documents.
+            let record = {
+                let objects = state.objects();
+                super::commit_tree(&*objects, tip).ok().and_then(|tree| {
+                    facet_git_tree::deserialize::<ents_model::ResultRecord>(&tree, &*objects).ok()
+                })
+            };
+            let Some(record) = record else { continue };
+            if record.target() != commit_id {
+                continue;
+            }
+            let path = name.as_bstr().to_string();
+            let self_run = path
+                .strip_prefix("refs/meta/self/")
+                .and_then(|rest| rest.split('/').next())
+                .map(str::to_owned);
+            let seconds = super::commit_authorship(&*state.objects(), tip)
+                .ok()
+                .map(|(_author, seconds)| seconds);
+            rows.push(CheckRow {
+                effect: record.effect,
+                status: record.status,
+                self_run,
+                seconds,
+            });
+        }
+    }
+    if rows.is_empty() {
+        return html! {};
+    }
+    rows.sort_by(|a, b| (&a.effect, &a.self_run).cmp(&(&b.effect, &b.self_run)));
+    html! {
+        div.card {
+            div.card-header { "Checks" }
+            @for row in &rows {
+                div.card-row {
+                    span class={ "status status-" (status_label(row.status)) } {
+                        (status_label(row.status))
+                    }
+                    " "
+                    a href={ "/effects/" (row.effect) } { (row.effect) }
+                    @if let Some(member) = &row.self_run {
+                        span.muted { " \u{b7} self-run by " (member) }
+                    }
+                    @if let Some(seconds) = row.seconds {
+                        span.entry-size { (super::ago(seconds)) }
+                    }
+                }
+            }
+        }
     }
 }
 

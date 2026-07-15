@@ -57,6 +57,9 @@
   --s-prop: #076678;
   --diff-add: #4e9a0622;
   --diff-del: #cc241d22;
+  --status-pass: #4e9a06;
+  --status-fail: #cc241d;
+  --status-error: #b57614;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -82,6 +85,9 @@
     --s-prop: #83a598;
     --diff-add: #b8bb2620;
     --diff-del: #fb493420;
+    --status-pass: #b8bb26;
+    --status-fail: #fb4934;
+    --status-error: #fabd2f;
   }
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -439,6 +445,12 @@ form button:hover { background: var(--color-link-hover); }
  * (`crate::pages::{comments,issues,commits}`). */
 .comment-state, .verdict { display: inline-block; padding: .05rem .5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: .78rem; font-weight: 600; text-transform: lowercase; color: var(--color-text-muted); }
 .verdict { color: var(--color-text); }
+/* Check-status chips (`crate::pages::commits::checks_section`): one color
+ * per value of the closed pass/fail/error result taxonomy. */
+.status { display: inline-block; font-family: var(--font-mono); font-size: .72rem; font-weight: 700; border-radius: var(--radius-pill); padding: .05rem .6rem; text-transform: lowercase; }
+.status-pass { color: var(--status-pass); background: color-mix(in srgb, var(--status-pass) 12%, transparent); }
+.status-fail { color: var(--status-fail); background: color-mix(in srgb, var(--status-fail) 12%, transparent); }
+.status-error { color: var(--status-error); background: color-mix(in srgb, var(--status-error) 14%, transparent); }
 /* The reply/resolve/reopen and comment composer forms on a thread card. */
 .comment-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .6rem; padding: .7rem 1.1rem; border-top: 1px solid var(--color-border); }
 

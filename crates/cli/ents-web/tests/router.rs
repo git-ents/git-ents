@@ -12,10 +12,11 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use ents_kiln::Toolchain;
-use ents_model::{Account, Effect, MemberId, Provenance, Redaction};
+use ents_model::{Account, Effect, MemberId, Provenance, Redaction, ResultRecord, Status};
 use ents_receive::{Mode, NullEventSink};
 use ents_testutil::{
-    CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit, write_meta_entity,
+    CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, record_result, write_commit,
+    write_meta_entity,
 };
 use ents_web::identity::SigningIdentity;
 use ents_web::state::AppState;
@@ -2081,6 +2082,82 @@ async fn commit_page_shows_a_seeded_review_verdict_and_a_review_comment() {
     assert!(
         page.contains("agreed on the test"),
         "the review comment renders in the review's thread: {page}"
+    );
+}
+
+/// The commit page's Checks card (`model.result-identity`,
+/// `model.result-taxonomy`): a recorded result whose stored target names
+/// the shown commit renders as a status chip and its effect's link --
+/// one row per taxonomy value here -- a self-run mirror row additionally
+/// names its member, and a result targeting a different commit stays off
+/// the page (the tree's own `target` field is what is matched, not the
+/// refname).
+#[tokio::test]
+async fn commit_page_lists_recorded_results_as_checks() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {}\n")]);
+    let oid = head_oid(dir.path());
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    record_result(&refs, &objects, "unit", &oid, Status::Pass, None, 1_000);
+    record_result(&refs, &objects, "lint", &oid, Status::Fail, None, 1_001);
+    record_result(&refs, &objects, "deploy", &oid, Status::Error, None, 1_002);
+    // Same effect, different target commit: filtered out by the stored
+    // target field.
+    record_result(
+        &refs,
+        &objects,
+        "unit",
+        "aaaaaaaa",
+        Status::Pass,
+        None,
+        1_003,
+    );
+    // A self-run mirror row names the member that ran it.
+    let member = MemberId::new("joey");
+    let target = gix::ObjectId::from_hex(oid.as_bytes()).expect("head oid is hex");
+    let self_ref = ents_model::namespace::self_result_ref(&member, "unit", &oid).expect("valid");
+    let mirror = ResultRecord::new("unit", target, Status::Pass);
+    write_meta_entity(&refs, &objects, self_ref, &mirror, None, 1_004);
+
+    let state = Arc::new(AppState::new(
+        Box::new(refs),
+        objects,
+        Box::new(NullEventSink),
+        Mode::Advisory,
+        Box::new(FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        }),
+        dir.path().to_owned(),
+    ));
+    let router = ents_web::router(state);
+
+    let body = get_body(&router, &format!("/commit/{oid}")).await;
+    assert!(body.contains("Checks"), "the Checks card renders");
+    for (chip, effect) in [
+        ("status-pass", "unit"),
+        ("status-fail", "lint"),
+        ("status-error", "deploy"),
+    ] {
+        assert!(
+            body.contains(chip),
+            "the {effect} row carries its {chip} chip"
+        );
+        assert!(
+            body.contains(&format!("/effects/{effect}")),
+            "the {effect} row links to its effect page"
+        );
+    }
+    assert!(
+        body.contains("self-run by joey"),
+        "the mirror row names its member"
+    );
+    // The chip class appears once in the canonical unit row and once in
+    // the self-run mirror row -- never for the other commit's result.
+    assert_eq!(
+        body.matches("status-pass").count(),
+        2,
+        "the other commit's result stays off the page"
     );
 }
 
