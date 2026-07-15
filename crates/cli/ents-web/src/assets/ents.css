@@ -445,6 +445,12 @@ form button:hover { background: var(--color-link-hover); }
  * (`crate::pages::{comments,issues,commits}`). */
 .comment-state, .verdict { display: inline-block; padding: .05rem .5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: .78rem; font-weight: 600; text-transform: lowercase; color: var(--color-text-muted); }
 .verdict { color: var(--color-text); }
+/* Open-in-editor affordances (`crate::pages::editor_open`): a small,
+ * muted icon deep-linking a code location into the serving user's own
+ * editor ($ENTS_EDITOR, then $EDITOR). */
+.editor-open { display: inline-flex; align-items: center; vertical-align: -2px; color: var(--color-text-muted); }
+.editor-open:hover { color: var(--color-accent); }
+.editor-open .icon { width: 14px; height: 14px; }
 /* Check-status chips (`crate::pages::commits::checks_section`): one color
  * per value of the closed pass/fail/error result taxonomy. */
 .status { display: inline-block; font-family: var(--font-mono); font-size: .72rem; font-weight: 700; border-radius: var(--radius-pill); padding: .05rem .6rem; text-transform: lowercase; }

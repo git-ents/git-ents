@@ -66,7 +66,18 @@
 
   var anchorLine = null;
 
+  // The blob header's open-in-editor deep link follows the selection:
+  // `data-editor-base` carries the line-less URL, the selected line is
+  // appended in the editors' shared `:{line}` suffix shape.
+  var editorLink = blob.querySelector("a.editor-open[data-editor-base]");
+  function retargetEditor(line) {
+    if (editorLink) {
+      editorLink.href = editorLink.getAttribute("data-editor-base") + ":" + line;
+    }
+  }
+
   function selectRange(start, end) {
+    retargetEditor(Math.min(start, end));
     var lo = Math.min(start, end);
     var hi = Math.max(start, end);
     lineRows.forEach(function (tr) {

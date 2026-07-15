@@ -390,6 +390,32 @@ pub(crate) fn layout_split(
     )
 }
 
+/// The "open in editor" affordance rendered beside a code location: a
+/// deep link into the serving user's own editor
+/// ([`crate::editor::detected`]: `$ENTS_EDITOR`, then `$EDITOR`), its
+/// icon naming which one. Renders nothing at all when no recognized
+/// editor is configured -- the affordance is the escalation back to the
+/// desk the reader came from (`docs/web-workbench-plan.adoc`), never a
+/// dead link. The line-less deep link rides along as `data-editor-base`
+/// so `ents.js` can retarget the blob header's affordance at the
+/// currently selected line without rebuilding the URL client-side.
+pub(crate) fn editor_open<O>(state: &AppState<O>, path: &str, line: Option<u64>) -> Markup {
+    let Some(editor) = crate::editor::detected() else {
+        return html! {};
+    };
+    let root = std::fs::canonicalize(&state.path).unwrap_or_else(|_io| state.path.clone());
+    let abs = root.join(path);
+    html! {
+        a.editor-open
+            href=(editor.deep_link(&abs, line))
+            data-editor-base=(editor.deep_link(&abs, None))
+            title={ "Open in " (editor.label()) }
+        {
+            (crate::assets::icon_use(editor.icon()))
+        }
+    }
+}
+
 /// The signing identity's display label for [`layout`]'s `.id-chip`
 /// (`roots.web-signing`) -- [`crate::identity::SigningIdentity::label`].
 /// Every page reads this off `state` itself rather than `layout` reaching

@@ -108,6 +108,7 @@
 
 pub(crate) mod asciidoc;
 pub(crate) mod assets;
+pub(crate) mod editor;
 pub mod error;
 pub mod identity;
 pub(crate) mod markdown;

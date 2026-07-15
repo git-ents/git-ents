@@ -73,7 +73,7 @@ where
         "Dashboard",
         html! {
             div.desk {
-                (working_tree_card(changes.as_deref()))
+                (working_tree_card(&state, changes.as_deref()))
                 (attention)
                 (issues_card(&open_issues))
             }
@@ -85,11 +85,15 @@ where
 }
 
 /// The "Working tree" card: every changed file [`worktree_changes`] found,
-/// each linking into the Files browser with its change kind right-aligned.
+/// each linking into the Files browser with its open-in-editor affordance
+/// ([`super::editor_open`]) beside it and its change kind right-aligned.
 /// `None` (the status walk itself failed) renders a note row; an empty
 /// list renders a "clean" row -- either way the card itself always
 /// renders, so the desk's shape is stable.
-fn working_tree_card(changes: Option<&[(String, &'static str)]>) -> Markup {
+fn working_tree_card<O: Find>(
+    state: &AppState<O>,
+    changes: Option<&[(String, &'static str)]>,
+) -> Markup {
     html! {
         section.card {
             div.card-header { "Working tree" }
@@ -100,6 +104,7 @@ fn working_tree_card(changes: Option<&[(String, &'static str)]>) -> Markup {
                     @for (path, kind) in changes {
                         div.card-row {
                             a href={ "/files/" (path) } { (path) }
+                            (super::editor_open(state, path, None))
                             span.entry-size { (kind) }
                         }
                     }

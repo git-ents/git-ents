@@ -188,7 +188,10 @@ where
             .head_id()
             .map_err(|source| Error::Repo(source.to_string()))?
             .to_string();
-        let (body, below) = blob_view(path, name, &head_oid, session, &blob.data, &comments)?;
+        let editor = super::editor_open(state, path, None);
+        let (body, below) = blob_view(
+            path, name, &head_oid, session, &blob.data, &comments, editor,
+        )?;
         let parent = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         Ok(super::layout_split(
             &super::RepoHeader::from_state(state),
@@ -499,6 +502,7 @@ fn blob_view(
     session: &Session,
     bytes: &[u8],
     comments: &[super::comments::FileComment],
+    editor: Markup,
 ) -> Result<(Markup, Markup)> {
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let comment_count = comments.len();
@@ -510,6 +514,7 @@ fn blob_view(
             line_count: None,
             language: None,
             comments: comment_count,
+            editor: editor.clone(),
         })
     };
     if is_binary(bytes) {
@@ -558,6 +563,7 @@ fn blob_view(
         line_count: Some(line_count),
         language,
         comments: comment_count,
+        editor,
     });
     let composer = composer_template(path, head_oid, session);
     let below: Vec<(usize, &super::comments::FileComment)> = comments
@@ -602,6 +608,10 @@ struct BlobHeaderMeta<'a> {
     /// blob -- the "N comments" jump link renders only when this is above
     /// zero (mirrors [`crumbs`]'s own former stance, now moved here).
     comments: usize,
+    /// The pre-rendered open-in-editor affordance ([`super::editor_open`];
+    /// empty when no editor is recognized), leading the actions so the
+    /// jump back to the desk sits first.
+    editor: Markup,
 }
 
 /// The header bar above every blob view -- the file's name and metadata on
@@ -633,6 +643,7 @@ fn blob_header(meta: &BlobHeaderMeta<'_>) -> Markup {
                 }
             }
             span.blob-actions {
+                (meta.editor)
                 a href="/commits" { "history" }
                 @if meta.comments > 0 {
                     a href="#comment-0" {
@@ -973,6 +984,7 @@ mod tests {
             lines,
             outdated: false,
             body: html! { p { "worth a look" } },
+            editor: html! {},
         }
     }
 
@@ -1064,6 +1076,7 @@ mod tests {
             &session(),
             b"# Title\n",
             &[],
+            maud::html! {},
         )
         .expect("markdown renders");
         assert!(body.into_string().contains("<h1>Title</h1>"));
@@ -1078,6 +1091,7 @@ mod tests {
             &session(),
             b"= Title\n\nBody.\n",
             &[],
+            maud::html! {},
         )
         .expect("asciidoc renders");
         assert!(body.into_string().contains("<h1>Title</h1>"));
@@ -1092,6 +1106,7 @@ mod tests {
             &session(),
             b"1 < 2 and true",
             &[],
+            maud::html! {},
         )
         .expect("plain text renders");
         let rendered = body.into_string();
@@ -1109,6 +1124,7 @@ mod tests {
             &session(),
             b"fn main() { let x = 1; }",
             &[],
+            maud::html! {},
         )
         .expect("rust renders");
         let rendered = body.into_string();
@@ -1126,6 +1142,7 @@ mod tests {
             &session(),
             b"\0\x01\x02binary",
             &[],
+            maud::html! {},
         )
         .expect("binary placeholder renders");
         assert!(body.into_string().contains("Binary file"));
@@ -1141,6 +1158,7 @@ mod tests {
             &session(),
             b"# Title\n",
             &comments,
+            maud::html! {},
         )
         .expect("markdown renders");
         // A doc view has no source line to interleave at: every comment,
@@ -1159,6 +1177,7 @@ mod tests {
             &session(),
             b"fn main() {}\n",
             &[],
+            maud::html! {},
         )
         .expect("rust renders");
         let rendered = body.into_string();
@@ -1178,6 +1197,7 @@ mod tests {
             &session(),
             b"fn main() {}\n",
             &[],
+            maud::html! {},
         )
         .expect("rust renders");
         let rendered = body.into_string();
@@ -1198,6 +1218,7 @@ mod tests {
             &session(),
             b"# Title\n",
             &[],
+            maud::html! {},
         )
         .expect("markdown renders");
         assert!(

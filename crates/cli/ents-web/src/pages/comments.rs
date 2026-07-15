@@ -197,6 +197,7 @@ where
                             a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
                                 (anchor.path) (line_label(anchor.lines))
                             }
+                            (super::editor_open(&state, &anchor.path, anchor.lines.map(|range| range.start)))
                         }
                     }
                     @if let Some((_, projection)) = &projected {
@@ -299,6 +300,7 @@ fn listing_card<O: Find + Write>(
                     a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
                         (anchor.path) (line_label(anchor.lines))
                     }
+                    (super::editor_open(state, &anchor.path, anchor.lines.map(|range| range.start)))
                 }
             }
             div.doc-body { (body) }
@@ -604,6 +606,11 @@ pub(crate) struct FileComment {
     /// falling back to escaped plain text on a render failure -- a file
     /// view degrades, it never 500s over one unparsable comment.
     pub(crate) body: Markup,
+    /// The pre-rendered open-in-editor affordance for this comment's
+    /// landing spot ([`crate::pages::editor_open`]; empty when no editor
+    /// is recognized) -- built where `state` is at hand so
+    /// [`comment_card`] stays a pure markup function.
+    pub(crate) editor: Markup,
 }
 
 /// Every comment whose anchor projects onto `path` at `HEAD` in `repo` --
@@ -661,6 +668,7 @@ pub(crate) fn for_path<O: Find + Write>(
         };
         let body = crate::asciidoc::to_html(&comment.body)
             .unwrap_or_else(|_| html! { p { (comment.body) } });
+        let editor = super::editor_open(state, &landed, lines.map(|range| range.start));
         out.push(FileComment {
             author,
             seconds,
@@ -668,6 +676,7 @@ pub(crate) fn for_path<O: Find + Write>(
             lines,
             outdated,
             body,
+            editor,
         });
     }
     out
@@ -714,6 +723,7 @@ pub(crate) fn for_commit<O: Find + Write>(
         };
         let body = crate::asciidoc::to_html(&comment.body)
             .unwrap_or_else(|_| html! { p { (comment.body) } });
+        let editor = super::editor_open(state, &anchor.path, anchor.lines.map(|range| range.start));
         out.push(FileComment {
             author,
             seconds,
@@ -721,6 +731,7 @@ pub(crate) fn for_commit<O: Find + Write>(
             lines: anchor.lines,
             outdated: false,
             body,
+            editor,
         });
     }
     out
@@ -777,6 +788,7 @@ pub(crate) fn comment_card(index: usize, comment: &FileComment, link: LinkMode) 
                         }
                     }
                 }
+                (comment.editor)
                 @if comment.outdated {
                     span.outdated { "outdated" }
                 }
