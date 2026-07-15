@@ -428,13 +428,13 @@ async fn dashboard_renders_in_process_with_no_socket_bound() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(body.contains("Working tree"));
-    assert!(body.contains("Tickets"));
+    assert!(body.contains("Issues"));
     // The shell chrome renders on every page: the icon rail, the sticky
     // top bar, and the bar's palette search form.
     assert!(body.contains("class=\"rail\""));
     assert!(body.contains("class=\"wb-bar\""));
     assert!(body.contains("class=\"palette\""));
-    assert!(body.contains("Jump to file, commit, ticket, member"));
+    assert!(body.contains("Jump to file, commit, issue, member"));
 }
 
 /// `roots.web-agnostic`: the shell's `.wb-bar` top bar names the served
@@ -498,11 +498,11 @@ async fn the_top_bar_names_the_served_repo_and_its_head_branch() {
 }
 
 /// `roots.web-agnostic`: the workbench dashboard (`GET /`) renders its
-/// four sections -- Working tree, Needs attention, Tickets, History --
+/// four sections -- Working tree, Needs attention, Issues, History --
 /// against a real repository, with real content in each: the dirty file
 /// shows up as a working-tree row, the seeded open comment as a
 /// needs-attention row (naming its anchored path), the seeded open issue
-/// as a ticket, and the `HEAD` commit in the History card with its
+/// as an issue, and the `HEAD` commit in the History card with its
 /// Scoped-Commits scope chip.
 #[tokio::test]
 async fn dashboard_renders_the_four_sections_with_real_content() {
@@ -530,7 +530,7 @@ async fn dashboard_renders_the_four_sections_with_real_content() {
     seed_issue(&router, &state, "Ship the desk", "open", "", "").await;
 
     let body = get_body(&router, "/").await;
-    for header in ["Working tree", "Needs attention", "Tickets", "History"] {
+    for header in ["Working tree", "Needs attention", "Issues", "History"] {
         assert!(body.contains(header), "the {header} section renders");
     }
     assert!(
@@ -543,7 +543,7 @@ async fn dashboard_renders_the_four_sections_with_real_content() {
     );
     assert!(
         body.contains("Ship the desk"),
-        "the open issue lists as a ticket"
+        "the open issue lists on the Issues card"
     );
     assert!(
         body.contains(&format!("/commit/{oid}")),
@@ -578,7 +578,7 @@ async fn dashboard_degrades_every_section_on_an_unborn_head() {
     let router = ents_web::router(state);
 
     let body = get_body(&router, "/").await;
-    for header in ["Working tree", "Needs attention", "Tickets", "History"] {
+    for header in ["Working tree", "Needs attention", "Issues", "History"] {
         assert!(body.contains(header), "the {header} section renders");
     }
     assert!(!body.contains("/commit/"), "no placeholder commit links");
@@ -898,7 +898,7 @@ async fn files_root_renders_the_readme_below_the_listing() {
 /// The master-detail splits (`crate::pages::layout_split`): a blob view
 /// renders a `.tree` sidebar with its own entry active and its siblings
 /// listed; a commit page renders the compact history sidebar with the
-/// viewed commit active; the tickets page renders its list beside the
+/// viewed commit active; the issues page renders its list beside the
 /// composer.
 #[tokio::test]
 async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
@@ -941,7 +941,7 @@ async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
     );
 
     let issues = get_body(&router, "/issues").await;
-    assert!(issues.contains("class=\"tree\""), "the tickets page splits");
+    assert!(issues.contains("class=\"tree\""), "the issues page splits");
     assert!(
         issues.contains("Split the panes") && issues.contains("Open an Issue"),
         "the list and the composer render side by side"
@@ -949,7 +949,7 @@ async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
     let detail = get_body(&router, &format!("/issues/{issue_id}")).await;
     assert!(
         detail.contains(&format!("class=\"active\" href=\"/issues/{issue_id}\"")),
-        "the viewed ticket highlights in the sidebar"
+        "the viewed issue highlights in the sidebar"
     );
 }
 
@@ -1026,7 +1026,7 @@ async fn files_blob_view_syntax_highlights_a_rust_file() {
 }
 
 /// The icon rail (`crate::pages::layout_shell`) names every top-level page
-/// family truthfully: Dashboard, Code, Review, Tickets, Threads, then the
+/// family truthfully: Dashboard, Code, Review, Issues, Threads, then the
 /// meta and account items -- and the issues family renders as its own rail
 /// item, never behind the `META_SECTIONS` rail (see `crate::pages::mod`'s
 /// own doc).
@@ -1053,7 +1053,7 @@ async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
             "the rail links {href}"
         );
     }
-    for label in ["Dashboard", "Code", "Review", "Tickets", "Threads"] {
+    for label in ["Dashboard", "Code", "Review", "Issues", "Threads"] {
         assert!(
             overview.contains(&format!("title=\"{label}\"")),
             "the rail tooltips {label}"

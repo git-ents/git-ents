@@ -17,7 +17,7 @@
 //! carrying its own top-level entry (see `Tab`'s own doc); [`meta`] is that
 //! group's `GET /meta` landing page. [`commits`] and [`issues`] are rail
 //! items of their own -- `Tab::Commits` (Review) and `Tab::Issues`
-//! (Tickets) in [`layout`]'s icon rail, alongside the dashboard, code,
+//! (Issues) in [`layout`]'s icon rail, alongside the dashboard, code,
 //! threads, and meta items. [`search`] renders with no rail item active at
 //! all; it is reached from the `.wb-bar`'s own `.palette` search form
 //! rather than any rail item.
@@ -111,7 +111,7 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// the horizontal tab strip became the vertical icon rail, but the
 /// "handler names its own section" contract is unchanged). The rail reads,
 /// top to bottom: Dashboard (`Overview`), Code (`Files`), Review
-/// (`Commits`), Tickets (`Issues`), Threads (`Comments`); then, past the
+/// (`Commits`), Issues, Threads (`Comments`); then, past the
 /// spacer, Repo & governance (`Meta`) and Account. `Meta` covers five page
 /// families ([`super::members`], [`super::effects`], [`super::toolchains`],
 /// [`super::redactions`], [`super::inbox`]) behind one rail item and the
@@ -259,7 +259,7 @@ fn rail_link(active: Tab, tab: Tab, href: &str, title: &str, icon: &str) -> Mark
 
 /// The workbench shell itself (the "Proposal C" chrome,
 /// `docs/web-workbench-plan.adoc`): a `.wb` grid pairing the sticky icon
-/// `.rail` (Dashboard / Code / Review / Tickets / Threads, then governance
+/// `.rail` (Dashboard / Code / Review / Issues / Threads, then governance
 /// and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
 /// column whose sticky `.wb-bar` top bar names the served repository and
 /// its branch pill, carries the `.palette` search form (a plain GET to
@@ -294,7 +294,7 @@ pub(crate) fn layout_shell(
                         (rail_link(active, Tab::Overview, "/", "Dashboard", "i-home"))
                         (rail_link(active, Tab::Files, "/files", "Code", "i-files"))
                         (rail_link(active, Tab::Commits, "/commits", "Review", "i-commit"))
-                        (rail_link(active, Tab::Issues, "/issues", "Tickets", "i-issue"))
+                        (rail_link(active, Tab::Issues, "/issues", "Issues", "i-issue"))
                         (rail_link(active, Tab::Comments, "/comments", "Threads", "i-comment"))
                         span.spacer {}
                         (rail_link(active, Tab::Meta, "/meta", "Repo & governance", "i-meta"))
@@ -310,7 +310,7 @@ pub(crate) fn layout_shell(
                             }
                             form.palette method="get" action="/search" {
                                 (crate::assets::icon_use("i-search"))
-                                input type="search" name="q" placeholder="Jump to file, commit, ticket, member…" aria-label="Search";
+                                input type="search" name="q" placeholder="Jump to file, commit, issue, member…" aria-label="Search";
                                 kbd { "⌘K" }
                             }
                             a.id-chip href="/account" { (identity) }
@@ -359,7 +359,7 @@ pub(crate) fn layout_meta(
 /// Wrap `title`, `sidebar`, and `pane` in the master-detail split every
 /// selection-heavy page family renders through ([`super::files`]'s tree
 /// beside a blob, [`super::commits`]'s compact history beside a diff,
-/// [`super::issues`]'s ticket list beside a ticket): the workbench chrome
+/// [`super::issues`]'s issue list beside an issue): the workbench chrome
 /// ([`layout_shell`]) around a full-bleed `.split` grid -- a sticky
 /// `nav.tree` sidebar on the left, a padded `main.pane` (carrying the
 /// page's own `.page-header` title and `pane` body) on the right. Every

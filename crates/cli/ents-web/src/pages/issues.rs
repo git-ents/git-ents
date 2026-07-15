@@ -29,7 +29,7 @@ use crate::error::Result;
 use crate::session::Session;
 use crate::state::AppState;
 
-/// `GET /issues`: the Tickets split (`crate::pages::layout_split`) --
+/// `GET /issues`: the Issues split (`crate::pages::layout_split`) --
 /// every issue recorded in this repository (`ents_forge::issue::list_all`)
 /// as the sidebar, its state/assignees/labels on each row's own locator
 /// line, beside the new-issue composer in the pane.
@@ -54,14 +54,14 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         super::Tab::Issues,
-        "Tickets",
+        "Issues",
         issues_sidebar(&rows, None),
         html! {
             div.readable {
                 (crate::render::unreadable_disclosure(&failures))
                 @if rows.is_empty() {
                     (super::blankslate(
-                        "No tickets yet",
+                        "No issues yet",
                         html! { "Open one with the form below." },
                     ))
                 }
@@ -73,13 +73,13 @@ where
     ))
 }
 
-/// The Tickets split's `.tree` sidebar: every issue as a two-line row --
+/// The Issues split's `.tree` sidebar: every issue as a two-line row --
 /// its title, then a muted locator of its state, assignees, and labels --
 /// linking to its own page, `active` naming the viewed issue's id.
 fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) -> Markup {
     html! {
         @if rows.is_empty() {
-            span.tree-note { "No tickets yet." }
+            span.tree-note { "No issues yet." }
         }
         @for (id, issue) in rows {
             a.active[active == Some(id.as_str())] href={ "/issues/" (id) } {
@@ -140,7 +140,7 @@ where
     let body =
         crate::asciidoc::to_html(&issue.body).unwrap_or_else(|_| html! { p { (issue.body) } });
     let return_to = format!("/issues/{id}");
-    // Best-effort: the sidebar listing every ticket beside this one is
+    // Best-effort: the sidebar listing every issue beside this one is
     // navigation chrome, never a reason to fail the issue's own page.
     let (rows, _unreadable) =
         issue::list_all(state.refs.as_ref(), &*state.objects()).unwrap_or_default();

@@ -1,8 +1,8 @@
 //! `GET /`: the workbench dashboard -- `git status` for review and
-//! ticketing (`docs/web-workbench-plan.adoc`'s Phase C home page). Four
+//! issue tracking (`docs/web-workbench-plan.adoc`'s Phase C home page). Four
 //! sections on a `.desk` grid: the working tree's changed files (a live
 //! `gix` status of the repository at `state.path`), a needs-attention
-//! feed of open comment threads, the open tickets, and a full-width
+//! feed of open comment threads, the open issues, and a full-width
 //! History card of recent commits with their Scoped-Commits scope chips.
 //! The `README` this page used to render moved to `crate::pages::files`'s
 //! root listing -- the dashboard is a work surface, not a document viewer.
@@ -75,7 +75,7 @@ where
             div.desk {
                 (working_tree_card(changes.as_deref()))
                 (attention)
-                (tickets_card(&open_issues))
+                (issues_card(&open_issues))
             }
             div.desk-wide {
                 (history_card(&history_title, &history))
@@ -111,7 +111,7 @@ fn working_tree_card(changes: Option<&[(String, &'static str)]>) -> Markup {
 
 /// The "Needs attention" card: every open comment thread, each linking to
 /// its own page and naming where its anchor lands ([`comment_where`]),
-/// closed by an open-tickets count line when any tickets are open.
+/// closed by an open-issues count line when any issues are open.
 fn attention_card<O: Find>(
     state: &AppState<O>,
     open_comments: &[(String, ents_forge::comment::Comment)],
@@ -133,7 +133,7 @@ fn attention_card<O: Find>(
                 a.attention-row href="/issues" {
                     span.what {
                         (open_issue_count)
-                        @if open_issue_count == 1 { " open ticket" } @else { " open tickets" }
+                        @if open_issue_count == 1 { " open issue" } @else { " open issues" }
                     }
                 }
             }
@@ -141,17 +141,17 @@ fn attention_card<O: Find>(
     }
 }
 
-/// The "Tickets" card: every open issue linking to its own page, with a
-/// ghost "New" button into the Tickets page's own composer.
-fn tickets_card(open_issues: &[(String, ents_forge::Issue)]) -> Markup {
+/// The "Issues" card: every open issue linking to its own page, with a
+/// ghost "New" button into the Issues page's own composer.
+fn issues_card(open_issues: &[(String, ents_forge::Issue)]) -> Markup {
     html! {
         section.card {
             div.card-header {
-                "Tickets"
+                "Issues"
                 a.btn.btn-ghost href="/issues" { "New" }
             }
             @if open_issues.is_empty() {
-                div.card-row.muted { "No open tickets." }
+                div.card-row.muted { "No open issues." }
             }
             @for (id, issue) in open_issues {
                 a.attention-row href={ "/issues/" (id) } {
@@ -191,7 +191,7 @@ fn history_card(title: &str, rows: &[super::commits::CommitRow]) -> Markup {
 }
 
 /// A body's first line, ellipsized past [`WHAT_LIMIT`] characters -- what
-/// a `.what` row shows of a comment or ticket.
+/// a `.what` row shows of a comment or issue.
 fn what_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or("");
     let mut shown: String = line.chars().take(WHAT_LIMIT).collect();
