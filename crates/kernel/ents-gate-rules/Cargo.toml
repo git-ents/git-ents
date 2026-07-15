@@ -1,0 +1,12 @@
+[package]
+name = "ents-gate-rules"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ascent = { workspace = true }
+
+[lints]
+workspace = true
