@@ -1,0 +1,48 @@
+= verify: the formal stocktake harness
+
+This directory holds the scaffolding for the formal stocktaking exercise described in `exercise.md` (copied verbatim; it is the source of truth for phases, obligations, and verdict rules).
+It is documentation-and-tooling only: nothing here is a crate, nothing here appears in any `Cargo.toml`, and nothing here touches refs, trailers, tree layouts, or any string that ends up in a Git object.
+The exercise itself is done by a human, on paper first; these files are the harness, not the proofs.
+
+== What lives here
+
+`ledger.adoc`::
+The verdict ledger — the exercise's one deliverable.
+One row per invariant claim extracted from `docs/abstractions.adoc` and `docs/spec/*.adoc`, with verdicts filled in as the exercise progresses.
+
+`alloy/`::
+Alloy 6 models for the structural claims.
+`objects.als` (Phase 1) and `binding.als` (Phase 2) are deliberately empty stubs that parse but check nothing.
+`gate_rules.als` (Phase 0.5) is the exception: it translates the seven denial rules of `crates/kernel/ents-gate-rules` faithfully and its binding check is expected to produce the known cross-ref replay counterexample.
+
+`tla/`::
+TLA+ skeletons for the protocol claims: `Receive.tla` (Phase 3), `Effects.tla` (Phase 4), `Durability.tla` (Phase 5), each with a small TLC `.cfg`.
+Variables and action signatures only; `Receive.tla`'s `GateAdmits` transcribes the seven rules as the gate's enabling condition.
+
+`bin/`::
+`check-alloy` and `check-tla`, best-effort wrappers that run every model headless when a checker jar is available and warn-and-skip when it is not.
+
+== The epistemic split
+
+Three tools, three jobs, deliberately not interchangeable.
+The Datalog in `ents-gate-rules` *evaluates* the admission rules over one supplied transaction's facts; it is executable and type-checked, but it cannot search for the transaction you didn't think of.
+Alloy *searches* for counterexamples: small-scope model finding over the same vocabulary, looking for admitted transactions that break a doc invariant.
+TLA+ checks the *protocol over time*: receive/CAS races, adoption, epochs, effect dispatch, durability ordering — claims about traces, not single transactions.
+
+== The refinement anchor
+
+Models are checked against `ents-gate-rules`, not the other way around.
+Every signature and variable here mirrors the crate's EDB relations one-to-one (`ref_update`, `parent`, `signed_by`, `member`, `anchor`, `context`, `object_exists`), and the seven denial rules are transcribed under their crate names, so a finding in a model is expressible as a `Facts` test in the crate.
+That is also the landing convention: a FALSIFIED or DIVERGED ledger row with a concrete counterexample becomes a test in `crates/kernel/ents-gate-rules/tests/ledger.rs` first (gap-pinning while open), then a denial rule, one rule at a time.
+
+== Running the checkers
+
+[source,shell]
+----
+verify/bin/check-alloy   # every .als, headless; needs ALLOY_JAR or a well-known path
+verify/bin/check-tla     # SANY-parse every .tla, TLC-run every .cfg; needs TLA_TOOLS_JAR
+----
+
+Both scripts exit 0 with a warning when no jar or no Java runtime is found, so they never block anything; CI runs them in an optional, non-required job.
+Do not vendor the jars into the repo.
+When `check-alloy` reports a counterexample for `binding_refname_recomputed` in `gate_rules.als`, that is the documented open gap, not a harness failure — see the DIVERGED row in `ledger.adoc`.

@@ -48,3 +48,5 @@ extend-ignore-re = ["6PN", "UPDATEs"]
 [default.extend-words]
 # COSE (CBOR Object Signing and Encryption) — a real WebAuthn term, not a typo
 cose = "cose"
+# als — the Alloy model file extension (verify/alloy/*.als), not "also"
+als = "als"

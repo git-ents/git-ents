@@ -1,0 +1,56 @@
+#!/bin/sh
+# Parse every TLA+ module in verify/tla/ with SANY, then model-check each
+# module that has a .cfg with TLC. Best-effort and optional: if no
+# tla2tools jar (or no java) is available this script warns and exits 0
+# so it never blocks a pipeline.
+#
+# Jar discovery: $TLA_TOOLS_JAR, then a few well-known paths. Do NOT
+# vendor the jar into the repo.
+set -u
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+warn_skip() {
+    echo "check-tla: $1" >&2
+    echo "check-tla: skipping (this is a warning, not a failure)." >&2
+    echo "check-tla: install: download tla2tools.jar from" >&2
+    echo "  https://github.com/tlaplus/tlaplus/releases" >&2
+    echo "  and set TLA_TOOLS_JAR=/path/to/tla2tools.jar" >&2
+    exit 0
+}
+
+jar="${TLA_TOOLS_JAR:-}"
+if [ -z "$jar" ]; then
+    for candidate in \
+        "$HOME/.local/share/tlaplus/tla2tools.jar" \
+        /usr/local/share/tlaplus/tla2tools.jar \
+        /opt/homebrew/share/tlaplus/tla2tools.jar \
+        /usr/share/java/tla2tools.jar; do
+        if [ -f "$candidate" ]; then
+            jar=$candidate
+            break
+        fi
+    done
+fi
+[ -n "$jar" ] && [ -f "$jar" ] || warn_skip "no tla2tools jar found (TLA_TOOLS_JAR unset, no well-known path hit)"
+command -v java >/dev/null 2>&1 || warn_skip "no java runtime on PATH"
+
+status=0
+cd "$dir/tla" || exit 1
+for tla in *.tla; do
+    echo "== check-tla: SANY $tla"
+    if ! java -cp "$jar" tla2sany.SANY "$tla"; then
+        echo "check-tla: $tla: SANY parse failure" >&2
+        status=1
+        continue
+    fi
+    cfg="${tla%.tla}.cfg"
+    if [ -f "$cfg" ]; then
+        echo "== check-tla: TLC $tla ($cfg)"
+        if ! java -cp "$jar" tlc2.TLC -config "$cfg" -deadlock "$tla"; then
+            echo "check-tla: $tla: TLC failure" >&2
+            status=1
+        fi
+    fi
+done
+exit "$status"

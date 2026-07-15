@@ -7,6 +7,8 @@ exclude = [
     "dist",
     "build",
     "CHANGELOG.md",
+    # Copied verbatim from the source exercise; must not be reformatted.
+    "verify/exercise.md",
 ]
 
 respect-gitignore = true

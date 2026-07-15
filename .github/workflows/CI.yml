@@ -125,6 +125,35 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --all-features
 
+  # Formal-model harness (verify/). Best-effort and optional: the check
+  # scripts warn and exit 0 when the jars are absent, downloads are
+  # tolerated to fail, and the job is continue-on-error and deliberately
+  # NOT in the `ci` aggregator's needs — it must never block the
+  # pipeline or become a required check. Note: gate_rules.als's binding
+  # check is EXPECTED to report the known cross-ref replay counterexample
+  # (see verify/ledger.adoc), so a red step here can be the harness
+  # working as intended.
+  formal-models:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Fetch checker jars (best-effort, never vendored)
+        run: |
+          curl -fsSL -o /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar || true
+          curl -fsSL -o /tmp/org.alloytools.alloy.dist.jar \
+            https://github.com/AlloyTools/org.alloytools.alloy/releases/latest/download/org.alloytools.alloy.dist.jar || true
+      - name: Check TLA+ models
+        run: TLA_TOOLS_JAR=/tmp/tla2tools.jar verify/bin/check-tla
+      - name: Check Alloy models
+        run: ALLOY_JAR=/tmp/org.alloytools.alloy.dist.jar verify/bin/check-alloy
+
   ci:
     name: CI
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) }}
