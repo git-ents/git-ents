@@ -30,6 +30,7 @@ pub mod effects;
 pub mod files;
 pub mod inbox;
 pub mod issues;
+pub mod login;
 pub mod members;
 pub mod meta;
 pub mod redactions;
@@ -442,6 +443,29 @@ pub(crate) fn csrf_input(session: &Session) -> Markup {
 ///
 /// [`Error::BadCsrf`] if `submitted` does not match.
 // @relation(roots.web-session, scope=function)
+/// The author signature an attributed mutation carries
+/// (`receive.attributed-author`): the session's signed-in member, stamped
+/// with the current time, or `None` when the session holds no member --
+/// every `Trusted` deployment, and a hosted request that somehow reached a
+/// mutation anonymously (the auth middleware refuses those first). The
+/// synthetic email domain is reserved (RFC 2606): a member record carries
+/// no email of its own.
+// @relation(receive.attributed-author, scope=function)
+pub(crate) fn member_author(session: &Session) -> Option<gix::actor::Signature> {
+    let member = session.member.as_ref()?;
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .try_into()
+        .unwrap_or_default();
+    Some(gix::actor::Signature {
+        name: member.username.clone().into(),
+        email: format!("{}@members.invalid", member.username).into(),
+        time: gix::date::Time { seconds, offset: 0 },
+    })
+}
+
 pub(crate) fn require_csrf(session: &Session, submitted: &str) -> Result<()> {
     if submitted == session.csrf {
         Ok(())

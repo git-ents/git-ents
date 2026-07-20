@@ -361,7 +361,7 @@ where
         state.events.as_ref(),
         &id,
         form.body,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;
@@ -392,7 +392,7 @@ where
         &*state.objects(),
         state.events.as_ref(),
         &id,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
         Some(&identity.public_openssh()),
     )?;
@@ -424,7 +424,7 @@ where
         &*state.objects(),
         state.events.as_ref(),
         &id,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
         Some(&identity.public_openssh()),
     )?;
@@ -534,7 +534,7 @@ where
         state.events.as_ref(),
         &state.path,
         new,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;

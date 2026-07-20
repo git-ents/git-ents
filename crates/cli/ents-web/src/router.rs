@@ -26,7 +26,7 @@ use gix_object::{Find, Write};
 use crate::assets;
 use crate::pages;
 use crate::session;
-use crate::state::AppState;
+use crate::state::{AccessPolicy, AppState};
 
 /// Build the full route table, wrapped in the session middleware
 /// (`roots.web-session`).
@@ -38,7 +38,22 @@ pub fn router<O>(state: Arc<AppState<O>>) -> Router
 where
     O: Find + Write + Send + 'static,
 {
+    // The sign-in surface exists only where the injected policy demands
+    // it (`roots.web-signin`): under `Trusted` — the local root — these
+    // routes are not merely inert, they are unrouted, so `/login` is a
+    // plain 404 and the local surface is byte-identical to before.
+    let sign_in = match state.access {
+        AccessPolicy::SignInRequired(_) => Router::new()
+            .route("/login", get(pages::login::show::<O>))
+            .route(
+                "/login/challenge/{code}",
+                get(pages::login::challenge::<O>).post(pages::login::complete::<O>),
+            )
+            .route("/logout", post(pages::login::logout::<O>)),
+        AccessPolicy::Trusted => Router::new(),
+    };
     Router::new()
+        .merge(sign_in)
         .route("/", get(pages::dashboard::show::<O>))
         .route("/members", get(pages::members::list::<O>))
         .route("/members/{username}", get(pages::members::show::<O>))
@@ -92,11 +107,90 @@ where
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))
+        // Layer order: axum runs the last-added layer first, so the
+        // session middleware (added below) resolves the session before
+        // the auth middleware consults it.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth_middleware::<O>,
+        ))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             session_middleware::<O>,
         ))
         .with_state(state)
+}
+
+/// The access-policy middleware (`roots.web-signin`): under
+/// [`AccessPolicy::Trusted`] every request passes untouched — the local
+/// root's behavior is byte-identical to before this middleware existed.
+/// Under [`AccessPolicy::SignInRequired`], a state-changing request (every
+/// mutation in this crate is a `POST`) requires a session signed in as a
+/// member who is *still* enrolled and active — re-checked here on every
+/// mutation, so a revocation takes effect mid-session, not at the next
+/// sign-in. `/login` and `/logout` are exempt: the sign-in surface itself
+/// authenticates by signature, and logout only clears session state.
+// @relation(roots.web-signin, scope=function)
+async fn auth_middleware<O>(
+    State(state): State<Arc<AppState<O>>>,
+    request: Request,
+    next: Next,
+) -> Response
+where
+    O: Find + Write + Send + 'static,
+{
+    let AccessPolicy::SignInRequired(_) = &state.access else {
+        return next.run(request).await;
+    };
+    let path = request.uri().path();
+    if request.method() != axum::http::Method::POST
+        || path.starts_with("/login")
+        || path == "/logout"
+    {
+        return next.run(request).await;
+    }
+
+    let member = request
+        .extensions()
+        .get::<session::Session>()
+        .and_then(|session| session.member.clone());
+    let enrolled = match &member {
+        Some(member) => crate::auth::active_member_by_key(&state, &member.key)
+            .ok()
+            .flatten()
+            .is_some_and(|username| username == member.username),
+        None => false,
+    };
+    if enrolled {
+        return next.run(request).await;
+    }
+
+    // A signed-in member who no longer verifies against the live member
+    // list is signed out, not just refused (`roots.web-signin`).
+    if member.is_some()
+        && let Some(id) = request
+            .headers()
+            .get(header::COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(session::session_id_from_cookie_header)
+    {
+        state.sessions.clear_member(id);
+    }
+
+    let wants_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+    if wants_html {
+        axum::response::Redirect::to("/login").into_response()
+    } else {
+        (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "sign in first: this deployment requires an authenticated member for mutations\n",
+        )
+            .into_response()
+    }
 }
 
 /// The session middleware (`roots.web-session`): recognize an existing
@@ -134,9 +228,15 @@ where
         }
     };
     request.extensions_mut().insert(session);
+    request
+        .extensions_mut()
+        .insert(session::SessionId(id.clone()));
 
     let mut response = next.run(request).await;
-    if is_new && let Ok(value) = HeaderValue::from_str(&session::set_cookie_header(&id)) {
+    // `Secure` is policy-driven: hosted (sign-in-required) serving is
+    // HTTPS-only, local plain-HTTP loopback must not lose its cookie.
+    let secure = matches!(state.access, AccessPolicy::SignInRequired(_));
+    if is_new && let Ok(value) = HeaderValue::from_str(&session::set_cookie_header(&id, secure)) {
         response.headers_mut().append(header::SET_COOKIE, value);
     }
     response

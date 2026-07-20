@@ -233,7 +233,7 @@ where
         &*state.objects(),
         state.events.as_ref(),
         new,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;
@@ -291,7 +291,7 @@ where
         state.events.as_ref(),
         &id,
         edit,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;
@@ -343,7 +343,7 @@ where
         state.events.as_ref(),
         &state.path,
         new,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;

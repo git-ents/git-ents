@@ -146,7 +146,7 @@ where
         state.events.as_ref(),
         name,
         &recipe,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )
     .map_err(|source| match source {

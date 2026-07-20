@@ -99,8 +99,20 @@ pub trait SigningIdentity: Send + Sync {
 #[macro_export]
 macro_rules! receive_identity {
     ($identity:expr) => {
+        $crate::receive_identity!($identity, None)
+    };
+    // The attributed form (`receive.attributed-author`,
+    // `roots.web-signing`): `$author` is an
+    // `Option<gix::actor::Signature>` naming the signed-in member --
+    // `pages::member_author(&session)` at every mutation call site -- so
+    // hosted history reads "member via the web" while the committer and
+    // signature stay the injected identity. Under a `Trusted` policy the
+    // session never holds a member, the option is `None`, and the commit
+    // is byte-identical to the single-argument form's.
+    ($identity:expr, $author:expr) => {
         ents_receive::Identity {
             actor: $identity.actor(),
+            author: $author,
             sign: &|payload| $identity.sign(payload),
         }
     };

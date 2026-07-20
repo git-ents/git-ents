@@ -21,17 +21,41 @@ pub const COOKIE_NAME: &str = "ents_session";
 /// request carries its CSRF token in.
 pub const CSRF_FIELD: &str = "csrf";
 
-/// One held session: nothing but the CSRF token it was issued.
-/// `roots.web-session` requires no more than this -- there is no login
-/// step in this phase (see `ents-web`'s crate doc for the scoping this
-/// leaves for a future account/login system), so a session's only job is
-/// letting this server recognize "the same browser that fetched the form
-/// is the one submitting it," which a bare CSRF token already proves.
-// @relation(roots.web-session, scope=file)
+/// The member a session proved control of a key for
+/// (`roots.web-signin`): nothing but the username and the public key —
+/// no secret is ever transmitted or stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMember {
+    /// The enrolled member's username, as resolved at sign-in.
+    pub username: String,
+    /// The member's OpenSSH public key line, re-checked against the live
+    /// member list at every mutation (`roots.web-signin`).
+    pub key: String,
+}
+
+/// The current request's session id, inserted alongside [`Session`] by
+/// the session middleware — a login page needs it to bind a challenge to
+/// exactly this browser (`roots.web-signin`), and nothing else does: the
+/// id is the cookie's secret, so handlers receive it in this deliberate
+/// newtype rather than a bare `String` any format call could leak.
+#[derive(Debug, Clone)]
+pub struct SessionId(pub String);
+
+/// One held session: the CSRF token it was issued, plus — once the
+/// browser completes a sign-in (`roots.web-signin`) — the member it
+/// authenticated as. Under a `Trusted` access policy
+/// ([`crate::state::AccessPolicy`], the local root) `member` stays
+/// `None` for every session and grants nothing either way: the injected
+/// identity is the whole story there, so a session's only job is letting
+/// this server recognize "the same browser that fetched the form is the
+/// one submitting it," which the CSRF token proves.
+// @relation(roots.web-session, roots.web-signin, scope=file)
 #[derive(Debug, Clone)]
 pub struct Session {
     /// The token a state-changing request must echo back.
     pub csrf: String,
+    /// The member this session signed in as, if any.
+    pub member: Option<SessionMember>,
 }
 
 /// Server-memory-only session storage (`roots.web-session`).
@@ -66,6 +90,7 @@ impl SessionStore {
         let id = random_token();
         let session = Session {
             csrf: random_token(),
+            member: None,
         };
         #[expect(
             clippy::unwrap_used,
@@ -84,6 +109,33 @@ impl SessionStore {
     pub fn get(&self, id: &str) -> Option<Session> {
         #[expect(clippy::unwrap_used, reason = "see Self::create's identical reasoning")]
         self.sessions.lock().unwrap().get(id).cloned()
+    }
+
+    /// Mark `id`'s session as signed in as `member`
+    /// (`roots.web-signin`), returning whether the session existed — a
+    /// consumed challenge naming a session this store has never held (a
+    /// restart between page load and sign-in) authenticates nothing.
+    pub fn authenticate(&self, id: &str, member: SessionMember) -> bool {
+        #[expect(clippy::unwrap_used, reason = "see Self::create's identical reasoning")]
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(id) {
+            Some(session) => {
+                session.member = Some(member);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop `id`'s signed-in member, keeping the session itself — the
+    /// logout action, and the auth middleware's response to a member
+    /// revoked mid-session (`roots.web-signin`).
+    pub fn clear_member(&self, id: &str) {
+        #[expect(clippy::unwrap_used, reason = "see Self::create's identical reasoning")]
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(session) = sessions.get_mut(id) {
+            session.member = None;
+        }
     }
 }
 
@@ -115,9 +167,16 @@ pub fn session_id_from_cookie_header(header: &str) -> Option<&str> {
 /// replacement for it: `SameSite=Strict` alone would already block a
 /// cross-site POST, but a network intermediary or a future relaxation of
 /// that attribute must not silently remove the protection).
+///
+/// `secure` adds the `Secure` attribute — set by the hosted deployment,
+/// which only ever serves behind HTTPS, and never by local plain-HTTP
+/// loopback serving, where the attribute would make the browser drop the
+/// cookie entirely. Policy-driven, not deployment-sniffed: the caller
+/// passes what its [`crate::state::AccessPolicy`] implies.
 #[must_use]
-pub fn set_cookie_header(id: &str) -> String {
-    format!("{COOKIE_NAME}={id}; Path=/; HttpOnly; SameSite=Strict")
+pub fn set_cookie_header(id: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{COOKIE_NAME}={id}; Path=/; HttpOnly; SameSite=Strict{secure}")
 }
 
 #[cfg(test)]
@@ -144,7 +203,7 @@ mod tests {
     #[rstest]
     // @relation(roots.web-session, scope=function, role=Verifies)
     fn cookie_header_round_trips_the_session_id() {
-        let header = set_cookie_header("abc123");
+        let header = set_cookie_header("abc123", false);
         assert!(header.contains("HttpOnly"));
         let raw_cookie = header.split(';').next().expect("at least one segment");
         assert_eq!(session_id_from_cookie_header(raw_cookie), Some("abc123"));

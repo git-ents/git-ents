@@ -994,6 +994,7 @@ mod tests {
     fn session() -> Session {
         Session {
             csrf: "test-csrf-token".to_owned(),
+            member: None,
         }
     }
 

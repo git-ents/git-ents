@@ -2830,3 +2830,429 @@ async fn members_effects_redactions_and_toolchains_list_and_show_a_real_entity_w
         assert_eq!(response.status(), StatusCode::OK, "GET {path}");
     }
 }
+
+// ---------------------------------------------------------------------
+// roots.web-signin: the hosted sign-in surface, driven exactly as the
+// CLI and a browser would drive it, still with no socket anywhere.
+// ---------------------------------------------------------------------
+
+/// Sign `payload` under the *login* namespace with seed `seed`'s key --
+/// the same deterministic key `Keypair::from_seed(seed)` wraps, rebuilt
+/// here because `Keypair::sign` deliberately signs only git's own commit
+/// namespace.
+fn login_sign(seed: u8, payload: &[u8]) -> String {
+    use ssh_key::private::{Ed25519Keypair, KeypairData};
+    use ssh_key::{HashAlg, LineEnding, PrivateKey};
+    let pair = Ed25519Keypair::from_seed(&[seed; 32]);
+    let key = PrivateKey::new(KeypairData::from(pair), "test").expect("well-formed");
+    key.sign(ents_web::auth::LOGIN_NAMESPACE, HashAlg::Sha512, payload)
+        .expect("signing is infallible")
+        .to_pem(LineEnding::LF)
+        .expect("renders")
+}
+
+/// Percent-encode a form value (the armored signature carries newlines,
+/// `+`, `/`, and `=`, every one of which is significant to a form body).
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// A sign-in-required state over `refs`/`objects`, host `ents.test` --
+/// the hosted composition root's shape (`roots.single-node-hosted`),
+/// minus the real repo.
+fn build_signin_state(
+    identity: FixtureIdentity,
+    refs: MemRefStore,
+    objects: ObjectStore,
+) -> Arc<AppState<ObjectStore>> {
+    Arc::new(
+        AppState::new(
+            Box::new(refs),
+            objects,
+            Box::new(NullEventSink),
+            Mode::Advisory,
+            Box::new(identity),
+            std::env::temp_dir(),
+        )
+        .with_access(ents_web::state::AccessPolicy::SignInRequired(
+            ents_web::state::Realm {
+                host: "ents.test".to_owned(),
+                challenges: ents_web::auth::ChallengeStore::default(),
+            },
+        )),
+    )
+}
+
+/// GET /login with `cookie`, returning the fresh code the page displays.
+async fn fetch_login_code(router: &axum::Router, cookie: &str) -> String {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/login")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf8");
+    let after = body
+        .split("ents.test ")
+        .nth(1)
+        .expect("the page displays the login command");
+    after.chars().take(9).collect()
+}
+
+/// Complete a challenge for `code` as seed `seed`'s key, returning the
+/// response.
+async fn complete_challenge(
+    router: &axum::Router,
+    code: &str,
+    seed: u8,
+    host: &str,
+) -> axum::response::Response {
+    let challenge = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/login/challenge/{code}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(challenge.status(), StatusCode::OK, "challenge fetch");
+    let text = String::from_utf8(
+        challenge
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf8");
+    let nonce = text
+        .lines()
+        .find_map(|line| line.strip_prefix("nonce="))
+        .expect("a nonce line");
+
+    let normalized = ents_web::auth::normalize_code(code);
+    let payload = ents_web::auth::challenge_payload(host, &normalized, nonce);
+    let signature = login_sign(seed, payload.as_bytes());
+    let public_key = Keypair::from_seed(seed).public_openssh();
+    let form = format!(
+        "public_key={}&signature={}",
+        urlencode(&public_key),
+        urlencode(&signature)
+    );
+    router
+        .clone()
+        .oneshot(
+            Request::post(format!("/login/challenge/{code}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call")
+}
+
+/// Rewrite `username`'s member record as revoked, directly against
+/// `state`'s own stores -- the commit is staged via a scratch ref store
+/// (`write_meta_entity` wants a concrete `MemRefStore`) and applied to
+/// the live one through the trait's own CAS transaction.
+fn revoke_member(state: &AppState<ObjectStore>, username: &str, key: &Keypair, seconds: i64) {
+    let scratch = MemRefStore::default();
+    let name = ents_model::namespace::member_ref(&MemberId::new(username)).expect("valid");
+    let mut member = ents_model::Member::new(
+        MemberId::new(username),
+        key.public_openssh(),
+        Provenance::AdminRegistered,
+    );
+    member.state = ents_model::MemberState::Revoked;
+    let oid = write_meta_entity(
+        &scratch,
+        &*state.objects(),
+        name.clone(),
+        &member,
+        Some(&Keypair::from_seed(9)),
+        seconds,
+    );
+    state
+        .refs
+        .transaction(&[gix_ref_store::RefEdit {
+            name,
+            expected: gix_ref_store::Expected::Any,
+            new: Some(oid),
+        }])
+        .expect("applies");
+}
+
+#[tokio::test]
+// @relation(roots.web-signin, scope=function, role=Verifies)
+async fn the_login_surface_is_unrouted_under_trusted() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(Arc::clone(&state));
+    for path in ["/login", "/login/challenge/ABCD2345"] {
+        let response = router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("in-process call");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "GET {path}");
+    }
+}
+
+#[tokio::test]
+// @relation(roots.web-signin, scope=function, role=Verifies)
+async fn the_cli_challenge_flow_signs_the_browser_session_in() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let joey = Keypair::from_seed(7);
+    enroll_member(
+        &refs,
+        &objects,
+        "joey",
+        &joey,
+        Provenance::AdminRegistered,
+        100,
+    );
+    let state = build_signin_state(
+        FixtureIdentity {
+            name: "server",
+            key: Keypair::from_seed(9),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(Arc::clone(&state));
+
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/").await;
+    let code = fetch_login_code(&router, &cookie).await;
+
+    let response = complete_challenge(&router, &code, 7, "ents.test").await;
+    assert_eq!(response.status(), StatusCode::OK, "sign-in completes");
+
+    // The browser's next look at /login reads as signed in.
+    let session_id = cookie
+        .split(';')
+        .next()
+        .expect("segment")
+        .split_once('=')
+        .expect("name=value")
+        .1
+        .to_owned();
+    let member = state
+        .sessions
+        .get(&session_id)
+        .expect("held")
+        .member
+        .expect("signed in");
+    assert_eq!(member.username, "joey");
+
+    // And a second post of the same code finds it consumed -- posted
+    // directly, since the challenge fetch itself now correctly 404s.
+    let replay = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/login/challenge/{code}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("public_key=x&signature=y"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(replay.status(), StatusCode::NOT_FOUND, "single-use");
+}
+
+#[tokio::test]
+// @relation(roots.web-signin, scope=function, role=Verifies)
+async fn a_wrong_host_signature_or_foreign_key_is_refused() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let joey = Keypair::from_seed(7);
+    enroll_member(
+        &refs,
+        &objects,
+        "joey",
+        &joey,
+        Provenance::AdminRegistered,
+        100,
+    );
+    let state = build_signin_state(
+        FixtureIdentity {
+            name: "server",
+            key: Keypair::from_seed(9),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(Arc::clone(&state));
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/").await;
+
+    // A signature over another deployment's host does not verify here.
+    let code = fetch_login_code(&router, &cookie).await;
+    let response = complete_challenge(&router, &code, 7, "evil.example").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // An unenrolled key's valid signature is refused as not a member.
+    let code = fetch_login_code(&router, &cookie).await;
+    let response = complete_challenge(&router, &code, 3, "ents.test").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // A revoked member's key is refused the same way.
+    revoke_member(&state, "joey", &joey, 200);
+    let code = fetch_login_code(&router, &cookie).await;
+    let response = complete_challenge(&router, &code, 7, "ents.test").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+// @relation(roots.web-signin, roots.web-session, scope=function, role=Verifies)
+async fn mutations_require_a_live_signed_in_member_and_csrf_still_gates() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let joey = Keypair::from_seed(7);
+    enroll_member(
+        &refs,
+        &objects,
+        "joey",
+        &joey,
+        Provenance::AdminRegistered,
+        100,
+    );
+    let state = build_signin_state(
+        FixtureIdentity {
+            name: "server",
+            key: Keypair::from_seed(9),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(Arc::clone(&state));
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/").await;
+
+    let post_account = |form: String, with_cookie: bool, accept_html: bool| {
+        let mut request = Request::post("/account")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if with_cookie {
+            request = request.header(header::COOKIE, cookie.clone());
+        }
+        if accept_html {
+            request = request.header(header::ACCEPT, "text/html");
+        }
+        router
+            .clone()
+            .oneshot(request.body(Body::from(form)).expect("request"))
+    };
+
+    // Anonymous: a browser-shaped POST redirects to /login, a bare one
+    // gets 401.
+    let form = format!("member=joey&login=j@ents.test&csrf={csrf}");
+    let response = post_account(form.clone(), true, true).await.expect("call");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).expect("location"),
+        "/login"
+    );
+    let response = post_account(form.clone(), true, false).await.expect("call");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Sign in, then the same POST passes the middleware -- and CSRF is
+    // still enforced on top of it.
+    let code = fetch_login_code(&router, &cookie).await;
+    let signed_in = complete_challenge(&router, &code, 7, "ents.test").await;
+    assert_eq!(signed_in.status(), StatusCode::OK);
+    let response = post_account(form.clone(), true, true).await.expect("call");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER, "mutation lands");
+    assert_eq!(
+        response.headers().get(header::LOCATION).expect("location"),
+        "/account"
+    );
+
+    // The landed commit is authored by the member and committed by the
+    // server identity -- "joey via the web"
+    // (receive.attributed-author, roots.web-signing).
+    {
+        use gix_object::Find as _;
+        let account_ref: gix::refs::FullName = ents_model::namespace::ACCOUNT_REF
+            .try_into()
+            .expect("valid");
+        let tip = state
+            .refs
+            .get(account_ref.as_ref())
+            .expect("readable")
+            .expect("written");
+        let mut buf = Vec::new();
+        let objects = state.objects();
+        let data = objects
+            .try_find(&tip, &mut buf)
+            .expect("readable")
+            .expect("present");
+        let commit = gix_object::CommitRef::from_bytes(data.data, tip.kind()).expect("parses");
+        assert_eq!(
+            commit.author().expect("author").name,
+            "joey",
+            "authored by the signed-in member"
+        );
+        assert_eq!(
+            commit.committer().expect("committer").name,
+            "server",
+            "committed by the server identity"
+        );
+    }
+    let bad_csrf = "member=joey&login=j@ents.test&csrf=not-the-token".to_owned();
+    let response = post_account(bad_csrf, true, true).await.expect("call");
+    assert_ne!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "a signed-in session still fails a wrong csrf token"
+    );
+
+    // Revoke joey mid-session: the next mutation is refused and the
+    // session is signed out, not just bounced.
+    revoke_member(&state, "joey", &joey, 300);
+    let response = post_account(form, true, true).await.expect("call");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).expect("location"),
+        "/login"
+    );
+    let session_id = cookie
+        .split(';')
+        .next()
+        .expect("segment")
+        .split_once('=')
+        .expect("name=value")
+        .1;
+    assert!(
+        state
+            .sessions
+            .get(session_id)
+            .expect("held")
+            .member
+            .is_none(),
+        "a revoked member is signed out, not left holding a dead session"
+    );
+}

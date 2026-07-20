@@ -571,7 +571,7 @@ where
         state.events.as_ref(),
         &state.path,
         new,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;
@@ -656,7 +656,7 @@ where
         &state.path,
         new,
         &member,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         state.mode,
     )?;
     crate::error::outcome_to_result(outcome)?;

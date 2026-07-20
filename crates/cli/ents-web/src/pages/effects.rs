@@ -146,7 +146,7 @@ where
         state.events.as_ref(),
         ref_name,
         &effect,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         &format!("Define effect {name}"),
         state.mode,
     )?;

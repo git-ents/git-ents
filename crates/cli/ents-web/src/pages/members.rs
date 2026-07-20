@@ -184,7 +184,7 @@ fn provenance_label(provenance: Provenance) -> &'static str {
 /// omitting it (`roots.web-agnostic`: a reader surfaces a marker, never an
 /// error or a silent gap, for one entity written by a schema this build no
 /// longer speaks).
-fn read_all<O: Find>(
+pub(crate) fn read_all<O: Find>(
     state: &AppState<O>,
 ) -> Result<Vec<(String, std::result::Result<Member, String>)>> {
     let mut out = Vec::new();

@@ -30,8 +30,38 @@ use std::sync::Mutex;
 use ents_receive::{EventSink, Mode};
 use gix_ref_store::RefStore;
 
+use crate::auth::ChallengeStore;
 use crate::identity::SigningIdentity;
 use crate::session::SessionStore;
+
+/// Who may mutate through this deployment's web UI — injected by the
+/// composition root, exactly as the signing identity is
+/// (`roots.web-agnostic`): this crate branches on the injected policy's
+/// value, never on where it is running (`arch.no-hosted-branch`'s
+/// spirit).
+// @relation(roots.web-signin, scope=type)
+pub enum AccessPolicy {
+    /// Every session mutates as the injected identity — the local root
+    /// (`roots.local`), where the operator's own key *is* the identity
+    /// and no sign-in surface exists (`roots.web-signin`).
+    Trusted,
+    /// Anonymous sessions browse read-only; a mutation requires a
+    /// session signed in as an enrolled, active member
+    /// (`roots.web-signin`) — the hosted root.
+    SignInRequired(Realm),
+}
+
+/// What a sign-in-required deployment knows about itself: the canonical
+/// external host bound into every challenge payload
+/// ([`crate::auth::challenge_payload`]), and the outstanding challenges.
+pub struct Realm {
+    /// The host a member addresses this deployment as, e.g.
+    /// `git.ents.cloud` — a signature is bound to it, so one minted for
+    /// this realm verifies nowhere else (`roots.web-signin`).
+    pub host: String,
+    /// Outstanding sign-in challenges, memory-only like the sessions.
+    pub challenges: ChallengeStore,
+}
 
 /// Everything a page handler needs: the four composition-root seams, the
 /// gate policy in force, the repository's working-tree path (comment
@@ -67,6 +97,10 @@ pub struct AppState<O> {
     pub path: PathBuf,
     /// In-memory web sessions (`roots.web-session`).
     pub sessions: SessionStore,
+    /// Who may mutate here (`roots.web-signin`): [`AccessPolicy::Trusted`]
+    /// unless the composition root said otherwise via
+    /// [`AppState::with_access`].
+    pub access: AccessPolicy,
 }
 
 impl<O> AppState<O> {
@@ -89,7 +123,20 @@ impl<O> AppState<O> {
             identity,
             path,
             sessions: SessionStore::default(),
+            access: AccessPolicy::Trusted,
         }
+    }
+
+    /// Replace the default [`AccessPolicy::Trusted`] — the hosted
+    /// composition root's one extra wiring step
+    /// (`roots.single-node-hosted`, `roots.web-signin`). A consuming
+    /// builder rather than a constructor parameter so every existing
+    /// `new` caller (every `Trusted` deployment and test fixture) stays
+    /// untouched.
+    #[must_use]
+    pub fn with_access(mut self, access: AccessPolicy) -> Self {
+        self.access = access;
+        self
     }
 
     /// Lock the object store for the duration of one request.

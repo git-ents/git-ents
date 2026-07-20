@@ -174,7 +174,7 @@ where
         state.events.as_ref(),
         name,
         &account,
-        &crate::receive_identity!(identity),
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
         "Create account (web)",
         state.mode,
     )?;
