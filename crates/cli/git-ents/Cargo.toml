@@ -35,6 +35,7 @@ ssh-key = { version = "0.6", features = ["ed25519"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+ureq = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

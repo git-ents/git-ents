@@ -3,6 +3,7 @@
 
 use ents_model::{Member, MemberId, MemberState, Provenance, namespace};
 use ents_receive::{Identity, propose_delete, propose_entity};
+use gix_object::Find;
 use gix_ref_store::RefStoreRead;
 
 use super::{actor, signer};
@@ -12,18 +13,22 @@ use crate::root::LocalRoot;
 
 /// `git ents members list`: every member ref and its current state.
 ///
+/// Takes the ref and object seams rather than a concrete root so the same
+/// read path serves both composition roots — the local CLI and the hosted
+/// web mount both need "who are the members," never a root-specific rescan.
+///
 /// # Errors
 ///
 /// Propagates a ref-store or object read failure.
-pub fn list(root: &LocalRoot) -> Result<Vec<(String, Member)>> {
+pub fn list(refs: &impl RefStoreRead, objects: &impl Find) -> Result<Vec<(String, Member)>> {
     let mut out = Vec::new();
-    for entry in root.refs.iter_prefix("refs/meta/member/")? {
+    for entry in refs.iter_prefix("refs/meta/member/")? {
         let (name, tip) = entry?;
         let path = name.as_bstr().to_string();
         let Some(username) = path.strip_prefix("refs/meta/member/") else {
             continue;
         };
-        if let Some(member) = read_member(root, tip)? {
+        if let Some(member) = read_member(objects, tip)? {
             out.push((username.to_owned(), member));
         }
     }
@@ -49,6 +54,7 @@ pub fn add(
     let name = namespace::member_ref(&MemberId::new(username))?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let outcome = propose_entity(
@@ -99,7 +105,7 @@ pub fn set_revoked(
             what: format!("member {username}"),
         });
     };
-    let mut member = read_member(root, tip)?.ok_or_else(|| Error::NotFound {
+    let mut member = read_member(&root.objects, tip)?.ok_or_else(|| Error::NotFound {
         what: format!("member {username}"),
     })?;
     member.state = if revoked {
@@ -109,6 +115,7 @@ pub fn set_revoked(
     };
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let verb = if revoked { "Revoke" } else { "Unrevoke" };
@@ -137,20 +144,25 @@ pub fn check(
     key: Option<std::path::PathBuf>,
 ) -> Result<Option<(String, MemberState)>> {
     let signer = signer(root, key)?;
-    find_by_key(root, &signer.public_openssh())
+    find_by_key(&root.refs, &root.objects, &signer.public_openssh())
 }
 
 /// Resolve `pubkey` to the enrolled member whose stored key matches it, if
-/// any -- the shared match loop behind [`check`] and `git ents serve`'s own
+/// any -- the shared match loop behind [`check`], `git ents serve`'s own
 /// identity-chip label (`crate::commands::serve::build_state`,
-/// `roots.web-signing`): both need "which member owns this key," never a
-/// bespoke re-scan of `list`'s own rows.
+/// `roots.web-signing`), and the hosted mount's server-key enrollment
+/// check: all need "which member owns this key," never a bespoke re-scan
+/// of `list`'s own rows.
 ///
 /// # Errors
 ///
 /// Propagates a ref-store or object read failure.
-pub fn find_by_key(root: &LocalRoot, pubkey: &str) -> Result<Option<(String, MemberState)>> {
-    for (username, member) in list(root)? {
+pub fn find_by_key(
+    refs: &impl RefStoreRead,
+    objects: &impl Find,
+    pubkey: &str,
+) -> Result<Option<(String, MemberState)>> {
+    for (username, member) in list(refs, objects)? {
         if member.key == pubkey {
             return Ok(Some((username, member.state)));
         }
@@ -158,7 +170,7 @@ pub fn find_by_key(root: &LocalRoot, pubkey: &str) -> Result<Option<(String, Mem
     Ok(None)
 }
 
-fn read_member(root: &LocalRoot, tip: gix_hash::ObjectId) -> Result<Option<Member>> {
-    let tree = crate::commands::commit_tree(&root.objects, tip)?;
-    Ok(facet_git_tree::deserialize::<Member>(&tree, &root.objects).ok())
+fn read_member(objects: &impl Find, tip: gix_hash::ObjectId) -> Result<Option<Member>> {
+    let tree = crate::commands::commit_tree(objects, tip)?;
+    Ok(facet_git_tree::deserialize::<Member>(&tree, objects).ok())
 }

@@ -129,13 +129,31 @@ pub enum Top {
         #[facet(args::subcommand)]
         action: HookAction,
     },
+    /// Prove membership to a hosted web session (`roots.web-signin`):
+    /// fetch the one-time challenge the hosted `/login` page displayed,
+    /// sign it with your member key under the `git-ents-login` SSHSIG
+    /// namespace — locally, the key never leaves this machine — and post
+    /// the signature back, signing that browser session in.
+    Login {
+        /// The hosted root's base URL, e.g. `https://git.ents.cloud`.
+        #[facet(args::positional)]
+        url: String,
+        /// The one-time code the `/login` page displays (`XXXX-XXXX`).
+        #[facet(args::positional)]
+        code: String,
+        /// Key to prove membership with; defaults to `user.signingkey`,
+        /// else `~/.ssh/id_ed25519`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
     /// Start the local web UI (`roots.local`): reuses this repository's
     /// existing local composition root (the same loose-ref `RefStore`,
     /// odb, null `EventSink`, and advisory gate `git ents members`,
     /// `git ents comment`, and every other porcelain command already use)
     /// and adds only the `ents-web` HTTP frontend, bound to loopback —
     /// never git's own smart-HTTP transport, which this command does not
-    /// expose in any form.
+    /// expose in any form. With `--hosted`, serves the single-node hosted
+    /// root's web UI instead (`roots.single-node-hosted`).
     Serve {
         /// Port to bind on loopback (`127.0.0.1`); `0` picks any free
         /// port. Defaults to 4880.
@@ -144,6 +162,22 @@ pub enum Top {
         /// Key to sign web edits with; defaults to `user.signingkey`.
         #[facet(args::named)]
         key: Option<PathBuf>,
+        /// Serve the single-node hosted root's web UI instead
+        /// (`roots.single-node-hosted`): mandatory gate, sign-in
+        /// required, member-attributed edits, the server's own key as
+        /// signing identity. Still binds loopback — the front proxy is
+        /// the only external listener.
+        #[facet(args::named, default)]
+        hosted: bool,
+        /// The canonical public host bound into sign-in challenges with
+        /// `--hosted` (`roots.web-signin`), e.g. `git.ents.cloud`.
+        /// Required with `--hosted`; ignored without it.
+        #[facet(args::named)]
+        public_host: Option<String>,
+        /// The bare repository to serve with `--hosted`; defaults to the
+        /// current directory. Ignored without `--hosted`.
+        #[facet(args::positional, default)]
+        path: Option<PathBuf>,
     },
     /// Serve the editor lens (`lens.serve`): a Language Server Protocol
     /// server over stdin/stdout that projects this repository's comments

@@ -54,9 +54,28 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         Top::Inbox { action } => run_inbox(action, out),
         Top::Redact { action } => run_redact(action, out),
         Top::Hook { action } => run_hook(action, out),
-        Top::Serve { port, key } => {
+        Top::Login { url, code, key } => commands::login::run(&url, &code, key, out),
+        Top::Serve {
+            port,
+            key,
+            hosted: false,
+            ..
+        } => {
             let root = LocalRoot::discover(".")?;
             commands::serve::run(root, port, key, out)
+        }
+        // Root choice off the flag belongs exactly here, in the
+        // composition root's dispatch (`arch.no-hosted-branch` bans it in
+        // library code, not in `exe`).
+        Top::Serve {
+            port,
+            key,
+            hosted: true,
+            public_host,
+            path,
+        } => {
+            let root = HostedRoot::open(path.unwrap_or_else(|| ".".into()))?;
+            commands::serve::run_hosted(root, port, key, public_host, out)
         }
         Top::Lsp { key } => {
             // The lens speaks LSP over stdin/stdout, so nothing may be
@@ -73,7 +92,7 @@ fn run_members(action: MembersAction, out: &mut impl std::io::Write) -> Result<(
     let root = LocalRoot::discover(".")?;
     match action {
         MembersAction::List => {
-            for (username, member) in commands::members::list(&root)? {
+            for (username, member) in commands::members::list(&root.refs, &root.objects)? {
                 let _ = writeln!(
                     out,
                     "{username}\t{:?}\t{:?}",

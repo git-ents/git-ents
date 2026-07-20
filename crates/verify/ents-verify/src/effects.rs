@@ -13,7 +13,10 @@
 //! cross-transaction dedup obligation as a deliberate gap — this model
 //! is where that obligation lives.
 
-#![expect(clippy::todo, reason = "Phase 4 skeleton — filling this in is the human exercise, not this scaffold's job")]
+#![expect(
+    clippy::todo,
+    reason = "Phase 4 skeleton — filling this in is the human exercise, not this scaffold's job"
+)]
 
 use stateright::{Model, Property};
 
@@ -68,7 +71,9 @@ impl Model for EffectsModel {
     }
 
     fn actions(&self, _state: &Self::State, _actions: &mut Vec<Self::Action>) {
-        todo!("exercise: enumerate RefAdvance/TriggerEval/Enqueue/Execute/ResultPush per verify/exercise.md Phase 4")
+        todo!(
+            "exercise: enumerate RefAdvance/TriggerEval/Enqueue/Execute/ResultPush per verify/exercise.md Phase 4"
+        )
     }
 
     fn next_state(&self, _last_state: &Self::State, _action: Self::Action) -> Option<Self::State> {
@@ -80,16 +85,25 @@ impl Model for EffectsModel {
             // Obligation 1: the dedup key (effect, refname, new_oid)
             // yields result-ref idempotency under duplicate delivery
             // and executor crash-restart.
-            Property::always("exactly_once_observable_effect", |_, _| true /* TODO(exercise) */),
+            Property::always(
+                "exactly_once_observable_effect",
+                |_, _| true, /* TODO(exercise) */
+            ),
             // Obligation 2: a ref deleted and re-pushed to the same oid
             // — does the commit re-enter the trigger set? Defines
             // whether triggers are monotone.
-            Property::always("trigger_set_monotone", |_, _| true /* TODO(exercise) */),
+            Property::always(
+                "trigger_set_monotone",
+                |_, _| true, /* TODO(exercise) */
+            ),
             // Obligation 3: no sequence lets a non-admin cause execution
             // of content they authored as an effect (composes with
             // crate::search's binding_refname_recomputed property —
             // this was the original cross-ref replay scenario).
-            Property::always("authorization_asymmetry", |_, _| true /* TODO(exercise) */),
+            Property::always(
+                "authorization_asymmetry",
+                |_, _| true, /* TODO(exercise) */
+            ),
         ]
     }
 }

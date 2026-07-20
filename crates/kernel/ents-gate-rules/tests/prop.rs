@@ -55,7 +55,10 @@ fn kinds() -> impl Strategy<Value = Kind> {
 /// actually holds for this sample.
 fn build(ref_name: &str, signer: Option<&str>, kind: Kind) -> (Facts, bool) {
     let mut facts = Facts {
-        member: vec![(ADMIN_KEY.to_string(), Role::Admin), (MEMBER_KEY.to_string(), Role::Member)],
+        member: vec![
+            (ADMIN_KEY.to_string(), Role::Admin),
+            (MEMBER_KEY.to_string(), Role::Member),
+        ],
         ..Facts::default()
     };
     facts.ref_update = vec![(ref_name.to_string(), None, "g2".to_string())];

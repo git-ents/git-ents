@@ -105,6 +105,10 @@ stateright = "0.31"
 target-lexicon = "0.13"
 tempfile = "3"
 thiserror = "2"
+# The CLI's one HTTP client (`git ents login`): synchronous, so no tokio
+# runtime for two requests, and rustls with the ring provider, so the
+# musl static release cross-build (`cargo zigbuild`) stays pure Rust.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",

@@ -31,7 +31,7 @@ fn bootstrap_enrolls_the_first_member() {
 
     members::add(&root, "jdc", None, Some(fixture.key_path.clone())).expect("bootstrap admits it");
 
-    let listed = members::list(&root).expect("lists");
+    let listed = members::list(&root.refs, &root.objects).expect("lists");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, "jdc");
     assert_eq!(listed[0].1.state, MemberState::Active);
@@ -54,7 +54,7 @@ fn admin_enrolls_a_second_member() {
     )
     .expect("admin-registered add");
 
-    let listed = members::list(&root).expect("lists");
+    let listed = members::list(&root.refs, &root.objects).expect("lists");
     assert_eq!(listed.len(), 2);
     assert!(listed.iter().any(|(name, _)| name == "bob"));
 }
@@ -96,6 +96,6 @@ fn remove_deletes_the_member_ref_entirely() {
 
     members::remove(&root, "jdc", Some(fixture.key_path.clone())).expect("removes");
 
-    let listed = members::list(&root).expect("lists");
+    let listed = members::list(&root.refs, &root.objects).expect("lists");
     assert!(listed.is_empty());
 }

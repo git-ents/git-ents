@@ -13,7 +13,10 @@
 //! invariant, adoption, revocation), §4 (anti-replay);
 //! `docs/spec/receive.adoc`; `docs/spec/gate.adoc` epoch bootstrap.
 
-#![expect(clippy::todo, reason = "Phase 3 skeleton — filling this in is the human exercise, not this scaffold's job")]
+#![expect(
+    clippy::todo,
+    reason = "Phase 3 skeleton — filling this in is the human exercise, not this scaffold's job"
+)]
 
 use ents_gate_rules::{Facts, gate};
 use stateright::{Model, Property};
@@ -85,11 +88,15 @@ impl Model for ReceiveModel {
     }
 
     fn actions(&self, _state: &Self::State, _actions: &mut Vec<Self::Action>) {
-        todo!("exercise: enumerate Propose/GateCheck/Cas/AdoptMerge/SelfMerge per verify/exercise.md Phase 3")
+        todo!(
+            "exercise: enumerate Propose/GateCheck/Cas/AdoptMerge/SelfMerge per verify/exercise.md Phase 3"
+        )
     }
 
     fn next_state(&self, _last_state: &Self::State, _action: Self::Action) -> Option<Self::State> {
-        todo!("exercise: Phase 3's transition relation, using gate_admits as GateCheck's enabling condition")
+        todo!(
+            "exercise: Phase 3's transition relation, using gate_admits as GateCheck's enabling condition"
+        )
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
@@ -99,11 +106,17 @@ impl Model for ReceiveModel {
             // action — pay attention to SelfMerge (is the merge commit
             // itself signed in the implementation? see ents-sync/src
             // and ents-receive/src/reconcile.rs).
-            Property::always("tip_invariant_inductive", |_, _| true /* TODO(exercise) */),
+            Property::always(
+                "tip_invariant_inductive",
+                |_, _| true, /* TODO(exercise) */
+            ),
             // Obligation 2: adoption preserves the tip invariant, even
             // when the contributor's commit is itself a merge of
             // unauthorized commits.
-            Property::always("adoption_preserves_tip_invariant", |_, _| true /* TODO(exercise) */),
+            Property::always(
+                "adoption_preserves_tip_invariant",
+                |_, _| true, /* TODO(exercise) */
+            ),
             // Obligation 3: a replayed genesis against a not-yet-created
             // ref is safe only in conjunction with Phase 2's binding
             // totality — state the exact conjunction.

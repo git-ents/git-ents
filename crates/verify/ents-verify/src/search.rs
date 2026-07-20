@@ -61,7 +61,12 @@ pub enum Shape {
 }
 
 /// All four transaction shapes, in a fixed enumeration order.
-pub const SHAPES: [Shape; 4] = [Shape::Genesis, Shape::FastForward, Shape::NonFf, Shape::SecondRoot];
+pub const SHAPES: [Shape; 4] = [
+    Shape::Genesis,
+    Shape::FastForward,
+    Shape::NonFf,
+    Shape::SecondRoot,
+];
 
 /// Who signs every commit the transaction introduces — one signer
 /// applies uniformly to keep the state small; per-commit signer
@@ -95,8 +100,12 @@ pub enum Retention {
 }
 
 /// All four retention choices, in a fixed enumeration order.
-pub const RETENTIONS: [Retention; 4] =
-    [Retention::Absent, Retention::Resolving, Retention::DanglingAnchor, Retention::DanglingContext];
+pub const RETENTIONS: [Retention; 4] = [
+    Retention::Absent,
+    Retention::Resolving,
+    Retention::DanglingAnchor,
+    Retention::DanglingContext,
+];
 
 /// All three [`Kind`] choices, in a fixed enumeration order.
 pub const KINDS: [Kind; 3] = [Kind::Comment, Kind::Issue, Kind::Effect];
@@ -200,17 +209,29 @@ impl Complete {
                 }
             }
             Shape::FastForward => {
-                f.ref_update = vec![(self.ref_name.to_string(), Some("g".to_string()), "c1".to_string())];
+                f.ref_update = vec![(
+                    self.ref_name.to_string(),
+                    Some("g".to_string()),
+                    "c1".to_string(),
+                )];
                 f.parent = vec![("c1".to_string(), "g".to_string())];
                 sign(&mut f, "g");
                 sign(&mut f, "c1");
             }
             Shape::NonFf => {
-                f.ref_update = vec![(self.ref_name.to_string(), Some("g".to_string()), "x".to_string())];
+                f.ref_update = vec![(
+                    self.ref_name.to_string(),
+                    Some("g".to_string()),
+                    "x".to_string(),
+                )];
                 sign(&mut f, "x");
             }
             Shape::SecondRoot => {
-                f.ref_update = vec![(self.ref_name.to_string(), Some("g".to_string()), "m".to_string())];
+                f.ref_update = vec![(
+                    self.ref_name.to_string(),
+                    Some("g".to_string()),
+                    "m".to_string(),
+                )];
                 f.parent = vec![
                     ("c1".to_string(), "g".to_string()),
                     ("m".to_string(), "c1".to_string()),
@@ -258,7 +279,10 @@ impl Complete {
         if !matches!(self.shape, Shape::Genesis) {
             return true;
         }
-        !matches!(self.retention, Retention::DanglingAnchor | Retention::DanglingContext)
+        !matches!(
+            self.retention,
+            Retention::DanglingAnchor | Retention::DanglingContext
+        )
     }
 
     /// abstractions.adoc §6 / effect.admin-only: an admitted write to
@@ -327,12 +351,18 @@ impl Model for SearchModel {
         let mut state = last_state.clone();
         match action {
             Action::ChooseRef(r) if state.ref_name.is_none() => state.ref_name = Some(r),
-            Action::ChooseShape(s) if state.ref_name.is_some() && state.shape.is_none() => state.shape = Some(s),
-            Action::ChooseSigner(s) if state.shape.is_some() && state.signer.is_none() => state.signer = Some(s),
+            Action::ChooseShape(s) if state.ref_name.is_some() && state.shape.is_none() => {
+                state.shape = Some(s)
+            }
+            Action::ChooseSigner(s) if state.shape.is_some() && state.signer.is_none() => {
+                state.signer = Some(s)
+            }
             Action::ChooseRetention(r) if state.signer.is_some() && state.retention.is_none() => {
                 state.retention = Some(r);
             }
-            Action::ChooseKind(k) if state.retention.is_some() && state.kind.is_none() => state.kind = Some(k),
+            Action::ChooseKind(k) if state.retention.is_some() && state.kind.is_none() => {
+                state.kind = Some(k)
+            }
             _ => return None,
         }
         Some(state)
@@ -349,17 +379,23 @@ impl Model for SearchModel {
 
         vec![
             Property::always("ff_only_advance", |_, s| implication(s, Complete::ff_holds)),
-            Property::always("single_root_identity", |_, s| implication(s, Complete::single_root_holds)),
+            Property::always("single_root_identity", |_, s| {
+                implication(s, Complete::single_root_holds)
+            }),
             Property::always("introduced_commits_member_signed", |_, s| {
                 implication(s, Complete::tip_signed_holds)
             }),
-            Property::always("anchor_retention_resolves", |_, s| implication(s, Complete::retention_holds)),
+            Property::always("anchor_retention_resolves", |_, s| {
+                implication(s, Complete::retention_holds)
+            }),
             Property::always("effects_writes_admin_signed", |_, s| {
                 implication(s, Complete::effect_admin_holds)
             }),
             // The one property expected to have a discovery: the known,
             // ledger-recorded DIVERGED gap. See tests::rediscovers_cross_ref_replay_by_search.
-            Property::always("binding_refname_recomputed", |_, s| implication(s, Complete::binding_holds)),
+            Property::always("binding_refname_recomputed", |_, s| {
+                implication(s, Complete::binding_holds)
+            }),
         ]
     }
 }
@@ -382,7 +418,10 @@ mod tests {
         let path = checker.assert_any_discovery("binding_refname_recomputed");
         // Printed so a run's witness can be copied into the PR
         // description as confirmation the harness has teeth.
-        println!("binding_refname_recomputed witness: {:?}", path.into_actions());
+        println!(
+            "binding_refname_recomputed witness: {:?}",
+            path.into_actions()
+        );
 
         checker.assert_no_discovery("ff_only_advance");
         checker.assert_no_discovery("single_root_identity");

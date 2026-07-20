@@ -130,7 +130,7 @@ pub fn build_state(
     // than re-scanning `refs/meta/member/*` by hand, falling back to the
     // signer's own short fingerprint when no enrolled member's key matches
     // (an unenrolled local key, still allowed to browse and sign).
-    let label = super::members::find_by_key(&root, &pubkey)?
+    let label = super::members::find_by_key(&root.refs, &root.objects, &pubkey)?
         .map(|(username, _state)| username)
         .unwrap_or_else(|| super::short_fingerprint(&signer));
     let identity = LocalIdentity {
@@ -156,24 +156,114 @@ pub fn build_state(
     )))
 }
 
-/// Run `git ents serve`: bind loopback and block, serving the web UI
-/// until the process is killed.
+/// The hosted half of `roots.web-signing`'s indirection: the server's
+/// own member key (persisted by `setup --hosted`) signs every web edit,
+/// while the signed-in member is carried as the commit's author
+/// (`receive.attributed-author`). Same shape as [`LocalIdentity`]; a
+/// distinct type rather than a flag, per `arch.no-hosted-branch`'s
+/// spirit.
+// @relation(roots.web-signing, roots.single-node-hosted, scope=type)
+struct HostedIdentity {
+    signer: Signer,
+    actor: gix::actor::Signature,
+    /// The server key's own enrolled member username — [`build_hosted_state`]
+    /// refuses to start when none matches, so this is never a fallback
+    /// fingerprint.
+    label: String,
+}
+
+impl SigningIdentity for HostedIdentity {
+    fn actor(&self) -> gix::actor::Signature {
+        self.actor.clone()
+    }
+
+    fn sign(&self, payload: &[u8]) -> String {
+        self.signer.sign(payload)
+    }
+
+    fn public_openssh(&self) -> String {
+        self.signer.public_openssh()
+    }
+
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+}
+
+/// Build the [`AppState`] `git ents serve --hosted` runs, from an
+/// already-open [`crate::root::HostedRoot`]: the same seams the
+/// `pre-receive`/`post-receive` hooks wire (`roots.single-node-hosted`),
+/// plus the web UI's own policy — sign-in required against
+/// `public_host` (`roots.web-signin`) and the server key as signing
+/// identity.
 ///
 /// # Errors
 ///
-/// Propagates [`build_state`]'s own errors, or an [`Error::Io`] binding
-/// the loopback socket or constructing the async runtime.
-// @relation(roots.local, scope=function)
-pub fn run(
-    root: LocalRoot,
-    port: Option<u16>,
-    key: Option<PathBuf>,
-    mut report: impl std::io::Write,
-) -> Result<()> {
-    let label = host_label(&root.path);
-    let state = build_state(root, key)?;
-    let addr = loopback_addr(port.unwrap_or(4880));
+/// [`Error::BadSigningKey`] if `key` cannot be loaded;
+/// [`Error::NotFound`] if the server key is not an enrolled member —
+/// `roots.web-signing` requires the signing key itself be enrolled, so
+/// an unenrolled key is a boot failure with a bootstrap instruction, not
+/// a warning: nothing it signed would be admitted anyway.
+// @relation(roots.single-node-hosted, roots.web-signin, roots.composition, scope=function)
+pub fn build_hosted_state(
+    root: crate::root::HostedRoot,
+    key: PathBuf,
+    public_host: String,
+) -> Result<Arc<AppState<crate::root::QuarantineObjects>>> {
+    let signer = Signer::load(&key)?;
+    let pubkey = signer.public_openssh();
+    let label = super::members::find_by_key(&root.refs, &root.objects, &pubkey)?
+        .map(|(username, _state)| username)
+        .ok_or_else(|| Error::NotFound {
+            what: format!(
+                "an enrolled member holding the server key {} — enroll it first: \
+                 git ents members add <name> --pubkey \"{pubkey}\"",
+                key.display()
+            ),
+        })?;
+    let identity = HostedIdentity {
+        actor: actor(&signer),
+        label,
+        signer,
+    };
+    let mode = root.mode();
+    let crate::root::HostedRoot {
+        path,
+        refs,
+        objects,
+        events,
+        executor: _,
+    } = root;
+    Ok(Arc::new(
+        AppState::new(
+            Box::new(refs),
+            objects,
+            Box::new(events),
+            mode,
+            Box::new(identity),
+            path,
+        )
+        .with_access(ents_web::state::AccessPolicy::SignInRequired(
+            ents_web::state::Realm {
+                host: public_host,
+                challenges: ents_web::auth::ChallengeStore::default(),
+            },
+        )),
+    ))
+}
 
+/// Bind loopback, print `banner`, and serve `state` until killed — the
+/// runtime/bind/serve tail [`run`] and [`run_hosted`] share, generic over
+/// the object store exactly as `ents_web::serve_on` is.
+fn serve_state<O>(
+    state: Arc<AppState<O>>,
+    addr: SocketAddr,
+    banner: impl Fn(SocketAddr) -> String,
+    mut report: impl std::io::Write,
+) -> Result<()>
+where
+    O: gix_object::Find + gix_object::Write + Send + 'static,
+{
     let runtime = tokio::runtime::Runtime::new().map_err(|source| Error::Io {
         path: PathBuf::from("<tokio runtime>"),
         source,
@@ -187,11 +277,7 @@ pub fn run(
             path: PathBuf::from(addr.to_string()),
             source,
         })?;
-        let _ = writeln!(
-            report,
-            "listening on http://{label}.localhost:{port} (http://{bound})",
-            port = bound.port()
-        );
+        let _ = writeln!(report, "{}", banner(bound));
         ents_web::serve_on(listener, state)
             .await
             .map_err(|source| Error::Io {
@@ -199,6 +285,74 @@ pub fn run(
                 source,
             })
     })
+}
+
+/// Run `git ents serve`: bind loopback and block, serving the web UI
+/// until the process is killed.
+///
+/// # Errors
+///
+/// Propagates [`build_state`]'s own errors, or an [`Error::Io`] binding
+/// the loopback socket or constructing the async runtime.
+// @relation(roots.local, scope=function)
+pub fn run(
+    root: LocalRoot,
+    port: Option<u16>,
+    key: Option<PathBuf>,
+    report: impl std::io::Write,
+) -> Result<()> {
+    let label = host_label(&root.path);
+    let state = build_state(root, key)?;
+    let addr = loopback_addr(port.unwrap_or(4880));
+    serve_state(
+        state,
+        addr,
+        move |bound| {
+            format!(
+                "listening on http://{label}.localhost:{port} (http://{bound})",
+                port = bound.port()
+            )
+        },
+        report,
+    )
+}
+
+/// Run `git ents serve --hosted`: the single-node hosted root's web UI
+/// (`roots.single-node-hosted`), still bound to loopback — inside the
+/// hosted container the front proxy (nginx) is the only external
+/// listener, so no `--host` flag exists here either and
+/// [`loopback_addr`]'s guarantee stands unchanged.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] when `--public-host` is absent, plus
+/// [`build_hosted_state`]'s own errors and [`serve_state`]'s IO errors.
+// @relation(roots.single-node-hosted, roots.web-signin, scope=function)
+pub fn run_hosted(
+    root: crate::root::HostedRoot,
+    port: Option<u16>,
+    key: Option<PathBuf>,
+    public_host: Option<String>,
+    report: impl std::io::Write,
+) -> Result<()> {
+    let key = key.ok_or_else(|| Error::NotFound {
+        what: "--key: the hosted root's persisted signing key (setup --hosted writes it)"
+            .to_owned(),
+    })?;
+    let public_host = public_host.ok_or_else(|| Error::NotFound {
+        what: "--public-host: the canonical host sign-in challenges bind to (roots.web-signin)"
+            .to_owned(),
+    })?;
+    let state = build_hosted_state(root, key, public_host.clone())?;
+    let addr = loopback_addr(port.unwrap_or(4880));
+    serve_state(
+        state,
+        addr,
+        move |bound| {
+            format!("hosted web UI for https://{public_host} on http://{bound} (proxy-only)")
+        },
+        report,
+    )
 }
 
 #[cfg(test)]

@@ -99,13 +99,27 @@ impl Signer {
     /// payload cannot fail for the algorithms this module accepts.
     #[must_use]
     pub fn sign(&self, payload: &[u8]) -> String {
+        self.sign_in_namespace(GIT_SIGN_NAMESPACE, payload)
+    }
+
+    /// Sign `payload` under an explicit SSHSIG `namespace` — what
+    /// `git ents login` uses with `ents_web::auth::LOGIN_NAMESPACE`
+    /// (`roots.web-signin`): a sign-in signature deliberately lives in a
+    /// namespace distinct from [`Self::sign`]'s `git`, so neither can
+    /// ever double as the other.
+    ///
+    /// # Panics
+    ///
+    /// Never for a well-formed loaded key; see [`Self::sign`].
+    #[must_use]
+    pub fn sign_in_namespace(&self, namespace: &str, payload: &[u8]) -> String {
         #[expect(
             clippy::expect_used,
             reason = "signing and PEM-rendering an ed25519 signature over any byte payload is \
                       infallible; mirrors `ents_testutil::Keypair::sign`'s identical, unguarded call"
         )]
         self.private
-            .sign(GIT_SIGN_NAMESPACE, HashAlg::Sha512, payload)
+            .sign(namespace, HashAlg::Sha512, payload)
             .expect("signing is infallible for a loaded, unencrypted key")
             .to_pem(LineEnding::LF)
             .expect("an SSHSIG always renders as PEM")

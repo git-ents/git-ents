@@ -13,6 +13,7 @@ pub mod comment;
 pub mod effect;
 pub mod inbox;
 pub mod issue;
+pub mod login;
 pub mod lsp;
 pub mod members;
 pub mod redact;

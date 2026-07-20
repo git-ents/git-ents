@@ -124,5 +124,8 @@ pub enum Kind {
 /// background, not a search dimension — Phase 3's `receive` skeleton is
 /// where membership *lifecycle* (enrollment, revocation) belongs.
 pub fn enroll_all(facts: &mut Facts) {
-    facts.member = KEYS.iter().map(|k| ((*k).to_string(), role_of(k))).collect();
+    facts.member = KEYS
+        .iter()
+        .map(|k| ((*k).to_string(), role_of(k)))
+        .collect();
 }

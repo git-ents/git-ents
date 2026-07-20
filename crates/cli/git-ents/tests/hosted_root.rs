@@ -167,6 +167,7 @@ fn unauthorized_push_is_refused_by_the_hosted_root() {
                 offset: 0,
             },
         },
+        author: None,
         sign: &|payload| admin_signer.sign(payload),
     };
     let config_ref: gix::refs::FullName =
@@ -220,4 +221,50 @@ fn unauthorized_push_is_refused_by_the_hosted_root() {
         !show.status.success(),
         "a refused pre-receive push must leave no trace on the hosted root"
     );
+}
+
+/// `serve --hosted` fails closed on an unenrolled server key
+/// (`roots.web-signing`: the signing key must itself be an enrolled
+/// member) and boots once the key is enrolled, with the enrolled
+/// username as the serving identity's label.
+// @relation(roots.web-signing, roots.single-node-hosted, scope=function, role=Verifies)
+#[test]
+fn hosted_serve_boots_only_with_an_enrolled_server_key() {
+    use ssh_key::private::{Ed25519Keypair, KeypairData};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bare = dir.path().join("repo.git");
+    let output = Command::new("git")
+        .args(["init", "--bare"])
+        .arg(&bare)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "{output:?}");
+
+    let key_path = dir.path().join("hosted_signing_key");
+    let pair = Ed25519Keypair::from_seed(&[42; 32]);
+    let key = ssh_key::PrivateKey::new(KeypairData::from(pair), "server").expect("well-formed");
+    key.write_openssh_file(&key_path, ssh_key::LineEnding::LF)
+        .expect("writes");
+
+    let root = git_ents::root::HostedRoot::open(&bare).expect("opens");
+    let refused = git_ents::commands::serve::build_hosted_state(
+        root,
+        key_path.clone(),
+        "ents.test".to_owned(),
+    );
+    assert!(
+        refused.is_err(),
+        "an unenrolled server key must refuse to boot"
+    );
+
+    let local = LocalRoot::open(&bare).expect("opens");
+    git_ents::commands::members::add(&local, "server", None, Some(key_path.clone()))
+        .expect("enrolls the server key");
+
+    let root = git_ents::root::HostedRoot::open(&bare).expect("opens");
+    let state =
+        git_ents::commands::serve::build_hosted_state(root, key_path, "ents.test".to_owned())
+            .expect("boots once enrolled");
+    assert_eq!(state.identity.label(), "server");
 }

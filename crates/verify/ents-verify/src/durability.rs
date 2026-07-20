@@ -14,7 +14,10 @@
 //! invariant under study is unchanged: no ref points outside the
 //! durable object set.
 
-#![expect(clippy::todo, reason = "Phase 5 skeleton — filling this in is the human exercise, not this scaffold's job")]
+#![expect(
+    clippy::todo,
+    reason = "Phase 5 skeleton — filling this in is the human exercise, not this scaffold's job"
+)]
 
 use stateright::{Model, Property};
 
