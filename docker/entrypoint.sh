@@ -29,10 +29,18 @@ mkdir -p /run
 spawn-fcgi -s /run/fcgiwrap.sock -M 766 -- /usr/sbin/fcgiwrap
 
 # The web UI refuses to boot until $key's public half is enrolled as a
-# member (`roots.web-signing`) — on a fresh volume, enroll it before the
-# first deploy that ships this entrypoint, or the machine crash-loops
-# with the exact command to run in its logs.
-git-ents serve --hosted --key "$key" --public-host "$public_host" --port 4880 "$repo" &
+# member (`roots.web-signing`). Retry rather than die: an unenrolled key
+# on a fresh volume must not take nginx — and with it the git transport
+# and the ssh path an operator needs to *do* the enrolling — down in a
+# crash loop. The web surface stays fail-closed (nothing listens on 4880
+# until enrollment succeeds); the enroll command prints every attempt.
+(
+    until git-ents serve --hosted --key "$key" --public-host "$public_host" \
+        --port 4880 "$repo"; do
+        echo "web UI not started; retrying in 15s" >&2
+        sleep 15
+    done
+) &
 nginx -c /etc/git-ents/nginx.conf -g "daemon off;" &
 
 wait -n
