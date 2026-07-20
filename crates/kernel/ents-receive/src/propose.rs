@@ -35,11 +35,18 @@ use crate::proposal::{Proposal, RefTransition};
 use crate::sink::EventSink;
 
 /// Everything [`propose_entity`] needs about the acting identity: the
-/// commit author/committer signature and a signing function producing the
-/// `gpgsig` header's armored payload.
+/// commit committer signature, an optional attributed author, and a
+/// signing function producing the `gpgsig` header's armored payload.
+// @relation(receive.attributed-author, scope=type)
 pub struct Identity<'a> {
-    /// The author and committer signature every mutation commit carries.
+    /// The committer signature every mutation commit carries — always the
+    /// signing identity (`receive.attributed-author`).
     pub actor: gix::actor::Signature,
+    /// A distinct attributed author, so history reads "member via the
+    /// web" (`receive.attributed-author`, `roots.web-signing`); `None`
+    /// means the author is `actor`, the unattributed common case. The
+    /// gate keys authorization off the signer, never this field.
+    pub author: Option<gix::actor::Signature>,
     /// Signs a commit payload, returning the armored SSHSIG PEM block git
     /// stores in the `gpgsig` header — a closure rather than a concrete
     /// signer type so this crate never depends on how a caller loads or
@@ -92,6 +99,7 @@ pub struct Identity<'a> {
 ///         email: "admin@ents.test".into(),
 ///         time: gix::date::Time { seconds: 300, offset: 0 },
 ///     },
+///     author: None,
 ///     sign: &|payload| admin.sign(payload),
 /// };
 ///
@@ -195,6 +203,7 @@ fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
 ///         email: "admin@ents.test".into(),
 ///         time: gix::date::Time { seconds: 300, offset: 0 },
 ///     },
+///     author: None,
 ///     sign: &|payload| admin.sign(payload),
 /// };
 ///
@@ -288,6 +297,7 @@ pub fn propose_genesis<T: for<'facet> facet::Facet<'facet>>(
 ///         email: "admin@ents.test".into(),
 ///         time: gix::date::Time { seconds: 300, offset: 0 },
 ///     },
+///     author: None,
 ///     sign: &|payload| admin.sign(payload),
 /// };
 ///
@@ -393,6 +403,7 @@ fn pin_transition(
 ///         email: "admin@ents.test".into(),
 ///         time: gix::date::Time { seconds: 300, offset: 0 },
 ///     },
+///     author: None,
 ///     sign: &|payload| admin.sign(payload),
 /// };
 ///
@@ -466,7 +477,10 @@ fn signed_commit(
     let mut commit = Commit {
         tree,
         parents: parents.into(),
-        author: identity.actor.clone(),
+        author: identity
+            .author
+            .clone()
+            .unwrap_or_else(|| identity.actor.clone()),
         committer: identity.actor.clone(),
         encoding: None,
         message: message.into(),

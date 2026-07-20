@@ -88,6 +88,7 @@ impl Fixture {
         let sign = |payload: &[u8]| key.sign(payload);
         let identity = Identity {
             actor: self.actor(),
+            author: None,
             sign: &sign,
         };
         let (id, _outcome) = comment::add(
@@ -203,6 +204,7 @@ fn hover_returns_the_full_thread() {
     let sign = |payload: &[u8]| key.sign(payload);
     let identity = Identity {
         actor: fixture.actor(),
+        author: None,
         sign: &sign,
     };
     comment::reply(

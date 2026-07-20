@@ -60,6 +60,7 @@ pub fn add(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let outcome = propose_entity(

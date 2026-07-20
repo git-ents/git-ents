@@ -61,7 +61,7 @@
 //!     name: "jdc".into(), email: "jdc@ents.test".into(),
 //!     time: gix::date::Time { seconds: 1_000, offset: 0 },
 //! };
-//! let identity = Identity { actor, sign: &|payload| signer.sign(payload) };
+//! let identity = Identity { actor, author: None, sign: &|payload| signer.sign(payload) };
 //!
 //! let member = ents_model::Member::new("jdc", signer.public_openssh(), Provenance::AdminRegistered);
 //! let name = ents_model::namespace::member_ref(&MemberId::new("jdc")).expect("valid");

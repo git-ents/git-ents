@@ -37,6 +37,7 @@ pub fn import(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let outcome = toolchain::import(

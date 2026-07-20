@@ -33,6 +33,7 @@ pub fn new(root: &LocalRoot, new: NewReview, key: Option<std::path::PathBuf>) ->
     let member = reviewer_member_id(root, &signer)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let (target, outcome) = review::new(
@@ -65,7 +66,9 @@ pub fn new(root: &LocalRoot, new: NewReview, key: Option<std::path::PathBuf>) ->
 /// Propagates a ref-store or object read failure.
 fn reviewer_member_id(root: &LocalRoot, signer: &crate::sign::Signer) -> Result<MemberId> {
     let pubkey = signer.public_openssh();
-    if let Some((username, _state)) = super::members::find_by_key(root, &pubkey)? {
+    if let Some((username, _state)) =
+        super::members::find_by_key(&root.refs, &root.objects, &pubkey)?
+    {
         return Ok(MemberId::new(username));
     }
     Ok(MemberId::new(super::short_fingerprint(signer)))

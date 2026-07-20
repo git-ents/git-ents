@@ -263,6 +263,7 @@ impl<O: Find + Write> Lens<O> {
                 let sign = |payload: &[u8]| signer.sign(payload);
                 let identity = Identity {
                     actor: signer.actor(),
+                    author: None,
                     sign: &sign,
                 };
                 comment::resolve(
@@ -394,6 +395,7 @@ impl<O: Find + Write> Lens<O> {
         let sign = |payload: &[u8]| signer.sign(payload);
         let identity = Identity {
             actor: signer.actor(),
+            author: None,
             sign: &sign,
         };
         if let Some(parent) = composed.target.parent {

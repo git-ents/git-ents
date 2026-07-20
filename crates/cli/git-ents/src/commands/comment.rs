@@ -59,6 +59,7 @@ pub fn add(root: &LocalRoot, new: NewComment, key: Option<std::path::PathBuf>) -
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let (id, outcome) = comment::add(
@@ -89,6 +90,7 @@ pub fn reply(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let (id, outcome) = comment::reply(
@@ -119,6 +121,7 @@ pub fn set_state(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let outcome = if resolve {

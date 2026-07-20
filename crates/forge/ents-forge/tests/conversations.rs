@@ -72,6 +72,7 @@ impl Fixture {
                     offset: 0,
                 },
             },
+            author: None,
             sign: &*self.sign,
         }
     }

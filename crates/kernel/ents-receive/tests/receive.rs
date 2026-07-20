@@ -454,6 +454,7 @@ fn pin_retains_every_reviewed_round_and_passes_the_mandatory_gate() {
                 offset: 0,
             },
         },
+        author: None,
         sign: &|payload| forge.admin.sign(payload),
     };
     let rounds = chain_commits(&forge.objects, 2, 250);
@@ -530,6 +531,7 @@ fn pin_writes_face_the_same_authorization_as_any_canonical_ref() {
                 offset: 0,
             },
         },
+        author: None,
         sign: &|payload| forge.guest.sign(payload),
     };
     let reviewed = chain_commits(&forge.objects, 1, 250)[0];
@@ -675,6 +677,7 @@ fn a_self_attested_member_creates_a_comment_in_its_inbox() {
                 offset: 0,
             },
         },
+        author: None,
         sign: &|payload| forge.guest.sign(payload),
     };
 
@@ -698,4 +701,68 @@ fn a_self_attested_member_creates_a_comment_in_its_inbox() {
         "created under the contributor's own inbox segment: {landed}"
     );
     assert!(forge.refs.get(landed.as_ref()).expect("readable").is_some());
+}
+
+/// An attributed mutation ("member via the web") carries the attributed
+/// member in the commit's author slot while the committer — and the
+/// signature the gate judges — stays the signing identity; the mandatory
+/// gate admits it exactly as it would the unattributed form
+/// (`receive.attributed-author`).
+// @relation(receive.attributed-author, scope=function, role=Verifies)
+#[test]
+fn an_attributed_author_lands_in_the_author_slot_and_the_gate_judges_the_signer() {
+    use gix_object::Find as _;
+
+    let forge = forge();
+    let identity = Identity {
+        actor: gix::actor::Signature {
+            name: "admin".into(),
+            email: "admin@ents.test".into(),
+            time: gix::date::Time {
+                seconds: 300,
+                offset: 0,
+            },
+        },
+        author: Some(gix::actor::Signature {
+            name: "guest".into(),
+            email: "guest@ents.test".into(),
+            time: gix::date::Time {
+                seconds: 290,
+                offset: 0,
+            },
+        }),
+        sign: &|payload| forge.admin.sign(payload),
+    };
+    let refname = namespace::redaction_ref("r-attr").expect("valid");
+    let redaction = Redaction::new(ObjectId::null(gix_hash::Kind::Sha1), "leaked credential");
+
+    let outcome = ents_receive::propose_entity(
+        &forge.refs,
+        &forge.objects,
+        &NullEventSink,
+        refname.clone(),
+        &redaction,
+        &identity,
+        "Redact, attributed",
+        Mode::Mandatory,
+    )
+    .expect("reaches an outcome");
+    assert_eq!(outcome.result, TxResult::Applied, "{:?}", outcome.verdicts);
+
+    let tip = forge
+        .refs
+        .get(refname.as_ref())
+        .expect("readable")
+        .expect("written");
+    let mut buf = Vec::new();
+    let data = forge
+        .objects
+        .try_find(&tip, &mut buf)
+        .expect("readable")
+        .expect("present");
+    let commit = gix_object::CommitRef::from_bytes(data.data, tip.kind()).expect("parses");
+    let author = commit.author().expect("author parses");
+    let committer = commit.committer().expect("committer parses");
+    assert_eq!(author.name, "guest", "attributed author");
+    assert_eq!(committer.name, "admin", "signing committer");
 }

@@ -65,6 +65,7 @@ pub fn add(
     let ref_name = namespace::effect_ref(name)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let outcome = propose_entity(

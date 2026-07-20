@@ -64,6 +64,7 @@ pub fn new(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let new = NewIssue {
@@ -103,6 +104,7 @@ pub fn edit(
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
+        author: None,
         sign: &|payload| signer.sign(payload),
     };
     let edit = EditIssue {

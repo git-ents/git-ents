@@ -162,7 +162,10 @@ fn nothing_depends_on_ents_verify() {
             continue;
         }
         assert!(
-            package.dependencies.iter().all(|dependency| dependency.name != "ents-verify"),
+            package
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.name != "ents-verify"),
             "{} must not depend on ents-verify: verify/ is a sink layer nothing else may depend on",
             package.name
         );
