@@ -17,6 +17,7 @@ ssh-key = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+ents-anchor = { workspace = true }
 ents-testutil = { workspace = true }
 rstest = { workspace = true }
 

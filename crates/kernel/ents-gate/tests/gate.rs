@@ -10,8 +10,12 @@
     reason = "integration test: fixtures panic on setup failure"
 )]
 
+use ents_anchor::Binding;
 use ents_gate::{AdmissionKind, Config, Requirement, Update, Verdict, verify};
-use ents_model::{Effect, Member, MemberId, Provenance, ResultRecord, Status, namespace};
+use ents_model::{
+    Claim, Effect, Member, MemberId, Provenance, ResultRecord, Status,
+    claim::Verdict as ClaimVerdict, namespace,
+};
 use ents_testutil::{
     CommitSpec, Keypair, MemRefStore, ObjectStore, empty_tree, enroll_member, write_commit,
     write_member, write_meta_entity,
@@ -541,6 +545,165 @@ fn a_pin_is_never_subjected_to_the_all_roots_walk() {
         &run(&f, &pin_ref, Some(pin_tip)),
         AdmissionKind::TipInvariant,
     );
+}
+
+// ---------------------------------------------------------------------
+// Claims: append-once, witness-retaining, signer-bound genesis refs.
+// ---------------------------------------------------------------------
+
+/// A real serialized [`Claim`] tree over a `Binding::Commit { commit: witness
+/// }`, asserted by `signer_id` — built through `Claim::new` so these tests
+/// exercise the entity as it is actually stored, not a hand-wired tree.
+fn claim_tree(f: &Forge, signer_id: &str, verdict: ClaimVerdict, witness: ObjectId) -> ObjectId {
+    let binding = Binding::Commit { commit: witness };
+    let claim = Claim::new(
+        MemberId::new(signer_id),
+        &binding,
+        verdict,
+        "review",
+        &f.objects,
+    )
+    .expect("claim serializes");
+    facet_git_tree::serialize_into(&claim, &f.objects).expect("ser")
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn a_claim_genesis_with_a_witness_parent_passes_the_tip_invariant() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let tree = claim_tree(&f, "admin", ClaimVerdict::Affirm, witness);
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    let refname = namespace::claim_ref(&tip.to_string()).expect("valid");
+    expect_pass(&run(&f, &refname, Some(tip)), AdmissionKind::TipInvariant);
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn a_claim_refname_not_naming_the_tips_own_oid_is_refused() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let tree = claim_tree(&f, "admin", ClaimVerdict::Affirm, witness);
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    // Named for the witness rather than the claim's own genesis oid.
+    let wrong = namespace::claim_ref(&witness.to_string()).expect("valid");
+    expect_fail(&run(&f, &wrong, Some(tip)), Requirement::IdentityBinding);
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn a_claim_ref_is_append_once_and_refuses_an_advance() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let tree = claim_tree(&f, "admin", ClaimVerdict::Affirm, witness);
+    let genesis = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    let refname = namespace::claim_ref(&genesis.to_string()).expect("valid");
+    f.refs.set(refname.as_ref(), genesis);
+
+    // A changed assertion is a new claim, never an advance of this one:
+    // even a well-formed, correctly signed child commit under the same
+    // ref is refused, because its own oid is not the ref's segment.
+    let advance_tree = claim_tree(&f, "admin", ClaimVerdict::Deny, witness);
+    let advance = tree_commit(&f, advance_tree, vec![genesis], Some(&f.admin), 310);
+    expect_fail(
+        &run(&f, &refname, Some(advance)),
+        Requirement::IdentityBinding,
+    );
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn a_parentless_claim_tip_is_refused() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let tree = claim_tree(&f, "admin", ClaimVerdict::Affirm, witness);
+    let tip = tree_commit(&f, tree, vec![], Some(&f.admin), 300);
+    let refname = namespace::claim_ref(&tip.to_string()).expect("valid");
+    expect_fail(&run(&f, &refname, Some(tip)), Requirement::IdentityBinding);
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn a_claim_signer_field_mismatching_the_actual_signer_is_refused() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    // The claim's tree names a signer other than whoever actually signed
+    // the ledger commit.
+    let tree = claim_tree(&f, "someone-else", ClaimVerdict::Affirm, witness);
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    let refname = namespace::claim_ref(&tip.to_string()).expect("valid");
+    expect_fail(&run(&f, &refname, Some(tip)), Requirement::IdentityBinding);
+}
+
+/// A claim tree carrying an entry that is not a `Claim` field — for the
+/// strict-decode disjointness check.
+#[derive(facet::Facet)]
+struct ClaimPlus {
+    signer: MemberId,
+    binding: facet_git_tree::RawTree,
+    verdict: ClaimVerdict,
+    kind: String,
+    surprise: String,
+}
+
+#[rstest]
+// @relation(gate.identity-binding, meta-ref.typed-tree, scope=function, role=Verifies)
+fn strict_genesis_decode_refuses_an_unknown_claim_tree_entry() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let binding = Binding::Commit { commit: witness };
+    let binding_tree = binding
+        .serialize_into(&f.objects)
+        .expect("binding serializes");
+    let bogus = ClaimPlus {
+        signer: MemberId::new("admin"),
+        binding: facet_git_tree::RawTree::new(binding_tree),
+        verdict: ClaimVerdict::Affirm,
+        kind: "review".into(),
+        surprise: "not a claim field".into(),
+    };
+    let tree = facet_git_tree::serialize_into(&bogus, &f.objects).expect("ser");
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    let refname = namespace::claim_ref(&tip.to_string()).expect("valid");
+    expect_fail(&run(&f, &refname, Some(tip)), Requirement::IdentityBinding);
+}
+
+#[rstest]
+// @relation(model.member-provenance, meta-ref.inbox, gate.tip-signed, scope=function, role=Verifies)
+fn a_self_attested_member_falls_back_to_its_inbox_for_a_claim() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.guest), 250);
+    let tree = claim_tree(&f, "guest", ClaimVerdict::Note, witness);
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.guest), 300);
+
+    // The canonical claim ref is refused — self-attested provenance is not
+    // authorized for canonical refs — with the inbox alternative surfaced.
+    let canonical = namespace::claim_ref(&tip.to_string()).expect("valid");
+    let verdict = run(&f, &canonical, Some(tip));
+    expect_fail(&verdict, Requirement::TipSigned);
+    let Verdict::Fail(refusal) = &verdict else {
+        unreachable!()
+    };
+    assert!(refusal.inbox_alternative, "detail: {refusal}");
+
+    // The identical claim under the member's own inbox segment passes: the
+    // inbox arm recurses into the synthesized canonical refname
+    // (`refs/meta/claims/<id>`) and finds the same binding.
+    let inbox =
+        namespace::inbox_ref(&MemberId::new("guest"), &format!("claims/{tip}")).expect("valid");
+    expect_pass(&run(&f, &inbox, Some(tip)), AdmissionKind::TipInvariant);
+}
+
+#[rstest]
+// @relation(meta-ref.inbox, gate.tip-signed, scope=function, role=Verifies)
+fn an_inbox_claim_by_its_owner_with_a_correct_binding_passes() {
+    let f = forge();
+    let witness = commit(&f, vec![], Some(&f.admin), 250);
+    let tree = claim_tree(&f, "admin", ClaimVerdict::Affirm, witness);
+    let tip = tree_commit(&f, tree, vec![witness], Some(&f.admin), 300);
+    let inbox =
+        namespace::inbox_ref(&MemberId::new("admin"), &format!("claims/{tip}")).expect("valid");
+    expect_pass(&run(&f, &inbox, Some(tip)), AdmissionKind::TipInvariant);
 }
 
 // ---------------------------------------------------------------------

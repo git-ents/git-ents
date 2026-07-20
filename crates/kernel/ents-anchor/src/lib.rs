@@ -96,6 +96,7 @@
 //! ```
 
 mod anchor;
+mod binding;
 mod error;
 #[cfg(test)]
 mod fixture;
@@ -103,5 +104,6 @@ mod projection;
 mod util;
 
 pub use anchor::{Anchor, LineRange, capture, capture_worktree, snippet};
+pub use binding::{Binding, EvalState, Validity, revalidate};
 pub use error::{Error, Result};
 pub use projection::{Projection, project, project_exact, project_from_context, project_worktree};

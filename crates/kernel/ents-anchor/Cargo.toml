@@ -7,11 +7,12 @@ license.workspace = true
 
 [dependencies]
 facet = { workspace = true }
+facet-git-tree = { workspace = true }
 gix = { workspace = true }
+gix-object = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-facet-git-tree = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }

@@ -1232,6 +1232,7 @@ dependencies = [
  "facet",
  "facet-git-tree",
  "gix",
+ "gix-object",
  "proptest",
  "rstest",
  "tempfile",
@@ -1283,6 +1284,7 @@ dependencies = [
 name = "ents-gate"
 version = "0.0.0"
 dependencies = [
+ "ents-anchor",
  "ents-model",
  "ents-testutil",
  "facet",
@@ -1350,6 +1352,7 @@ dependencies = [
 name = "ents-model"
 version = "0.0.0"
 dependencies = [
+ "ents-anchor",
  "facet",
  "facet-git-tree",
  "gix",
@@ -1380,6 +1383,7 @@ dependencies = [
 name = "ents-receive"
 version = "0.0.0"
 dependencies = [
+ "ents-anchor",
  "ents-gate",
  "ents-model",
  "ents-query",

@@ -250,6 +250,104 @@ pub fn propose_genesis<T: for<'facet> facet::Facet<'facet>>(
     Ok((name, outcome))
 }
 
+/// Create a hash-identified entity whose genesis commit carries `retain` as
+/// its parents, the claim-creation path: sign-then-name exactly as
+/// [`propose_genesis`], except the genesis is not parentless. This
+/// generalizes [`propose_pin`]'s retention linkage (`model.review-pin`) to
+/// an entity-carrying commit — a claim's binding supplies its own witness
+/// commits as `retain`, so the claim's own ledger commit keeps the bound
+/// objects reachable without a separate pin ref. The only difference from
+/// [`propose_genesis`] is that parent list; [`signed_commit`] is reused
+/// unchanged.
+///
+/// There is no "advance" counterpart: a claim ref is append-once (the tip
+/// IS the genesis), so unlike [`propose_entity`] or [`propose_pin`], no
+/// second function exists here to move an existing ref forward — a changed
+/// assertion is a new claim, proposed fresh through this same function.
+///
+/// # Errors
+///
+/// See [`propose_genesis`] — identical.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::{Claim, MemberId, Provenance, claim::Verdict, namespace};
+/// use ents_receive::{Identity, Mode, NullEventSink, TxResult, propose_genesis_retaining};
+/// use ents_testutil::{CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, write_commit};
+/// use gix_ref_store::RefStoreRead as _;
+///
+/// let refs = MemRefStore::default();
+/// let objects = ObjectStore::default();
+/// let admin = Keypair::from_seed(1);
+/// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
+///
+/// // The commit under claim — the content the claim keeps reachable.
+/// let tree = ents_testutil::empty_tree(&objects);
+/// let witness = write_commit(
+///     &objects,
+///     &CommitSpec { tree, parents: vec![], message: "witnessed work".into(), seconds: 200 },
+///     None,
+/// );
+///
+/// let binding = ents_anchor::Binding::Commit { commit: witness };
+/// let claim = Claim::new(MemberId::new("admin"), &binding, Verdict::Affirm, "review", &objects)
+///     .expect("serialize binding");
+///
+/// let identity = Identity {
+///     actor: gix::actor::Signature {
+///         name: "admin".into(),
+///         email: "admin@ents.test".into(),
+///         time: gix::date::Time { seconds: 300, offset: 0 },
+///     },
+///     author: None,
+///     sign: &|payload| admin.sign(payload),
+/// };
+///
+/// let (name, outcome) = propose_genesis_retaining(
+///     &refs, &objects, &NullEventSink, &claim, &[witness],
+///     |oid| namespace::claim_ref(&oid.to_string()), &identity, "Claim on witness",
+///     Mode::Advisory,
+/// )
+/// .expect("reaches an outcome");
+/// assert_eq!(outcome.result, TxResult::Applied);
+/// let tip = refs.get(name.as_ref()).expect("read").expect("ref exists");
+/// let stored = objects.get(&tip).expect("commit stored");
+/// let gix_object::Object::Commit(commit) = stored else { panic!("not a commit") };
+/// assert!(commit.parents.iter().any(|parent| *parent == witness));
+/// ```
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors propose_genesis's shape, plus the retained-parents slice that is this \
+              function's whole point"
+)]
+pub fn propose_genesis_retaining<T: for<'facet> facet::Facet<'facet>>(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn EventSink,
+    entity: &T,
+    retain: &[gix_hash::ObjectId],
+    name_from_oid: impl FnOnce(gix_hash::ObjectId) -> ents_model::Result<FullName>,
+    identity: &Identity<'_>,
+    subject: &str,
+    mode: Mode,
+) -> Result<(FullName, Outcome)> {
+    let tree = facet_git_tree::serialize_into(entity, objects)?;
+    let tip = signed_commit(objects, tree, retain.to_vec(), identity, subject)?;
+    let name = name_from_oid(tip).map_err(|source| crate::Error::Model { source })?;
+    let proposal = Proposal {
+        transitions: vec![RefTransition {
+            name: name.clone(),
+            old: None,
+            new: Some(tip),
+        }],
+        objects: vec![tip],
+        auth: None,
+    };
+    let outcome = crate::receive::receive(refs, objects, events, &proposal, mode)?;
+    Ok((name, outcome))
+}
+
 /// Advance the retention pin at `name` to keep `retain` (and its ancestry)
 /// reachable (`model.review-pin`): a signed commit carrying the empty tree
 /// — a pin's commits anchor other content's reachability and carry no

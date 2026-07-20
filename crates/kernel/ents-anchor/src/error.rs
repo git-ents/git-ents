@@ -52,6 +52,23 @@ pub enum Error {
     /// (`anchor.working-tree` applies only where a working tree exists).
     #[error("the repository has no working tree")]
     NoWorkingTree,
+    /// Encoding or decoding a [`crate::Binding`] through the underlying
+    /// `facet-git-tree` codec failed — a malformed payload tree, or a
+    /// backend error from the `gix` object store the codec was given.
+    #[error("binding codec error: {0}")]
+    Codec(#[from] facet_git_tree::Error),
+    /// A stored tree's entry names matched none of [`crate::Binding`]'s five
+    /// variant shapes ([`crate::Binding::deserialize`]'s sniffing rule):
+    /// neither `blob`+`content` (`Position`), `base_tree` (`Delta`),
+    /// `witness`+`tree` (`Tree`), exactly `{commit, tree}` (`Hybrid`), nor
+    /// exactly `{commit}` (`Commit`).
+    #[error("tree {id} does not match any known binding shape (entries: {entries:?})")]
+    UnknownBindingShape {
+        /// The tree that could not be recognized as any binding variant.
+        id: ObjectId,
+        /// The entry names actually present in that tree.
+        entries: Vec<String>,
+    },
 }
 
 /// The `Result` alias every `ents-anchor` operation returns.

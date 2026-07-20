@@ -323,6 +323,30 @@ pub fn redaction_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/redactions/{id}"))
 }
 
+/// The ref holding one claim — `refs/meta/claims/<id>`, where `<id>` is
+/// the claim's own genesis commit oid: the sign-then-name envelope, same
+/// as a comment or an issue. Unlike those, this ref is append-once — the
+/// tip IS the genesis; a changed assertion is a new claim, never an
+/// advance.
+///
+/// A claim's ledger commit carries its binding's witness commits as
+/// parents, so its ancestry deliberately reaches into code history exactly
+/// as a review pin's does — the gate's parentless-roots walk must never
+/// apply to a claim, the same carve-out [`review_pin_ref`]'s doc already
+/// describes for pins.
+///
+/// # Examples
+///
+/// ```
+/// use ents_model::namespace;
+///
+/// let name = namespace::claim_ref("deadbeef").expect("valid");
+/// assert_eq!(name.as_bstr(), "refs/meta/claims/deadbeef");
+/// ```
+pub fn claim_ref(id: &str) -> Result<FullName> {
+    build(format!("refs/meta/claims/{id}"))
+}
+
 /// Which entity namespace a `refs/meta/*` refname falls in.
 ///
 /// The inbox and self-run namespaces classify as their own variants even
@@ -367,6 +391,11 @@ pub enum Namespace {
     Account,
     /// The fixed `refs/meta/config` ref.
     Config,
+    /// `refs/meta/claims/*` — one ref per claim ([`claim_ref`]), append-once:
+    /// the tip IS the genesis. A claim's ancestry reaches into code history
+    /// through its binding's witness commits, exactly as [`Namespace::Pin`]'s
+    /// does, so the all-roots walk must never apply to it either.
+    Claim,
     /// Under `refs/meta/*`, but in no namespace this build of the vocabulary
     /// knows. `model.extensibility` requires a stock server to carry entity
     /// types it cannot parse, so the gate and `receive` must be able to
@@ -423,6 +452,7 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "toolchains" => Some(Namespace::Toolchain),
         "redactions" => Some(Namespace::Redaction),
         "inbox" => Some(Namespace::Inbox),
+        "claims" => Some(Namespace::Claim),
         _ => Some(Namespace::Unknown),
     }
 }
@@ -481,6 +511,7 @@ mod tests {
     #[case::toolchain("refs/meta/toolchains/rust-stable", Some(Namespace::Toolchain))]
     #[case::redaction("refs/meta/redactions/abc", Some(Namespace::Redaction))]
     #[case::inbox("refs/meta/inbox/jdc/issue-42", Some(Namespace::Inbox))]
+    #[case::claim("refs/meta/claims/deadbeef", Some(Namespace::Claim))]
     #[case::account("refs/meta/account", Some(Namespace::Account))]
     #[case::config("refs/meta/config", Some(Namespace::Config))]
     #[case::outside_meta("refs/heads/main", None)]
@@ -555,6 +586,7 @@ mod tests {
             inbox_ref(&id, "issue-42").expect("valid"),
             toolchain_ref("rust-stable").expect("valid"),
             redaction_ref("abc").expect("valid"),
+            claim_ref("deadbeef").expect("valid"),
         ];
         for name in built {
             assert!(

@@ -40,6 +40,13 @@
 //!   depend on); see `ents-kiln`'s `Toolchain`.
 //! - `model.redaction` — [`Redaction`].
 //! - `model.account` — [`Account`].
+//!
+//! [`Claim`] (`refs/meta/claims/*`, [`namespace::claim_ref`]) is also
+//! defined here: a signer × binding × verdict × opaque-kind entity, the
+//! shared building block a comment's thread state, a review's approval, or
+//! a CI result can each be built from without the kernel enumerating what
+//! any of them mean. No spec id covers it yet — see the [`claim`] module's
+//! own doc comment.
 //! - `meta-ref.namespace`, `meta-ref.granularity` — [`namespace`].
 //! - `meta-ref.inbox` — [`namespace`]: the `refs/meta/inbox/<member>/<id>`
 //!   half ([`namespace::inbox_ref`], [`namespace::inbox_owner`],
@@ -92,6 +99,7 @@
 //! ```
 
 mod account;
+pub mod claim;
 mod effect;
 mod error;
 mod member;
@@ -100,6 +108,7 @@ mod redaction;
 mod result;
 
 pub use account::Account;
+pub use claim::Claim;
 pub use effect::Effect;
 pub use error::{Error, Result};
 pub use member::{Member, MemberId, MemberState, Provenance};
@@ -123,6 +132,8 @@ mod tests {
     /// different runtime-supplied field data.
     #[rstest]
     #[case::account(Account::SHAPE.type_identifier, "Account")]
+    #[case::claim(Claim::SHAPE.type_identifier, "Claim")]
+    #[case::claim_verdict(claim::Verdict::SHAPE.type_identifier, "Verdict")]
     #[case::effect(Effect::SHAPE.type_identifier, "Effect")]
     #[case::member(Member::SHAPE.type_identifier, "Member")]
     #[case::redaction(Redaction::SHAPE.type_identifier, "Redaction")]

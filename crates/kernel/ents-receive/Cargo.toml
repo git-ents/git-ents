@@ -18,6 +18,7 @@ gix-ref-store = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+ents-anchor = { workspace = true }
 ents-testutil = { workspace = true }
 facet = { workspace = true }
 rstest = { workspace = true }

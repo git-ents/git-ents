@@ -16,6 +16,18 @@ pub enum Error {
         #[source]
         source: gix::validate::reference::name::Error,
     },
+
+    /// A value handed to one of this crate's `FromStr` implementations
+    /// (for example, [`crate::claim::Verdict`]'s kebab-case parse) did not
+    /// match any known form.
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
+    /// A [`crate::Claim`]'s binding could not be serialized into or
+    /// deserialized from the object store
+    /// ([`crate::claim::Claim::new`], [`crate::claim::Claim::binding`]).
+    #[error("binding operation failed: {0}")]
+    Anchor(#[from] ents_anchor::Error),
 }
 
 /// The `Result` alias every `ents-model` operation returns.

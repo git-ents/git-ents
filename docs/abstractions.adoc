@@ -9,7 +9,58 @@ Where this document runs ahead of shipped code, the gap is marked.
 
 == The six abstractions
 
-=== 1. Meta-ref
+Each answers one question: what data is (1), how data points (2), how state lives (3), what actors assert (4), how the system judges (5), how the system computes (6).
+
+=== 1. Typed tree
+
+A Rust struct annotated `#[derive(Facet)]` *is* the storage schema.
+`facet-git-tree` maps struct ↔ Git tree directly; no serialization format exists to version.
+
+Changing a struct is a storage migration, not a refactor — and a migration is itself a signed commit: rewrite the tree under the new struct, commit on the ref's old tip.
+History keeps the old encoding as archive.
+Trees stay pure struct representations — no version marker entry.
+
+Ref-level metadata that is not entity content — who, when, the signature — lives in the commit header, because the commit is already the storage unit; no reserved trailer exists.
+Refname binding needs no stored metadata at all: the refname is a total function of signed content, recomputed at verification (see 3).
+
+*Tip invariant:* the tip of a meta-ref is always readable by the binary that owns the entity type; a non-owning binary treats the tree as opaque and degrades to generic display (`git store show`); history is archival.
+(Redacted entries are the one qualification: readers surface a withheld object as a redaction marker, never an error — see Derived.)
+
+=== 2. Binding
+
+A `Binding`, homed in the anchor crate (`ents-anchor`), is the single typed-reference vocabulary into the object graph.
+Exactly five variants, each named by what it is bound to:
+
+* `Commit { commit }` — history-bound.
+* `Tree { tree, path }` — content-bound.
+The path is advisory metadata, never identity; identity is the tree oid.
+* `Delta { base_tree, head_tree, path }` — transformation-bound; the same path rule applies.
+A commit range is evidence for a Delta, never a binding itself.
+(Interdiff computation — what changed between a reviewed delta and a new one — is future work; Delta today has identity and staleness semantics only.)
+* `Position { blob, lines, commit }` — position-bound and projectable: the anchor, a durable pointer into source.
+** *Retention invariant:* the tree storing a Position embeds the anchored blob, plus a context blob of the surrounding lines, as ordinary entries — content addressing makes this free.
+The anchored content is reachable from `refs/meta/*` and survives force-push, branch deletion, and gc — no gc special-casing, and no pinned ancestry for the position's own content: the anchored commit's oid is recorded as data only; embedding, not ancestry, is what retains the content.
+(Gitlinks are not reachability edges and retain nothing; embedding is the only mechanism that works.)
+Redaction (see Derived) is the sole deliberate exception to retention.
+** *Projection:* Positions project onto newer commits at read time — blame plus fuzzy matching against the context blob; binding data is never mutated.
+When the anchored commit has been gc'd, projection degrades to context matching instead of breaking.
+* `Hybrid { commit, tree }` — relational checks: a parent commit plus a body tree.
+
+*Reachability witness rule:* every binding carries at least one witness commit, and the ledger commit that stores the binding links each witness as a second parent — ordinary git reachability then keeps the bound objects alive.
+Content-typed bindings (Tree, Delta) need a witness because a subtree is reachable only through some commit; the rule generalizes the review pin (`model.review-pin`).
+The two retention mechanisms coexist without contradiction: embedding preserves a Position's content inside the binding's own tree; witness parents keep bound objects reachable from the ledger commit that stores the binding.
+Witness is provenance, not identity: two claims binding the same Tree oid via different witnesses bind the same target.
+
+*Validity:* `revalidate(binding, state) → Valid | Stale | Unknown`, judged per variant:
+
+* Commit — valid iff the commit is reachable from the ref under evaluation.
+* Tree — valid iff the tree oid appears at the recorded (or any) path in the state under evaluation; stale otherwise.
+* Delta — valid iff evaluated against the same `(base_tree, head_tree)` pair; stale otherwise.
+* Position — the existing projection semantics, unchanged.
+
+Bindings are independent of any consumer; comments use Position, claims bind any variant.
+
+=== 3. Ledger
 
 A ref under `refs/meta/*` is simultaneously the unit of:
 
@@ -29,38 +80,9 @@ Two namespaces are consequences of the granularity rule plus the gate (5):
 
 Both hold the same typed trees as their canonical counterparts; only the refname rule differs.
 
-=== 2. Typed tree
-
-A Rust struct annotated `#[derive(Facet)]` *is* the storage schema.
-`facet-git-tree` maps struct ↔ Git tree directly; no serialization format exists to version.
-
-Changing a struct is a storage migration, not a refactor — and a migration is itself a signed commit: rewrite the tree under the new struct, commit on the ref's old tip.
-History keeps the old encoding as archive.
-Trees stay pure struct representations — no version marker entry.
-
-Ref-level metadata that is not entity content — who, when, the signature — lives in the commit header, because the commit is already the storage unit; no reserved trailer exists.
-Refname binding needs no stored metadata at all: the refname is a total function of signed content, recomputed at verification (see 4).
-
-*Tip invariant:* the tip of a meta-ref is always readable by the binary that owns the entity type; a non-owning binary treats the tree as opaque and degrades to generic display (`git store show`); history is archival.
-(Redacted entries are the one qualification: readers surface a withheld object as a redaction marker, never an error — see Derived.)
-
-=== 3. Anchor
-
-A durable pointer into source: blob, optional line range, specific commit.
-
-* *Retention invariant:* the tree storing an anchor embeds the anchored blob, plus a context blob of the surrounding lines, as ordinary entries — content addressing makes this free.
-The anchored content is reachable from `refs/meta/*` and survives force-push, branch deletion, and gc — no gc special-casing, and no pinned ancestry: the anchored commit's oid is recorded as data only.
-(Gitlinks are not reachability edges and retain nothing; embedding is the only mechanism that works.)
-Redaction (see Derived) is the sole deliberate exception to retention.
-* *Projection:* anchors project onto newer commits at read time — blame plus fuzzy matching against the context blob; anchor data is never mutated.
-When the anchored commit has been gc'd, projection degrades to context matching instead of breaking.
-
-Anchors are independent of any consumer; comments use them, but reviews, TODOs, and blame overlays can too.
-
-=== 4. Signed commit
-
 Every meta-ref mutation is an author-signed commit.
-The signature is a data artifact, not a transport artifact: it replicates with the repo and verifies offline in every clone, so verification evidence is itself repository state.
+Which artifact carries the authorization evidence is a carrier question internal to the ledger, not an abstraction of its own — and the answer is the commit signature: a data artifact, not a transport artifact.
+It replicates with the repo and verifies offline in every clone, so verification evidence is itself repository state.
 Push certificates are demoted to transport concerns; they carry no meta-ref semantics.
 
 A commit signature proves authorship; it does not prove placement.
@@ -83,6 +105,24 @@ Author and placer are both you, the merge tip descends from the old tip, and the
 *The principled split:* content signatures carry authorization only where mutations are author-signed single-writer appends — which the granularity rule guarantees for meta-refs.
 On `refs/heads/*`, pushing commits you did not author is legitimate, so branch refs keep transport-level auth.
 "Signed push is the only write path" is therefore retired; the invariant is the tip invariant above, which is strictly stronger where it applies.
+
+*Recorded, never erased:* ledger history is never rewritten; a state change is recorded as new state, never erased from old — revocation, for instance, is a state on the member entity, not a deletion (see Command surface).
+Redaction (see Derived) is the sole deliberate exception.
+
+=== 4. Claim
+
+A claim is a kernel ledger entity: signer × binding × verdict, the verdict a small closed enum — affirm, deny, note — plus an opaque `kind` the kernel never interprets.
+Kind vocabularies (review, ci, …) are package policy, never kernel enumeration.
+
+Storage is one ref per claim under `refs/meta/claims/<id>`, where the id is the genesis commit's own oid — the standard sign-then-name envelope — honoring the granularity law: claims by different signers never share a ref.
+Authorship is the standard signed-commit path; no privileged writers.
+
+The claim's ledger commit carries its binding's witness commit(s) as extra parents — the binding reachability rule (2) — reusing the review-pin retention mechanism.
+
+*Open question, deliberately unresolved:* whether claims subsume effect results.
+The `results()`/`meta()` query atoms and the result taxonomy (6) are unchanged pending that decision.
+
+*(Gap: no shipped feature consumes claims yet; reviews-over-claims is follow-up work.)*
 
 === 5. Gate
 
@@ -185,7 +225,7 @@ Hosted mode requires both.
 
 == The loop
 
-Abstractions 4, 5, and 6 close into each other: signed commits are the only way state changes, the gate is the only admission judgment, effects are the only side-effect path — and effect results are signed commits by workers that are just members, judged by the same gate.
+The ledger (3), the gate (5), and the effect (6) close into each other: signed ledger commits are the only way state changes, the gate is the only admission judgment, effects are the only side-effect path — and effect results are signed commits by workers that are just members, judged by the same gate.
 All state changes, human or machine, flow through one verified, audited channel, and the repository is the message bus.
 This closure is the design's central property.
 
@@ -241,6 +281,7 @@ Dependencies point one way; a lower layer never depends on a higher one, checked
 Extends git, not the forge; carries the `gix-` prefix per the Composition section's own rule.
 * *Kernel* — `ents-model`, `ents-anchor`, `ents-gate`, `ents-effect`, `ents-query`, `ents-receive`, `ents-sync`, `ents-testutil`.
 Owns mechanism: typed ref-store access and refs/meta layout primitives, signing and authorship, the entity envelope (typed trees, id assignment), gate execution and composition semantics, effect dispatch, adoption/inbox mechanics, yank, sync/receive plumbing, hooks.
+`ents-model` (the entity envelope) depends on `ents-anchor` for the binding vocabulary — a kernel-internal edge the layering check already admits.
 The kernel is declarative and generic — it defines *how* any entity is stored, verified, and run, never *which* entities exist.
 * *Package* — `ents-forge` (issues, comments, review/release/check types as they land), `ents-kiln` (toolchains).
 Owns types and policy: the domain entity structs, and any package-specific gate or effect definitions.
@@ -274,9 +315,9 @@ The server's monopoly reduces to custody of the canonical refs.
 * *Toolchains* — typed trees under `refs/meta/toolchains/*`; a resource effects declare, not a trigger.
 The repo carries its own execution environment with provenance, as ~1KB hash-pinned manifests; only the sandbox touches the bytes.
 They keep a subcommand only because import/activation logic is nontrivial; if that shrinks, the subcommand dies.
-* *Members, accounts, issues, comments* — typed trees behind meta-refs (1+2), written as signed commits (4), admitted by the gate (5).
+* *Members, accounts, issues, comments* — typed trees (1) on ledger refs, written as signed ledger commits (3), admitted by the gate (5).
 Issues are the plainest instance of all: assignees, labels, and states are struct fields, so multiple assignees or custom states are schema, not platform features.
-* *Fanout indexes* — discovery without ref enumeration: `refs/meta/index/*` maps object oids to the entities anchored to them, rebuilt by an effect (6) and written via the worker's signed commit (4).
+* *Fanout indexes* — discovery without ref enumeration: `refs/meta/index/*` maps object oids to the entities anchored to them, rebuilt by an effect (6) and written via the worker's signed ledger commit (3).
 Clients read the index; a stale or absent index degrades to scanning ref tips, never to wrong answers.
 * *Redaction* — the deliberate exception to retention: an object-level yank, scoped to content reachable only from `refs/meta/*`.
 The bytes are withheld from the store and from generated packs; the oid stays in history as evidence; signatures and the tip invariant are untouched, because verification never reads the withheld bytes.
@@ -360,7 +401,7 @@ Revocation is a state on the member entity, not deletion — a revoked key must 
 Known edge: `updateInstead` fails on a dirty worktree, so this harness path is not perfectly identical to hosted mode — metadata behavior is.
 Worktree update is frontend business, after `receive` accepts; core never touches a worktree.
 
-Pushes to `refs/meta/*` never touch the working tree, so all metadata behaves identically in both modes: the deployment model is an implementation detail of the data model — a direct consequence of abstractions 1 and 5.
+Pushes to `refs/meta/*` never touch the working tree, so all metadata behaves identically in both modes: the deployment model is an implementation detail of the data model — a direct consequence of the ledger (3) and the gate (5).
 
 Bootstrap remains the known gap: an empty member list admits every push so the first member can enroll.
 Hosted, this leaves "first push owns the repo" open per repository; closing it — repository creation requires an existing account — needs a server-level key→account registry, because bare repos are created on the first `info/refs` request, before any push certificate exists.

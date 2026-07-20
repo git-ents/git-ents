@@ -3,7 +3,7 @@
 //! `gate.bootstrap`), identical at every call site (`gate.call-sites`).
 
 use ents_model::namespace::{self, Namespace};
-use ents_model::{Member, MemberId, MemberState, Provenance, ResultRecord};
+use ents_model::{Claim, Member, MemberId, MemberState, Provenance, ResultRecord};
 use facet::{Facet, Type, UserType};
 use gix::refs::FullName;
 use gix_hash::ObjectId;
@@ -695,6 +695,55 @@ fn identity_binding(
         // history, so the all-roots walk is NEVER applied to it
         // (`meta-ref.identity-binding`).
         Namespace::Pin => Ok(None),
+        // A claim ref is append-once: the tip IS its own genesis, so the
+        // proposed tip's own oid — never an ancestor root — must equal the
+        // refname's segment. This deliberately does NOT use `all_roots`: a
+        // claim's parents are its binding's witness commits, whose
+        // ancestry reaches into code history exactly like a pin's
+        // (`Namespace::Pin`, above), so the all-roots walk must never run
+        // on a claim.
+        Namespace::Claim => {
+            let segment = final_segment(name);
+            let Ok(expected) = ObjectId::from_hex(segment.as_bytes()) else {
+                return Ok(binding_refusal(
+                    name,
+                    format!("`{segment}` is not a genesis commit oid"),
+                ));
+            };
+            if new != expected {
+                return Ok(binding_refusal(
+                    name,
+                    format!(
+                        "the proposed tip {new} is not the genesis {expected} its refname \
+                         names; a changed assertion is a new claim, never an advance of an \
+                         existing one"
+                    ),
+                ));
+            }
+            if commit.parents.is_empty() {
+                return Ok(binding_refusal(
+                    name,
+                    "a claim's tip must carry at least one parent — its binding's witness; a \
+                     parentless claim retains nothing"
+                        .into(),
+                ));
+            }
+            // The tip is always the genesis (rule above), so strict decode
+            // always applies, unconditionally.
+            if let Some(refusal) = strict_decode::<Claim>(objects, name, commit.tree)? {
+                return Ok(Some(refusal));
+            }
+            match field_str(objects, commit.tree, "signer")? {
+                Some(value) if value == signer.as_str() => Ok(None),
+                other => Ok(binding_refusal(
+                    name,
+                    format!(
+                        "the claim's signer field {} does not match its actual signer {signer}",
+                        other.unwrap_or_else(|| "(absent)".into())
+                    ),
+                )),
+            }
+        }
         // An inbox ref binds by its owner segment equal to the signer
         // (already enforced by `authorize`), with the canonical suffix
         // bound exactly as its canonical namespace binds — recurse on the
