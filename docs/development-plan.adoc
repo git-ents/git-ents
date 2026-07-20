@@ -178,17 +178,15 @@ the coverage dashboard is a later call.
   a composition root injects. Signing identity is injected by the
   composition root; the crate assumes nothing about network
   reachability, so in-process webview embedding stays a supported
-  deployment (`roots.web-agnostic`). Gap this phase does not close, not
-  assigned to any later phase either: no composition root actually wires
-  `ents-web` onto a hosted root — not the single-node hosted root this
-  binary already doubles as, deployed at `git.ents.cloud` since Phase 6,
-  and not `git-ents-server` (phase 8, whose own row below merely reuses
-  this phase's sessions/CSRF code, never mounts the web UI).
-  `roots.web-signing`'s server-key indirection is proven only
-  against fixture identities in this crate's own tests; "turning the
-  single-node hosted root into a hosted web UI," which an earlier
-  version of this row asserted as delivered, describes the crate's
-  capability, not a running deployment.
+  deployment (`roots.web-agnostic`). The gap this phase shipped with —
+  no composition root wiring `ents-web` onto a hosted root, the
+  server-key indirection proven only against fixture identities — was
+  closed after phase 10 by `git ents serve --hosted`
+  (`roots.single-node-hosted`'s web-UI clause): the single-node hosted
+  root mounts this same crate behind nginx with the mandatory gate, the
+  server's enrolled member key as signing identity, and member sign-in
+  via the CLI-driven challenge flow (`roots.web-signin`,
+  `receive.attributed-author` — edits land as "member via the web").
 
 | `gix-receive`
 | 8
@@ -326,11 +324,11 @@ the coverage dashboard is a later call.
   through an identity the composition root injects, never one this
   crate resolves itself (`roots.web-signing`, `roots.web-agnostic`); the
   same router is provably reachable with no bound socket, driven
-  in-process via `tower::ServiceExt::oneshot`. This row's own gap is a
-  known exception, not a silent one: no hosted deployment (`git.ents.cloud`
-  or `git-ents-server`) actually mounts this web UI yet, so
-  `roots.web-signing`'s server-key half stays proven only against
-  fixture identities until some later phase's composition root wires it.
+  in-process via `tower::ServiceExt::oneshot`. This row's gap — no
+  hosted deployment mounting the web UI, the server-key half proven only
+  against fixtures — closed after phase 10: `git ents serve --hosted`
+  wires it onto the single-node hosted root at `git.ents.cloud`, with
+  member sign-in (`roots.web-signin`) gating mutations.
 * *Phase 8 exit*: the honesty test (`roots.honesty-test`) — the
   Postgres/Tigris/durable-queue root, now served by `gix-receive` in
   place of git's own `receive-pack`, is wired as a new composition root

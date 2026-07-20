@@ -46,6 +46,19 @@ No policy for that `refs/heads/*` ACL input is specified yet
 through uninterpreted until one is.
 --
 
+[role="requirement", id="receive.attributed-author"]
+.Attributed Author, Signing Committer
+--
+A mutation commit's committer MUST be the signing identity — the actor
+whose key produces the commit's `gpgsig` header.
+The author MAY be a distinct attributed member, so history reads
+"<member> via <frontend>" (<<roots.web-signing>>); when no attribution
+applies, author and committer MUST be identical.
+Gate evaluation and authorization (<<gate.tip-signed>>) MUST key off the
+signer, never the author: attribution is provenance for readers of
+history, not authority.
+--
+
 [role="requirement", id="receive.multi-ref-atomicity"]
 .An Entity Declared Across Multiple Refs Writes Them as One Proposal
 --

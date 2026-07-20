@@ -44,6 +44,13 @@ performs the actual object unpack and ref update; this root's
 `pre-receive`/`post-receive` hooks call the gate and reconcile obligations
 around that write, never through this crate's own `RefStore::transaction`,
 to avoid a double-write race against `receive-pack`'s internal ref update.
+This root MUST also mount the web UI: the same `ents-web` frontend the
+local root serves (<<roots.web-agnostic>>), wired over this root's own
+seams with the mandatory gate and the server's member key as signing
+identity (<<roots.web-signing>>), served behind the same host.
+The front proxy MUST route git's smart-HTTP paths to stock git's
+`http-backend` and every other path to the loopback-bound web process;
+the web process MUST NOT add a git transport of its own.
 This is not <<roots.hosted>>: that root replaces the `RefStore` and object
 store themselves with Postgres and Tigris once scale forces `receive-pack`
 out entirely (<<roots.honesty-test>>); this root keeps a real on-disk
@@ -88,6 +95,10 @@ is a missing trait, not a shortcut to take.
 --
 A hosted web edit MUST be signed by the server's own member key, and that
 key MUST itself be an enrolled member.
+A hosted web edit's commit MUST be authored by the signed-in member
+(<<roots.web-signin>>) and committed by the server identity
+(<<receive.attributed-author>>), so history reads "member via the web" —
+the member is never impersonated as the signer.
 The local web UI MUST sign edits with the user's own member key instead;
 the server-key indirection used hosted MUST NOT be imported into the local
 root.
@@ -146,6 +157,32 @@ A hosted web session MUST be held only in server memory, consistent with
 Every state-changing web request MUST carry a per-session CSRF token the
 server verifies before acting; a web edit MUST be signed
 (<<roots.web-signing>>) only on behalf of an authenticated session.
+--
+
+[role="requirement", id="roots.web-signin"]
+.Hosted Web Sign-In Proves a Member Key
+--
+A hosted web session MUST become authenticated (<<roots.web-session>>)
+only by proving control of an enrolled, active member key: the server
+issues a one-time challenge bound to exactly one browser session, and the
+member's own tooling signs it under an SSHSIG namespace distinct from
+git's commit-signing namespace, so a sign-in signature can never double
+as a push signature or vice versa.
+A challenge MUST be short-lived and single-use; consuming it MUST be the
+only path to authenticating the session it was bound to.
+The signed payload MUST bind the serving host and the challenge itself,
+so a signature cannot be replayed against another deployment or another
+session, and the signing tool MUST construct that payload locally from
+the host the member addressed, never from bytes the server supplies.
+An authenticated session MUST record only the member's username and
+public key, held in server memory per <<roots.web-session>>; no member
+secret is ever transmitted or stored.
+An unauthenticated hosted session MAY browse read-only and MUST NOT
+reach any signing path (<<roots.web-signing>>); a mutation under a
+session whose member is no longer enrolled and active MUST be refused
+at the time of the mutation, not only at sign-in.
+The local root (<<roots.local>>) MUST NOT expose a sign-in surface: its
+serving identity is the operator's own key, resolved at startup.
 --
 
 [role="requirement", id="roots.path-validation"]
