@@ -10,7 +10,7 @@
 # upgrade path if either process starts crash-looping.
 set -eu
 
-repo=/data/repo.git
+repo=/data/git-ents/git-ents.git
 key=/data/hosted_signing_key
 public_host="${PUBLIC_HOST:-git.ents.cloud}"
 
