@@ -98,13 +98,13 @@ fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) ->
                     span.locator {
                         (issue.state)
                         " \u{b7} "
-                        @if issue.assignees.is_empty() {
-                            "unassigned"
-                        } @else {
-                            "@" (issue.assignees[0].as_str())
+                        @if let Some(first) = issue.assignees.first() {
+                            "@" (first.as_str())
                             @if issue.assignees.len() > 1 {
                                 " +" (issue.assignees.len() - 1)
                             }
+                        } @else {
+                            "unassigned"
                         }
                         " \u{b7} "
                         @if issue.labels.is_empty() { "no labels" } @else { (issue.labels.join(", ")) }
