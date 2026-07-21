@@ -293,7 +293,9 @@ where
                     div.commit {
                         div.commit-subject { (subject) }
                         @if let Some(body) = &body {
-                            div.commit-msg { (body) }
+                            div.commit-msg.doc-body {
+                                (crate::asciidoc::to_html(body).unwrap_or_else(|_| html! { p { (body) } }))
+                            }
                         }
                         div.commit-meta {
                             (author_name)

@@ -154,6 +154,10 @@ body {
 h1, h2, h3, h4, h5, h6 { font-family: var(--sans); font-weight: 600; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-2); text-decoration: underline; }
+/* Every bare `<code>` (a short oid, a CLI command name, ...) reads as a
+ * small code chip by default; contexts that already carry their own
+ * monospace flow (`.blob-code`, `.doc-body`) reset it back below. */
+code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
 ::selection { background: var(--accent-soft); }
 a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
@@ -629,7 +633,7 @@ form button:hover { background: var(--accent-2); }
 .blob-nums a:hover { color: var(--accent); }
 .blob-nums a:target { color: var(--accent); font-weight: 600; }
 .blob td.blob-code { padding: 0 16px 0 4px; white-space: pre; color: var(--ink); vertical-align: top; }
-.blob-code code { font-family: inherit; }
+.blob-code code { font-family: inherit; font-size: inherit; background: none; border: none; padding: 0; border-radius: 0; }
 .blob tr.blob-comment-row td { padding: 0; background: var(--surface); }
 .blob tr.blob-comment-row .card { margin: 5px 26px 7px 52px; }
 .binary { padding: 40px; text-align: center; font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); }
@@ -664,8 +668,13 @@ form button:hover { background: var(--accent-2); }
 .composer-cancel:hover { color: var(--accent); border-color: var(--accent-line); }
 
 /* ===================== COMMITS ===================== */
+.commit { padding: 16px 18px 18px; }
 .commit-subject { font-size: 19px; font-weight: 600; letter-spacing: -.2px; margin-bottom: 8px; }
-.commit-msg { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; color: var(--ink-2); margin-bottom: 8px; }
+/* The commit message body renders through `crate::asciidoc::to_html`, the
+ * same pipeline an issue body or a `.adoc` blob does -- `.doc-body`'s own
+ * element rules (headings, lists, code spans) apply, scaled down to this
+ * compact metadata context instead of a full document card's. */
+.commit-msg.doc-body { padding: 0; max-width: none; font-size: 13px; margin-bottom: 8px; }
 .commit-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--ink-3); font-size: 12px; font-family: var(--mono); margin-top: 6px; }
 .commit-meta a { color: var(--ink-3); }
 .commit-meta a:hover { color: var(--accent); }
