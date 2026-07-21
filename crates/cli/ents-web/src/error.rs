@@ -170,6 +170,25 @@ impl axum::response::IntoResponse for Error {
             }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        (status, self.to_string()).into_response()
+        let reason = status.canonical_reason().unwrap_or("Error");
+        let body = maud::html! {
+            (maud::DOCTYPE)
+            html lang="en" {
+                head {
+                    meta charset="utf-8";
+                    meta name="viewport" content="width=device-width, initial-scale=1";
+                    meta name="color-scheme" content="light dark";
+                    title { "git ents: " (status.as_u16()) " " (reason) }
+                    link rel="stylesheet" href="/style.css";
+                }
+                body {
+                    main.content {
+                        div.page-header { h1.page-title { (status.as_u16()) " " (reason) } }
+                        div.blankslate { h2 { (reason) } p { (self.to_string()) } }
+                    }
+                }
+            }
+        };
+        (status, body).into_response()
     }
 }

@@ -316,6 +316,11 @@ p.muted { margin-bottom: 16px; font-size: 13px; text-wrap: pretty; }
 .page-title { font-size: 22px; font-weight: 600; letter-spacing: -.3px; line-height: 1.25; }
 .page-sub { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
 .page-header .mono { font-family: var(--mono); color: var(--ink-2); }
+/* A `.crumbs` trail directly under a `.page-header` reads as its subtitle --
+ * hug it to the title instead of the header's own bottom margin, and push
+ * the larger gap to below the crumbs, in front of the page's content. */
+.page-header:has(+ .crumbs) { margin-bottom: 6px; }
+.page-header + .crumbs { margin-bottom: 22px; }
 
 /* ========================= CARDS ========================= */
 .card {
@@ -548,7 +553,7 @@ form button:hover { background: var(--accent-2); }
  * buttons where the current option fills with its own chip color. */
 .picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .picker button, .picker .opt {
-  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px;
+  display: inline-flex; flex-direction: row; align-items: center; gap: 6px; height: 32px; padding: 0 13px;
   border-radius: var(--radius-inner); cursor: pointer; font-size: 12.5px; font-weight: 500;
   color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line);
 }
