@@ -1,6 +1,7 @@
-//! The forge domain: the [`Issue`], [`comment::Comment`], and
-//! [`review::Review`] entities, and the command business logic driving
-//! each — kernel-independent, unlike `ents-model`'s remaining entities,
+//! The forge domain: the [`Issue`], [`comment::Comment`],
+//! [`review::Review`], and [`agent::AgentSession`] entities, and the
+//! command business logic driving each — kernel-independent, unlike
+//! `ents-model`'s remaining entities,
 //! because a comment or review command needs `ents-anchor` (to capture and
 //! project a code anchor) and `ents-receive` (to propose the mutation),
 //! neither of which a purely declarative vocabulary crate like
@@ -46,6 +47,13 @@
 //!   lens offers over these entities is one of this crate's library
 //!   functions; frontends only wire stores and render.
 //!
+//! [`agent::AgentSession`] (`refs/meta/agent-sessions/<id>`,
+//! `namespace::agent_session_ref`) is Phase 1 of
+//! `docs/agent-sessions-plan.adoc`: no `model.agent-session` spec section
+//! exists yet (an owner item the plan itself names), so its own module docs
+//! cite only the `meta-ref.*` and `model.extensibility` ids above that
+//! already apply to any hash-identified, additively-evolving typed tree.
+//!
 //! # Examples
 //!
 //! Build an [`Issue`], and a [`comment::Comment`] anchored to a stand-in
@@ -88,6 +96,7 @@
 
 mod error;
 
+pub mod agent;
 pub mod comment;
 pub mod issue;
 pub mod review;
@@ -193,6 +202,13 @@ mod tests {
     #[case::comment(comment::Comment::SHAPE.type_identifier, "Comment")]
     #[case::issue(Issue::SHAPE.type_identifier, "Issue")]
     #[case::review(review::Review::SHAPE.type_identifier, "Review")]
+    #[case::agent_session(agent::AgentSession::SHAPE.type_identifier, "AgentSession")]
+    #[case::agent_session_meta(agent::SessionMeta::SHAPE.type_identifier, "SessionMeta")]
+    #[case::agent_toolchain_pin(agent::ToolchainPin::SHAPE.type_identifier, "ToolchainPin")]
+    #[case::agent_confirm(agent::Confirm::SHAPE.type_identifier, "Confirm")]
+    #[case::agent_status(agent::Status::SHAPE.type_identifier, "Status")]
+    #[case::agent_failure_reason(agent::FailureReason::SHAPE.type_identifier, "FailureReason")]
+    #[case::agent_review_policy(agent::ReviewPolicy::SHAPE.type_identifier, "ReviewPolicy")]
     // @relation(model.extensibility, scope=function, role=Verifies)
     fn every_entity_shape_name_tracks_its_struct_declaration(
         #[case] reflected: &str,

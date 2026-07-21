@@ -61,6 +61,25 @@ pub fn comment_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/comments/{id}"))
 }
 
+/// The ref holding the agent session named `id` — `refs/meta/agent-sessions/<id>`
+/// (`meta-ref.granularity`), where `<id>` is the oid of the session's own
+/// genesis commit — the same sign-then-name shape [`issue_ref`] and
+/// [`comment_ref`] bind by (`meta-ref.identity-binding`); `ents_forge::agent`
+/// (`docs/agent-sessions-plan.adoc`'s Phase 1) carries the entity and
+/// extracts `id` from the proposed ref the same way `ents-forge`'s own
+/// `genesis_id` does for a comment or issue.
+///
+/// [`classify`] deliberately has no `agent-sessions` arm yet: an unrecognized
+/// segment falls through to [`Namespace::Unknown`], which is exactly what
+/// `model.extensibility` asks of a namespace no gate-level vocabulary
+/// interprets. Phase 1 of `docs/agent-sessions-plan.adoc` stops at this
+/// builder; classifying the namespace for `ents-gate`'s identity-binding and
+/// owner-mutation checks is Phase 1b's job, alongside the still-unwritten
+/// `meta-ref.adoc` namespace entry and `model.agent-session` section.
+pub fn agent_session_ref(id: &str) -> Result<FullName> {
+    build(format!("refs/meta/agent-sessions/{id}"))
+}
+
 /// The ref holding one reviewer's review of one commit —
 /// `refs/meta/reviews/<target>/<member>` (`meta-ref.granularity`,
 /// `model.review`), where `<target>` is the oid of the first commit the
@@ -517,6 +536,13 @@ mod tests {
     #[case::outside_meta("refs/heads/main", None)]
     #[case::unrecognized("refs/meta/index/abc", Some(Namespace::Unknown))]
     #[case::novel_namespace("refs/meta/widgets/7", Some(Namespace::Unknown))]
+    // Phase 1b, not Phase 1, teaches `classify` this segment
+    // (`agent_session_ref`'s own doc); until then it is forge state this
+    // vocabulary does not yet interpret, per `model.extensibility`.
+    #[case::agent_session_namespace_not_yet_classified(
+        "refs/meta/agent-sessions/deadbeef",
+        Some(Namespace::Unknown)
+    )]
     // @relation(meta-ref.namespace, meta-ref.granularity, scope=function, role=Verifies)
     fn classify_matches_the_namespace_table(
         #[case] refname: &str,
@@ -578,6 +604,7 @@ mod tests {
             member_ref(&id).expect("valid"),
             issue_ref("42").expect("valid"),
             comment_ref("abc").expect("valid"),
+            agent_session_ref("abc").expect("valid"),
             review_ref("deadbeef", &id).expect("valid"),
             review_pin_ref("deadbeef", &id).expect("valid"),
             effect_ref("unit").expect("valid"),
