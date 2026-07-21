@@ -1,0 +1,253 @@
+= Agent Sessions Plan
+Joey Carpinelli <joseph.carpinelli@icloud.com>
+
+[abstract]
+First-class agent sessions: a member starts a task from the web UI
+(laptop or phone), a mandatory plan-and-confirm step produces a plan,
+then a headless agent runs in a sandbox, commits to a branch, and the
+whole run — plan, confirmation, threads, outcome — is auditable
+repository data. No live interaction after confirmation. Agreed
+2026-07-22, replacing an earlier draft that invented machinery (op log,
+attestations, env documents, a supervisor repo) the spec already
+provides under the six abstractions.
+
+== The reframe
+
+An agent session is a forge *entity* (like an issue or review), and
+agent execution is an *effect* (`effect.adoc`). Nothing else is new.
+What the earlier draft invented, and what the spec already has:
+
+* _Signed op log_ → every meta-ref mutation is an author-signed commit;
+  the chain is the audit trail (`meta-ref`, `gate.tip-signed`).
+* _Session id = root commit, no UID scheme_ → genesis-oid refname
+  binding is an existing, gate-enforced pattern
+  (`meta-ref.identity-binding`).
+* _Supervisor daemon in a separate repo_ → the effect worker: dequeue,
+  materialize toolchains, sandbox, retry bounds as deployment config
+  (`effect.execution`); `ents-effect` already carries the run loop and
+  the Sprite backend.
+* _Attestation binding branch → tree → env → lockfile_ → a result,
+  signed by the worker's member key, landing on
+  `refs/meta/results/<effect>/<oid>`, official purely by refname rule
+  (`effect.identity`, `effect.official`, `model.result-identity`).
+* _Env doc + provisioning replay + lockfile_ → hash-pinned toolchain
+  manifests carrying their own provenance (`model.toolchain`); the
+  agent runtime is a toolchain.
+* _Ordered idempotent finalization + bespoke recovery_ → one atomic
+  multi-ref receive (`receive.multi-ref-atomicity`): session tree,
+  result, and branch land in a single CAS, so "audit artifact durable
+  before anything published" holds trivially; infra death is the
+  result taxonomy's queue-retry-then-`error` contract
+  (`effect.result-taxonomy`).
+* _Claim via op-log CAS_ → a signed status commit CAS'd onto the
+  session ref through ordinary `receive`; first worker wins.
+* _Redactable thread blobs_ → redaction is already spec'd end-to-end
+  (`model.redaction`, `receive.redaction-*`,
+  `roots.redaction-pack-serving`).
+
+Two ideas from the draft survive on merit: the *derived-predicate
+lifecycle* (confirm is a signed leaf binding the plan-leaf hash, not a
+state; queued/awaiting-confirmation are read off the tip snapshot) and
+the mandatory *plan-and-confirm* ceremony. The effect framing also adds
+what the draft could not have: `effect.local-run` gives a member local
+execution of their own sessions (`git effect run`, Docker or
+`--unsandboxed`) through the identical code path, results landing in
+their self-run namespace.
+
+== Constraints
+
+* No new repositories, no new daemons, no new realtime plane. The
+  "supervisor" is an ordinary worker member (`model.member-worker`)
+  running the existing effect loop with the Sprite executor.
+* Spec prose is the owner's. Where a phase needs new normative text the
+  phase names it and blocks on it; implementation validates against it
+  with Tracey.
+* Plan-and-confirm is mandatory for every session. Execution is
+  fire-and-forget after confirmation.
+* Per-member credentials (BYOK): a member's runs use their own
+  Anthropic subscription token or API key. Credentials are deployment
+  state ("how to run", `effect.deployment-property`), never repository
+  data.
+* Ephemeral boundaries (queued, completing) are derived from the
+  session's commit chain and artifacts, never enumerated in the status
+  enum. Pin snapshots; derive transitions.
+
+== Resolved-by-default items
+
+Chosen to unblock work; each is one commit to reverse if the owner
+disagrees.
+
+. *Un-queue*: allowed before claim. A member may commit a revision that
+  drops the confirm leaf, returning the session to `planning`; the
+  worker's claim commit is the point of no return.
+. *Refname shape*: mirror whatever pattern the existing entity
+  namespaces use in `ents-model` (issues, reviews); do not invent a new
+  convention for sessions.
+. *Merge gate*: deferred. `gate.branch-acl-undefined` leaves branch
+  ACLs out of the spec, so "agent branches require passing review
+  before merge" blocks on the owner writing that section. Interim: the
+  web UI renders an advisory verdict.
+. *Result branch*: the worker pushes `agent/<member>/<abbrev-genesis>`
+  to `refs/heads/` directly as part of the finalize CAS.
+
+== Phase 1 — Session entity (`ents-model`, `ents-forge`)
+
+A new `agent/` module in `ents-forge` following the existing
+issue/review pattern (entity, command, cli). One ref per session,
+identity = genesis commit oid. Tree:
+
+* `meta` (typed): member, timestamps, model id, toolchain pins, status,
+  base ref, result branch name, review policy, optional `retry_of`
+  (genesis oid of a prior session).
+* `plan` (typed leaf): the plan text.
+* `confirm` (signed typed leaf, absent until approval): binds the hash
+  of the plan leaf it approves plus the resolved review policy.
+* `thread/` (subtree): opaque verbatim blobs of API messages, chunked
+  per turn. Never typed internally, never rendered; write-only audit
+  material, redactable blob-by-blob.
+
+Lifecycle enum names only durable phases:
+`planning ⇄ ready → running → done | failed`. Derived predicates, both
+readable from the tip snapshot:
+
+* _awaiting confirmation_ = `ready` ∧ confirm leaf absent or binding a
+  stale plan hash.
+* _queued_ = `ready` ∧ confirm leaf binds the current plan-leaf hash.
+
+A commit revising the plan MUST drop a stale confirm leaf. Terminal
+states absorb; a retry is a new session with `retry_of`. A reaper
+(itself an effect, eventually) deletes stale `planning`/`ready`
+sessions.
+
+*Acceptance*: round-trip proptest mirroring `tests/round_trip.rs`;
+same-second identical double-submit yields one session (genesis
+dedup, no nonce); predicate unit tests.
+
+*Owner spec text needed*: a `model.agent-session` section; the agent
+namespace added to `meta-ref.adoc`.
+
+== Phase 1b — Lifecycle invariants (`ents-gate-rules`, stateright)
+
+Stateright model of the lifecycle including derived predicates:
+`running` unreachable without a confirm leaf binding the current plan;
+plan revision invalidates prior confirms; terminal states absorb; crash
+anywhere leaves a chain+artifact state with a legal continuation.
+Ascent rule in `ents-gate-rules`: a commit whose meta status is
+`running` requires a parent whose tree contains a confirm leaf binding
+that parent's plan-leaf hash — with a red test, per that crate's own
+discipline.
+
+== Phase 2 — Execution as an effect (`ents-effect`, `ents-kiln`) — M1
+
+* An `agent-exec` effect subscribed via `meta(...)` to the agent
+  namespace. It fires once per session commit (`query.no-extensions`
+  forbids grammar changes); the runner inspects the tip and records a
+  cheap `pass` no-op unless the tip is queued-and-unclaimed.
+* Claim = CAS a `running` status commit through `receive`; first worker
+  wins, losers no-op.
+* The agent runtime (headless Agent SDK) ships as a hash-pinned
+  toolchain; the effect's command runs it with the confirmed plan as
+  the task prompt against the declared base ref. Working branch:
+  `agent/<member>/<abbrev-genesis>`.
+* *Sprites only* (owner decision, 2026-07-22): the Sprite executor is
+  the sole execution target for agent runs. No Docker-backend work for
+  this feature; the tension with `effect.local-run`'s parity
+  requirement is accepted for now and revisited if local agent runs
+  are ever wanted.
+* Finalize = one atomic multi-ref push: thread blobs + `done`/`failed`
+  meta into the session tree, the result ref, and the result branch.
+  Worker death before finalize publishes nothing; the queue retries
+  within its bound, then writes a terminal `error` result.
+
+*Acceptance*: kill worker/sandbox at each stage → the session always
+terminates legally (maps to the Phase 1b model); a pushed branch never
+exists without its thread blobs; `git effect run` local parity;
+mutating branch tip / session tree / toolchain pin breaks result
+verification.
+
+*M1* = Phases 1–2 with a pre-authored plan and confirm leaf: prompt +
+plan in → branch + session doc + result out, end-to-end in a Sprite.
+
+== Phase 3 — Web UI (`ents-web`)
+
+`pages/agents.rs` following the existing pages pattern:
+
+* *List* over the agent namespace: enum plus derived predicates
+  (planning / awaiting confirmation / queued / running / done /
+  failed). No JS; refresh is polling.
+* *Detail*: plan, chain-derived status timeline, sandbox name verbatim
+  while running, result branch link, result link, review link, one-tap
+  *Confirm* (signed via the existing `roots.web-signing` machinery)
+  when awaiting confirmation. Thread blobs are never rendered — raw
+  download link only.
+* *Submission (mobile-critical)*: single form — prompt, repo, base
+  branch (defaulted), toolchain (defaulted from repo config).
+  Complexity lives in the session doc, not the form.
+
+*Acceptance*: full flow from a phone-sized viewport with JS disabled
+(planning chat excepted).
+
+== Phase 4 — Planning paths (`ents-web` + a second effect)
+
+* *Laptop*: planning-chat page linked from `planning`/`ready`
+  sessions; SSE as a page-level concern only. Plan-mode Agent SDK with
+  the member's credential; read-only context gathering; turns appended
+  to `thread/`; committing the plan leaf transitions to `ready`.
+* *Mobile*: headless plan drafting is a second effect (`agent-plan`)
+  firing on `planning` sessions that carry a prompt and no plan; it
+  commits the plan leaf and transitions to `ready` for one-tap
+  confirmation later.
+* Iteration: from `ready`, reopening chat or requesting a redraft
+  returns to `planning`; a new plan leaf requires a fresh confirm.
+
+*Acceptance*: no confirm can bind an empty or absent plan leaf; after
+confirm, no endpoint accepts messages or revisions without the
+explicit un-queue; mobile end-to-end (prompt in → headless draft →
+confirm from a second request → execution).
+
+*M2* = Phases 3–4.
+
+== Phase 5 — Auto-review (`ents-forge`, a third effect)
+
+Review policy (`auto` | `manual`) resolved at confirm from repo config,
+overridable then, stored in session meta. Auto-open is a follow-on
+effect subscribed via `results(agent-exec)`; it commits an ordinary
+Review entity over `base..branch-tip`, referencing the session genesis
+and its result. Idempotent by construction: one result, one obligation.
+Reviewer assignment stays out of scope. The merge gate waits on branch
+ACL spec text (resolved-by-default item 3).
+
+*Acceptance*: `auto` yields exactly one review, idempotent under
+worker retry; `manual` yields none and the session page offers one-tap
+open.
+
+== Phase 6 — Credentials
+
+Per-member credential store in the hosted composition root's config
+(`roots.config-isolation`), injected into the sandbox at launch, never
+written to repository data. Redaction test: grep every persisted
+artifact of a completed session for the credential; must be absent.
+
+*Owner spec text needed*: the credential-injection seam (a short
+requirement under `roots` or `effect`).
+
+*M3* = Phases 5–6.
+
+== Non-goals
+
+Mid-run steering or any per-session bidirectional channel after
+confirmation; rendering thread contents; reviewer assignment;
+multi-agent orchestration primitives (N agents is a list of sessions);
+CRDT involvement.
+
+== Open items (owner)
+
+. Sprite-per-session vs the current one-Sprite-per-deployment design:
+  `sprite.rs` deliberately keeps one persistent Sprite so toolchain
+  bytes survive between runs, but per-member credential isolation
+  argues per-session Sprites and cold starts. Needs a decision before
+  Phase 2 hardening; M1 can run on the current shape.
+. The four resolved-by-default items above, if any default is wrong.
+. Spec sections: `model.agent-session`, the agent namespace in
+  `meta-ref.adoc`, the credential seam, and eventually branch ACLs for
+  the merge gate.
