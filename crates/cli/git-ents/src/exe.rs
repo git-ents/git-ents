@@ -44,6 +44,24 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
             let _ = writeln!(out, "signing key: {}", key_path.display());
             Ok(())
         }
+        Top::Bootstrap {
+            username,
+            server_pubkey,
+            server_name,
+            remote,
+            key,
+        } => {
+            let root = LocalRoot::discover(".")?;
+            commands::bootstrap::run(
+                &root,
+                &username,
+                server_pubkey,
+                server_name.as_deref().unwrap_or("forge"),
+                remote.as_deref().unwrap_or("origin"),
+                key,
+                out,
+            )
+        }
         Top::Members { action } => run_members(action, out),
         Top::Account { action } => run_account(action, out),
         Top::Effect { action } => run_effect(action, out),

@@ -77,8 +77,23 @@ pub fn run_hosted(path: &Path, key: Option<PathBuf>) -> Result<PathBuf> {
     ] {
         set_local_config(path, key, value)?;
     }
+    write_pubkey(&resolved)?;
     install_hooks(path)?;
     Ok(resolved)
+}
+
+/// Write the key's public half to `<key>.pub` — the front proxy publishes
+/// it at a well-known path so `git ents bootstrap` can discover the server
+/// identity to vouch for (`roots.web-signing`) without the operator
+/// copying it out of the logs. Runs every boot, so a volume whose key
+/// predates this file gains it on the next deploy.
+fn write_pubkey(key: &Path) -> Result<()> {
+    let pubkey = Signer::load(key)?.public_openssh();
+    let pub_path = PathBuf::from(format!("{}.pub", key.display()));
+    std::fs::write(&pub_path, format!("{pubkey}\n")).map_err(|source| Error::Io {
+        path: pub_path,
+        source,
+    })
 }
 
 /// Resolve `key` (or `path`'s `user.signingkey`, or a default

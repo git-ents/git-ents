@@ -216,8 +216,8 @@ pub fn build_hosted_state(
         .map(|(username, _state)| username)
         .ok_or_else(|| Error::NotFound {
             what: format!(
-                "an enrolled member holding the server key {} — enroll it first: \
-                 git ents members add <name> --pubkey \"{pubkey}\"",
+                "an enrolled member holding the server key {} — bootstrap from a clone: \
+                 git ents bootstrap <you> --server-pubkey \"{pubkey}\"",
                 key.display()
             ),
         })?;

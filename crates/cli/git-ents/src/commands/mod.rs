@@ -9,6 +9,7 @@
 )]
 
 pub mod account;
+pub mod bootstrap;
 pub mod comment;
 pub mod effect;
 pub mod inbox;

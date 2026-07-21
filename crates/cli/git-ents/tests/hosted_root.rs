@@ -43,6 +43,17 @@ fn setup_hosted(bare: &Path) {
         .expect("git-ents runs");
     assert!(output.status.success(), "{output:?}");
 
+    // The public half published for `git ents bootstrap`'s discovery —
+    // written next to the key `setup --hosted` resolved (here, the one it
+    // generated under the scratch HOME).
+    let pub_path = scratch_home.path().join(".ssh").join("id_ed25519.pub");
+    assert!(
+        pub_path.exists(),
+        "setup --hosted must write the key's public half"
+    );
+    let pubkey = std::fs::read_to_string(&pub_path).expect("readable");
+    assert!(pubkey.starts_with("ssh-"), "{pubkey:?}");
+
     for hook in ["pre-receive", "post-receive"] {
         let path = bare.join("hooks").join(hook);
         assert!(path.exists(), "setup --hosted must install {hook}");
@@ -122,6 +133,58 @@ fn bootstrap_push_round_trips_through_the_hosted_root() {
         show.status.success(),
         "ref must exist on the hosted root: {show:?}"
     );
+}
+
+/// The operator bootstrap porcelain (`git ents bootstrap`) against a
+/// fresh hosted root: one command from a clone enrolls the operator
+/// under the self-admitting window (`gate.bootstrap`), then the server
+/// key under the operator's own signature (`roots.web-signing`), landing
+/// both refs on the bare repository over real pushes — the whole
+/// first-boot runbook `docker/entrypoint.sh` waits on.
+// @relation(gate.bootstrap, roots.web-signing, scope=function, role=Verifies)
+#[test]
+fn bootstrap_command_enrolls_operator_then_server_key() {
+    let bare = common::Fixture::new_bare(30);
+    setup_hosted(bare.path());
+
+    let clone_dir = tempfile::tempdir().expect("tempdir");
+    let clone_output = git(
+        clone_dir.path(),
+        &["clone", "--quiet", bare.path().to_str().expect("utf8"), "."],
+    );
+    assert!(clone_output.status.success(), "{clone_output:?}");
+
+    let operator_key = common::write_key_in(clone_dir.path(), 31);
+    let server_key = clone_dir.path().join(".server_key");
+    common::write_key(&server_key, 32);
+    let server_pubkey = git_ents::sign::Signer::load(&server_key)
+        .expect("loads server key")
+        .public_openssh();
+
+    let output = Command::new(common::bin_path())
+        .args(["bootstrap", "jdc", "--server-pubkey"])
+        .arg(&server_pubkey)
+        .arg("--key")
+        .arg(&operator_key)
+        .current_dir(clone_dir.path())
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@ents.test")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@ents.test")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("HOME")
+        .output()
+        .expect("git-ents runs");
+    assert!(output.status.success(), "{output:?}");
+
+    for member in ["jdc", "forge"] {
+        let show = git(bare.path(), &["show-ref", &format!("refs/meta/member/{member}")]);
+        assert!(
+            show.status.success(),
+            "refs/meta/member/{member} must land on the hosted root: {show:?}"
+        );
+    }
 }
 
 /// A second push, from a *different, unenrolled* signer, straight onto a
