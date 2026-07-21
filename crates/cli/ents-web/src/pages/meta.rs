@@ -23,16 +23,16 @@ where
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
         "/meta",
-        "Meta",
+        "Repo & governance",
         html! {
             p.muted {
-                "All project metadata -- members, effects, toolchains, "
-                "redactions, and the adoption inbox -- lives in this "
+                "All project metadata — members, effects, toolchains, "
+                "redactions, and the adoption inbox — lives in this "
                 "repository as git objects."
             }
             div.card {
                 @for section in super::META_SECTIONS {
-                    div.card-row {
+                    div.card-row.stack {
                         a href=(section.href) { (section.name) }
                         span { (section.blurb) }
                     }

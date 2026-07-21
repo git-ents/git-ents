@@ -343,7 +343,6 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool, Option<u64>)>) -> Mark
     });
     html! {
         div.card {
-            div.card-header { "files" }
             @if entries.is_empty() {
                 div.card-row.muted { "Empty directory." }
             }

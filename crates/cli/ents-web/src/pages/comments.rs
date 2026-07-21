@@ -101,8 +101,10 @@ where
                         (listing_card(&state, id, comment))
                     }
                 }
-                h2 { "Add a Comment" }
-                (add_form(&query.rev, &session, &query.file, &query.lines))
+                div.card {
+                    div.card-header { "Add a comment" }
+                    (add_form(&query.rev, &session, &query.file, &query.lines))
+                }
             }
         },
     ))
@@ -484,7 +486,7 @@ pub(crate) fn action_forms(
             form method="post" action=(format!("/comments/{id}/reply")) {
                 (super::csrf_input(session))
                 input type="hidden" name="return_to" value=(return_to);
-                label { "reply" textarea name="body" {} }
+                label { "Reply" textarea name="body" {} }
                 button type="submit" { "Reply" }
             }
             @if resolved {
@@ -578,10 +580,10 @@ fn add_form(
     html! {
         form method="post" action="/comments" {
             (super::csrf_input(session))
-            label { "path" input type="text" name="path" value=(prefill_path); }
-            label { "rev" input type="text" name="rev" value=(default_rev); }
-            label { "lines" input type="text" name="lines" value=(prefill_lines); }
-            label { "body" textarea name="body" {} }
+            label { "Path" input type="text" name="path" value=(prefill_path); }
+            label { "Rev" input type="text" name="rev" value=(default_rev); }
+            label { "Lines" input type="text" name="lines" value=(prefill_lines); }
+            label { "Body" textarea name="body" {} }
             button type="submit" { "Comment" }
         }
     }

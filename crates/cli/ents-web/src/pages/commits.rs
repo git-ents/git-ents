@@ -102,7 +102,6 @@ where
                 (blankslate())
             } @else {
                 div.card.history {
-                    div.card-header { "commits" }
                     @for row in &rows {
                         (commit_row(row))
                     }
@@ -203,8 +202,8 @@ fn commit_row(row: &CommitRow) -> Markup {
                 },
                 None => { span.desk-subject { (row.subject) } },
             }
-            span.muted { (row.author) }
-            span.entry-size { (row.ago) }
+            span.row-author { (row.author) }
+            span.row-when { (row.ago) }
         }
     }
 }
@@ -530,7 +529,7 @@ fn review_comment_form(
         form method="post" action=(format!("/reviews/{target}/{member}/comment")) {
             (super::csrf_input(session))
             input type="hidden" name="return_to" value=(return_to);
-            label { "comment on this review" textarea name="body" {} }
+            label { "Comment on this review" textarea name="body" {} }
             button type="submit" { "Comment" }
         }
     }
@@ -626,7 +625,7 @@ fn start_review_form(session: &Session, oid: &str) -> Markup {
                     "comment"
                 }
             }
-            label { "body" textarea name="body" {} }
+            label { "Body" textarea name="body" {} }
             button type="submit" { "Start a Review" }
         }
     }

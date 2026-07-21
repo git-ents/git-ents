@@ -76,7 +76,7 @@ where
                             "Signed in as the member below. Every web edit is a "
                             "mutation commit signed with this key, exactly as "
                             code { "git ents" }
-                            " itself would sign it -- a local root has no separate login."
+                            " itself would sign it — a local root has no separate login."
                         }
                         (super::members::member_card(username.as_str(), member, true))
                     }
@@ -104,15 +104,15 @@ where
                 p.muted {
                     "A hosted deployment maps an external login to an enrolled "
                     "member so its pushes can be attributed. A local root never "
-                    "needs one -- the key above is the identity."
+                    "needs one — the key above is the identity."
                 }
                 (view)
-                details {
+                details.disclosure {
                     summary { "Edit login mapping" }
                     form method="post" action="/account" {
                         (super::csrf_input(&session))
-                        label { "member" input type="text" name="member" value=(member_value) list="members"; }
-                        label { "login" input type="text" name="login" value=(login_value); }
+                        label { "Member" input type="text" name="member" value=(member_value) list="members"; }
+                        label { "Login" input type="text" name="login" value=(login_value); }
                         button type="submit" { "Save" }
                     }
                     (super::members_datalist(&state))

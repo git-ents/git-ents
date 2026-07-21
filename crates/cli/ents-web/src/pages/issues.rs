@@ -203,7 +203,7 @@ where
                     }
                     div.doc-body { (body) }
                 }
-                details {
+                details.disclosure {
                     summary { "Edit state, assignees, labels" }
                     (edit_form(&session, &issue, &labels))
                     (super::members_datalist(&state))
@@ -217,8 +217,10 @@ where
                 } @else {
                     (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
                 }
-                h2 { "Add a Comment" }
-                (comment_form(&session, &id))
+                div.card {
+                    div.card-header { "Add a comment" }
+                    (comment_form(&session, &id))
+                }
             }
         },
     ))
@@ -412,14 +414,14 @@ fn new_form(session: &Session, known_labels: &[String]) -> Markup {
     html! {
         form method="post" action="/issues" {
             (super::csrf_input(session))
-            label { "title" input type="text" name="title"; }
+            label { "Title" input type="text" name="title"; }
             div {
-                label { "state" }
+                label { "State" }
                 (state_picker("open"))
             }
-            label { "assignees" input type="text" name="assignees" placeholder="alice, bob" list="members"; }
+            label { "Assignees" input type="text" name="assignees" placeholder="alice, bob" list="members"; }
             (label_picker(known_labels, &[]))
-            label { "body" textarea name="body" {} }
+            label { "Body" textarea name="body" {} }
             div.composer-buttons {
                 a.composer-cancel href="/issues" { "Cancel" }
                 button type="submit" { "Open Issue" }
@@ -437,11 +439,11 @@ fn edit_form(session: &Session, issue: &ents_forge::Issue, known_labels: &[Strin
         form method="post" action="" {
             (super::csrf_input(session))
             div {
-                label { "state" }
+                label { "State" }
                 (state_picker(&issue.state))
             }
             label {
-                "assignees"
+                "Assignees"
                 input type="text" name="assignees" value=(join_members(&issue.assignees)) list="members";
             }
             (label_picker(known_labels, &issue.labels))
@@ -455,7 +457,7 @@ fn comment_form(session: &Session, id: &str) -> Markup {
     html! {
         form method="post" action=(format!("/issues/{id}/comment")) {
             (super::csrf_input(session))
-            label { "body" textarea name="body" {} }
+            label { "Body" textarea name="body" {} }
             button type="submit" { "Comment" }
         }
     }
@@ -585,7 +587,7 @@ fn known_labels(rows: &[(String, ents_forge::Issue)]) -> Vec<String> {
 fn label_picker(known: &[String], current: &[String]) -> Markup {
     html! {
         div {
-            label { "labels" }
+            label { "Labels" }
             @if !known.is_empty() {
                 div.picker {
                     @for label in known {
