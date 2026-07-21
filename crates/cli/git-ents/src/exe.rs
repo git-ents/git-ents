@@ -41,7 +41,12 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         } => {
             let root = LocalRoot::discover(".")?;
             let key_path = commands::setup::run(&root, key)?;
+            commands::setup::configure_global_signing_defaults()?;
             let _ = writeln!(out, "signing key: {}", key_path.display());
+            let _ = writeln!(
+                out,
+                "global git config: commit.gpgsign=true, tag.gpgsign=true, push.gpgsign=if-asked"
+            );
             Ok(())
         }
         Top::Bootstrap {

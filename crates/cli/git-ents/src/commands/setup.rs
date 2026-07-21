@@ -1,6 +1,8 @@
 //! `git ents setup`: resolve or generate a signing key, record it as this
-//! repository's `user.signingkey` with `gpg.format=ssh`, and set
-//! `receive.denyCurrentBranch=updateInstead` (`roots.worktree-update`).
+//! repository's `user.signingkey` with `gpg.format=ssh`, set
+//! `receive.denyCurrentBranch=updateInstead` (`roots.worktree-update`),
+//! and ([`configure_global_signing_defaults`]) default every commit, tag,
+//! and (when asked) push, in any repository, to sign itself.
 //!
 //! `receive.denyCurrentBranch=updateInstead` is the integration-test
 //! harness edge case `roots.worktree-update` names: it lets an external
@@ -200,6 +202,59 @@ fn set_executable(path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Sign every commit, tag, and (when the remote asks) push by default —
+/// written to the operator's *global* (`~/.gitconfig`) config, not any
+/// one repository's, so `git ents setup` needs running only once per
+/// machine for every later `git commit`/`git push`, anywhere, to sign
+/// itself without `-S`/`--signed`. `push.gpgsign=if-asked` in particular
+/// is what makes a plain `git push` safe against both a hosted root
+/// (which now advertises `push-cert`, so this signs) and a remote that
+/// does not (GitHub among them, which never has — this silently pushes
+/// unsigned there instead of failing outright).
+///
+/// Deliberately not called from [`run`] itself: `run`'s callers configure
+/// one *repository* (this crate's own integration tests among them), and
+/// must never mutate the real machine's global git config as a side
+/// effect of that; only the actual `git ents setup` CLI invocation calls
+/// this.
+///
+/// # Errors
+///
+/// Propagates a `git config --global` failure.
+pub fn configure_global_signing_defaults() -> Result<()> {
+    for (key, value) in [
+        ("commit.gpgsign", "true"),
+        ("tag.gpgsign", "true"),
+        ("push.gpgsign", "if-asked"),
+    ] {
+        set_global_config(key, value)?;
+    }
+    Ok(())
+}
+
+/// Set `key` to `value` in the operator's global (`~/.gitconfig`) config
+/// via `git config --global` — unlike [`set_local_config`], not scoped to
+/// any one repository.
+fn set_global_config(key: &str, value: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["config", "--global", key, value])
+        .output()
+        .map_err(|source| Error::Io {
+            path: PathBuf::from("~/.gitconfig"),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(Error::Io {
+            path: PathBuf::from("~/.gitconfig"),
+            source: std::io::Error::other(format!(
+                "git config --global {key} {value} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )),
+        });
+    }
     Ok(())
 }
 
