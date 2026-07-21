@@ -1092,6 +1092,7 @@ async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
         "/",
         "/files",
         "/commits",
+        "/reviews",
         "/issues",
         "/comments",
         "/meta",
@@ -1102,7 +1103,7 @@ async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
             "the rail links {href}"
         );
     }
-    for label in ["Dashboard", "Code", "Review", "Issues", "Threads"] {
+    for label in ["Dashboard", "Code", "Commits", "Reviews", "Issues", "Threads"] {
         assert!(
             overview.contains(&format!("title=\"{label}\"")),
             "the rail tooltips {label}"
@@ -1741,12 +1742,13 @@ async fn files_root_listing_shows_a_size_for_a_file_but_not_a_directory() {
     );
 }
 
-/// A doc-rendered (Markdown) blob view carries no composer template at
-/// all: there is no source line row for `assets/ents.js` to anchor an
-/// inline composer after, so `ents_web::pages::files::blob_view` never
-/// renders one for this view kind.
+/// A doc-rendered (Markdown) blob view still carries the whole-file
+/// composer template: there is no per-line gutter row for `assets/ents.js`
+/// to open one against a specific line range, but "comment on this file"
+/// (the template's own empty `lines` default) is exactly as meaningful on
+/// a rendered document as on a raw-source view.
 #[tokio::test]
-async fn files_markdown_blob_view_has_no_composer_template() {
+async fn files_markdown_blob_view_carries_the_composer_template() {
     let dir = seed_repo(&[("docs/x.md", "# Doc Title\n\nSome text.\n")]);
     let state = build_state_at(
         FixtureIdentity {
@@ -1774,8 +1776,9 @@ async fn files_markdown_blob_view_has_no_composer_template() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 html");
     assert!(
-        !body.contains("composer-template"),
-        "a doc-rendered view has no source line to anchor a composer to"
+        body.contains("id=\"composer-template\""),
+        "a doc-rendered view has no per-line gutter, but \"comment on this \
+         file\" (empty `lines`) is exactly as meaningful there"
     );
 }
 

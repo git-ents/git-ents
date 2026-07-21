@@ -69,10 +69,12 @@ where
         .route("/commits", get(pages::commits::list::<O>))
         .route("/commit/{oid}", get(pages::commits::show::<O>))
         .route("/commit/{oid}/review", post(pages::commits::review::<O>))
+        .route("/commit/{oid}/comment", post(pages::commits::comment::<O>))
         .route(
             "/reviews/{target}/{member}/comment",
             post(pages::commits::review_comment::<O>),
         )
+        .route("/reviews", get(pages::reviews::list::<O>))
         .route("/files", get(pages::files::root::<O>))
         .route("/files/{*path}", get(pages::files::show::<O>))
         .route("/meta", get(pages::meta::show::<O>))

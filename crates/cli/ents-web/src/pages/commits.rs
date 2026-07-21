@@ -273,6 +273,13 @@ where
     let checks = checks_section(&state, object_id);
     let reviews = reviews_section(&state, &session, object_id, &oid);
     let (sidebar_rows, _older) = commit_rows(&state, None, PAGE_SIZE);
+    let commit_context = format!("commits/{oid}");
+    let commit_thread = ents_forge::comment::thread(
+        state.refs.as_ref(),
+        &*state.objects(),
+        &commit_context,
+    )
+    .unwrap_or_default();
 
     Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
@@ -313,8 +320,10 @@ where
                                 " \u{b7} root commit"
                             }
                             " \u{b7} "
-                            a href={ "/comments?rev=" (object_id) } { "comment on this commit" }
+                            a.composer-trigger data-composer="commit-composer-template"
+                                href={ "/comments?rev=" (object_id) } { "comment on this commit" }
                         }
+                        (commit_comment_template(&oid, &session))
                     }
                 }
                 (checks)
@@ -324,12 +333,13 @@ where
             @if truncated {
                 div.card { div.binary { "Diff truncated (over " (MAX_DIFF_BYTES / (1024 * 1024)) " MiB)." } }
             }
-            @if !comments.is_empty() {
+            @if !comments.is_empty() || !commit_thread.is_empty() {
                 div.readable {
                     h2 { "Conversation" }
                     @for (index, comment) in comments.iter().enumerate() {
                         (super::comments::comment_card(index, comment, super::comments::LinkMode::CrossFile))
                     }
+                    (super::comments::thread_section(&state, &session, &commit_thread, &format!("/commit/{oid}")))
                 }
             }
         },
@@ -605,6 +615,95 @@ where
 /// `model.review` makes it a hard enum, unlike issue and comment states --
 /// defaulting to `approve`, the same default a bare `select`'s first option
 /// would submit.
+/// The commit-level comment composer's own hidden `<template>`
+/// (`crate::pages::files::composer_template`'s counterpart for a commit,
+/// which has no file of its own to anchor a path-based comment to): posts
+/// to [`comment`], naming `commits/<oid>` as its context
+/// (`model.comment-context`) rather than anchoring to a path, exactly the
+/// way [`review_comment_form`] names `reviews/<target>/<member>`. Cloned
+/// by `assets/ents.js`'s standalone-composer trigger, opened from the
+/// "comment on this commit" link beside the parents list; with JS
+/// disabled that link remains a real navigation to `/comments?rev=`
+/// instead (a page-less no-JS fallback for this specific context would be
+/// its own added surface, so it stays the plain path-anchored form for
+/// now).
+fn commit_comment_template(oid: &str, session: &Session) -> Markup {
+    html! {
+        template id="commit-composer-template" {
+            form.composer-form method="post" action=(format!("/commit/{oid}/comment")) {
+                (super::csrf_input(session))
+                input type="hidden" name="return_to" value=(format!("/commit/{oid}"));
+                textarea name="body" placeholder="Leave a comment on this commit" {}
+                div.composer-buttons {
+                    button type="submit" { "Comment" }
+                    button.composer-cancel type="button" { "Cancel" }
+                }
+            }
+        }
+    }
+}
+
+/// The form fields `POST /commit/{oid}/comment` accepts.
+#[derive(Debug, Deserialize)]
+pub struct CommitCommentForm {
+    /// The comment's body text.
+    body: String,
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+    /// Where to send the browser back to; honored only when it is a
+    /// same-origin path.
+    #[serde(default)]
+    return_to: String,
+}
+
+/// `POST /commit/{oid}/comment`: a comment naming `commits/<oid>` as its
+/// context (`model.comment-context`) -- unanchored, exactly like
+/// [`review_comment`], since a comment about the commit as a whole has no
+/// path to anchor to the way a file-anchored comment does.
+///
+/// # Errors
+///
+/// [`Error::BadCsrf`] if `form.csrf` does not match; otherwise propagates
+/// [`ents_forge::comment::add`]'s own failures.
+// @relation(model.comment-context, roots.web-signing, roots.web-session, scope=function)
+pub async fn comment<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(oid): Path<String>,
+    Form(form): Form<CommitCommentForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let identity = state.identity.as_ref();
+    let new = ents_forge::comment::NewComment {
+        body: form.body,
+        path: None,
+        lines: None,
+        rev: "HEAD".to_owned(),
+        worktree: false,
+        context: Some(format!("commits/{oid}")),
+        parent: None,
+    };
+    let (_comment_id, outcome) = ents_forge::comment::add(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &state.path,
+        new,
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    let target = if form.return_to.starts_with('/') {
+        form.return_to
+    } else {
+        format!("/commit/{oid}")
+    };
+    Ok(Redirect::to(&target))
+}
+
 fn start_review_form(session: &Session, oid: &str) -> Markup {
     html! {
         h3 { "Start a review" }

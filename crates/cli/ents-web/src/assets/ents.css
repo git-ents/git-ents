@@ -608,6 +608,7 @@ form button:hover { background: var(--accent-2); }
  * `crate::pages::files`: a blob header bar over the line-per-row source
  * table. */
 .blob-header {
+  position: relative;
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 11px 15px;
   background: var(--surface); border: 1px solid var(--line); border-bottom: none;
   border-radius: var(--radius-inner) var(--radius-inner) 0 0;
@@ -618,6 +619,11 @@ form button:hover { background: var(--accent-2); }
 .blob-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--ink-3); }
 .blob-actions a { color: var(--ink-2); }
 .blob-actions a:hover { color: var(--accent); }
+/* A "comment on this file/commit" trigger's popup (`assets/ents.js`):
+ * floats below its trigger's own header row instead of pushing the
+ * header/content box's own seamless border pairing apart. */
+.standalone-composer { position: absolute; top: calc(100% + 8px); right: 14px; z-index: 20; width: min(480px, calc(100vw - 60px)); }
+.standalone-composer .composer-form { margin: 0; max-width: none; }
 .blob {
   overflow-x: auto; background: var(--surface); border: 1px solid var(--line);
   border-radius: 0 0 var(--radius-inner) var(--radius-inner); margin-bottom: 18px; padding: 8px 0 10px;
@@ -675,7 +681,7 @@ form button:hover { background: var(--accent-2); }
  * element rules (headings, lists, code spans) apply, scaled down to this
  * compact metadata context instead of a full document card's. */
 .commit-msg.doc-body { padding: 0; max-width: none; font-size: 13px; margin-bottom: 8px; }
-.commit-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--ink-3); font-size: 12px; font-family: var(--mono); margin-top: 6px; }
+.commit-meta { position: relative; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--ink-3); font-size: 12px; font-family: var(--mono); margin-top: 6px; }
 .commit-meta a { color: var(--ink-3); }
 .commit-meta a:hover { color: var(--accent); }
 
