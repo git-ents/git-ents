@@ -69,13 +69,14 @@ pub fn comment_ref(id: &str) -> Result<FullName> {
 /// extracts `id` from the proposed ref the same way `ents-forge`'s own
 /// `genesis_id` does for a comment or issue.
 ///
-/// [`classify`] deliberately has no `agent-sessions` arm yet: an unrecognized
-/// segment falls through to [`Namespace::Unknown`], which is exactly what
-/// `model.extensibility` asks of a namespace no gate-level vocabulary
-/// interprets. Phase 1 of `docs/agent-sessions-plan.adoc` stops at this
-/// builder; classifying the namespace for `ents-gate`'s identity-binding and
-/// owner-mutation checks is Phase 1b's job, alongside the still-unwritten
-/// `meta-ref.adoc` namespace entry and `model.agent-session` section.
+/// [`classify`] routes this namespace to [`Namespace::AgentSession`]
+/// (`docs/agent-sessions-plan.adoc`'s Phase 1b), which `ents-gate`'s
+/// identity-binding and owner-mutation checks treat exactly like
+/// [`Namespace::Comment`] and [`Namespace::Issue`]: hash-identified by the
+/// genesis oid, mutable only by the genesis signer or an admin. The
+/// still-unwritten `meta-ref.adoc` namespace entry and `model.agent-session`
+/// section remain owner spec text (`docs/agent-sessions-plan.adoc`'s "Owner
+/// spec text needed").
 pub fn agent_session_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/agent-sessions/{id}"))
 }
@@ -382,6 +383,11 @@ pub enum Namespace {
     Issue,
     /// `refs/meta/comments/*`.
     Comment,
+    /// `refs/meta/agent-sessions/*` — hash-identified by the session's own
+    /// genesis commit oid, the same shape as [`Namespace::Comment`] and
+    /// [`Namespace::Issue`] (`docs/agent-sessions-plan.adoc`'s Phase 1
+    /// [`agent_session_ref`], Phase 1b for this classification).
+    AgentSession,
     /// `refs/meta/reviews/*`.
     Review,
     /// `refs/meta/pins/*` — retention pins (`model.review-pin`,
@@ -463,6 +469,7 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "member" => Some(Namespace::Member),
         "issues" => Some(Namespace::Issue),
         "comments" => Some(Namespace::Comment),
+        "agent-sessions" => Some(Namespace::AgentSession),
         "reviews" => Some(Namespace::Review),
         "pins" => Some(Namespace::Pin),
         "effects" => Some(Namespace::Effect),
@@ -536,13 +543,7 @@ mod tests {
     #[case::outside_meta("refs/heads/main", None)]
     #[case::unrecognized("refs/meta/index/abc", Some(Namespace::Unknown))]
     #[case::novel_namespace("refs/meta/widgets/7", Some(Namespace::Unknown))]
-    // Phase 1b, not Phase 1, teaches `classify` this segment
-    // (`agent_session_ref`'s own doc); until then it is forge state this
-    // vocabulary does not yet interpret, per `model.extensibility`.
-    #[case::agent_session_namespace_not_yet_classified(
-        "refs/meta/agent-sessions/deadbeef",
-        Some(Namespace::Unknown)
-    )]
+    #[case::agent_session("refs/meta/agent-sessions/deadbeef", Some(Namespace::AgentSession))]
     // @relation(meta-ref.namespace, meta-ref.granularity, scope=function, role=Verifies)
     fn classify_matches_the_namespace_table(
         #[case] refname: &str,

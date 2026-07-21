@@ -611,7 +611,14 @@ fn identity_binding(
         Namespace::Effect | Namespace::Toolchain => {
             bind_natural_key(objects, name, commit.tree, "name", &final_segment(name))
         }
-        Namespace::Comment | Namespace::Issue => bind_hash_identified(objects, name, new),
+        // An agent session is hash-identified exactly like a comment or an
+        // issue: the refname's final segment must be the genesis oid, and
+        // the all-roots walk must find no doppelgänger
+        // (`docs/agent-sessions-plan.adoc`'s Phase 1b, `meta-ref.
+        // identity-binding`).
+        Namespace::Comment | Namespace::Issue | Namespace::AgentSession => {
+            bind_hash_identified(objects, name, new)
+        }
         Namespace::Review => {
             let Some((target, member)) = namespace::parse_review_ref(name.as_ref()) else {
                 return Ok(binding_refusal(
@@ -802,7 +809,16 @@ fn owner_mutation(
     };
     let is_admin = signer.provenance == Provenance::AdminRegistered;
     match namespace {
-        Namespace::Comment | Namespace::Issue => {
+        // An agent session's mutation owner is exactly its genesis signer
+        // (∪ admins), the same rule a comment or issue advances under —
+        // Phase 1b keeps this owner-only rather than inventing a
+        // worker-may-advance-status carve-out: `ents-gate`'s vocabulary has
+        // no notion of "a claim, once made, authorizes a different signer"
+        // to express that safely, so a worker's status-advance commits stay
+        // Phase 2's concern (`docs/agent-sessions-plan.adoc` Phase 2's
+        // claim-via-CAS), landed by the session's own member or an admin
+        // acting on their behalf until that machinery exists.
+        Namespace::Comment | Namespace::Issue | Namespace::AgentSession => {
             // Creation is provenance-keyed; only an advance is owner-keyed.
             if old.is_none() {
                 return Ok(None);

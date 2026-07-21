@@ -87,6 +87,13 @@ fn issue_ref(genesis: ObjectId) -> FullName {
     name(&format!("refs/meta/issues/{genesis}"))
 }
 
+/// The oid-keyed refname of an agent session whose genesis is `genesis` —
+/// hash-identified exactly like [`issue_ref`] (`docs/agent-sessions-plan.
+/// adoc`'s Phase 1b).
+fn agent_session_ref(genesis: ObjectId) -> FullName {
+    name(&format!("refs/meta/agent-sessions/{genesis}"))
+}
+
 /// A signed empty-tree commit — a generic meta-mutation body. A
 /// hash-identified entity binds by its genesis oid and the all-roots
 /// walk, not by tree content, so an empty tree exercises the tip
@@ -526,6 +533,39 @@ fn the_all_roots_walk_holds_across_a_sync_created_merge() {
 }
 
 #[rstest]
+// @relation(gate.identity-binding, meta-ref.identity-binding, scope=function, role=Verifies)
+fn an_agent_session_binds_by_its_genesis_oid_like_other_hash_identified_entities() {
+    // Phase 1b: refs/meta/agent-sessions/* binds exactly like
+    // refs/meta/issues/* and refs/meta/comments/* — genesis oid plus the
+    // all-roots walk, no natural-key tree field involved.
+    let f = forge();
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    expect_pass(
+        &run(&f, &agent_session_ref(genesis), Some(genesis)),
+        AdmissionKind::TipInvariant,
+    );
+
+    let advance = commit(&f, vec![genesis], Some(&f.admin), 310);
+    let refname = agent_session_ref(genesis);
+    f.refs.set(refname.as_ref(), genesis);
+    expect_pass(
+        &run(&f, &refname, Some(advance)),
+        AdmissionKind::TipInvariant,
+    );
+
+    // A refname whose segment is not the tip's own genesis is refused, the
+    // same doppelgänger check `a_refname_not_naming_the_genesis_oid_is_refused`
+    // exercises for issues.
+    let wrong = agent_session_ref(
+        ObjectId::from_hex(b"00000000000000000000000000000000deadbeef").expect("hex"),
+    );
+    expect_fail(
+        &run(&f, &wrong, Some(genesis)),
+        Requirement::IdentityBinding,
+    );
+}
+
+#[rstest]
 // @relation(gate.identity-binding, model.review-pin, scope=function, role=Verifies)
 fn a_pin_is_never_subjected_to_the_all_roots_walk() {
     // A pin's ancestry reaches into code history (its parents include the
@@ -750,6 +790,49 @@ fn a_self_attested_non_owner_cannot_advance_a_comment() {
     let advance = commit(&f, vec![genesis], Some(&f.guest), 310);
     let verdict = run(&f, &refname, Some(advance));
     expect_fail(&verdict, Requirement::TipSigned);
+}
+
+#[rstest]
+// @relation(gate.owner-mutation, scope=function, role=Verifies)
+fn an_admin_may_advance_another_members_agent_session() {
+    // Same owner-mutation rule as a comment's: the genesis signer or an
+    // admin-registered member may advance an agent session (Phase 1b keeps
+    // this owner-only — see `owner_mutation`'s doc on why a worker's
+    // status-advance is deliberately not modeled here yet).
+    let f = forge();
+    let second = Keypair::from_seed(OUTSIDER_SEED);
+    enroll_member(
+        &f.refs,
+        &f.objects,
+        "second",
+        &second,
+        Provenance::AdminRegistered,
+        210,
+    );
+
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    let refname = agent_session_ref(genesis);
+    f.refs.set(refname.as_ref(), genesis);
+    let advance = commit(&f, vec![genesis], Some(&second), 310);
+    expect_pass(
+        &run(&f, &refname, Some(advance)),
+        AdmissionKind::TipInvariant,
+    );
+}
+
+#[rstest]
+// @relation(gate.owner-mutation, model.member-provenance, scope=function, role=Verifies)
+fn a_self_attested_non_owner_cannot_advance_an_agent_session() {
+    // Mirrors `a_self_attested_non_owner_cannot_advance_a_comment`: a
+    // self-attested member is not authorized for canonical refs at all
+    // (creation stays provenance-keyed, routed to the inbox), so it cannot
+    // advance someone else's agent session either.
+    let f = forge();
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    let refname = agent_session_ref(genesis);
+    f.refs.set(refname.as_ref(), genesis);
+    let advance = commit(&f, vec![genesis], Some(&f.guest), 310);
+    expect_fail(&run(&f, &refname, Some(advance)), Requirement::TipSigned);
 }
 
 #[rstest]
