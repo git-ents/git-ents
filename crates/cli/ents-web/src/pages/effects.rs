@@ -179,13 +179,16 @@ where
         })?;
     let body = match effect {
         Ok(effect) => {
-            let query_status = match effect.trigger.parse::<Query>() {
-                Ok(_) => "parses".to_owned(),
-                Err(error) => format!("does not parse: {error}"),
+            let (label, status_class) = match effect.trigger.parse::<Query>() {
+                Ok(_) => ("parses".to_owned(), "status-pass"),
+                Err(error) => (format!("does not parse: {error}"), "status-fail"),
             };
             html! {
                 (crate::render::view(&effect))
-                p { "trigger query: " (query_status) }
+                p {
+                    "trigger query: "
+                    span class={ "status " (status_class) } { (label) }
+                }
             }
         }
         Err(detail) => crate::render::unreadable(&detail),

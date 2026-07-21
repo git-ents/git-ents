@@ -101,22 +101,10 @@ where
             @if rows.is_empty() {
                 (blankslate())
             } @else {
-                div.card {
+                div.card.history {
                     div.card-header { "commits" }
-                    table.entity-list.commits-table {
-                        thead {
-                            tr { th { "commit" } th { "subject" } th { "author" } th { "when" } }
-                        }
-                        tbody {
-                            @for row in &rows {
-                                tr {
-                                    td { a href={ "/commit/" (row.oid) } { code { (row.short) } } }
-                                    td { (row.subject) }
-                                    td { (row.author) }
-                                    td { (row.ago) }
-                                }
-                            }
-                        }
+                    @for row in &rows {
+                        (commit_row(row))
                     }
                 }
                 @if let Some(from) = older {
@@ -196,6 +184,31 @@ pub(crate) fn commit_rows<O>(
     (rows, older)
 }
 
+/// One [`CommitRow`] as a `.card-row` (the design's `CommitRow` component,
+/// README's Commits/Commit-detail screens): its short oid as an accent mono
+/// link, a `.scope` chip ([`super::split_scope`]/[`super::scope_class`])
+/// when the subject carries a Scoped-Commits prefix, the (possibly
+/// stripped) description ellipsized in the remaining space, the author,
+/// and its relative age -- the one place a commit row's markup is spelled,
+/// so [`list`]'s pager reads the same row [`super::dashboard`]'s History
+/// card already renders.
+fn commit_row(row: &CommitRow) -> Markup {
+    html! {
+        div.card-row {
+            a href={ "/commit/" (row.oid) } { code { (row.short) } }
+            @match super::split_scope(&row.subject) {
+                Some((scope, rest)) => {
+                    span class={ "scope " (super::scope_class(scope)) } { (scope) }
+                    span.desk-subject { (rest) }
+                },
+                None => { span.desk-subject { (row.subject) } },
+            }
+            span.muted { (row.author) }
+            span.entry-size { (row.ago) }
+        }
+    }
+}
+
 /// The empty-history placeholder ([`super::blankslate`]): an unborn
 /// `HEAD`, or a repository this page could not open at all.
 fn blankslate() -> Markup {
@@ -256,7 +269,7 @@ where
     };
     let empty_tree = repo.empty_tree();
     let old_tree_ref = old_tree.as_ref().unwrap_or(&empty_tree);
-    let (diff, truncated) = diff_sections(&repo, old_tree_ref, &new_tree);
+    let (diff, truncated) = diff_sections(&state, &repo, old_tree_ref, &new_tree);
     let comments = super::comments::for_commit(&state, object_id);
     let checks = checks_section(&state, object_id);
     let reviews = reviews_section(&state, &session, object_id, &oid);
@@ -476,7 +489,8 @@ fn reviews_section<O: Find + Write>(
         @for ((target, member), review) in &reviews {
             div.card {
                 div.comment-meta {
-                    span.verdict { (review.verdict) }
+                    span class={ "verdict verdict-" (review.verdict) } { (review.verdict) }
+                    (super::avatar(member.as_str()))
                     span.author { (member) }
                     @let reviewer = ents_model::namespace::review_ref(target, member)
                         .ok()
@@ -584,19 +598,32 @@ where
 }
 
 /// The start-a-review form (`POST /commit/{oid}/review`): a verdict and
-/// a body. The verdict is a closed `select` over
-/// [`ents_forge::review::Verdict`]'s three variants -- `model.review`
-/// makes it a hard enum, unlike issue and comment states.
+/// a body. The verdict is a closed `.picker` (README's `VerdictPicker`) of
+/// radio inputs over [`ents_forge::review::Verdict`]'s three variants --
+/// `model.review` makes it a hard enum, unlike issue and comment states --
+/// defaulting to `approve`, the same default a bare `select`'s first option
+/// would submit.
 fn start_review_form(session: &Session, oid: &str) -> Markup {
     html! {
+        h3 { "Start a review" }
         form method="post" action=(format!("/commit/{oid}/review")) {
             (super::csrf_input(session))
-            label {
-                "verdict"
-                select name="verdict" {
-                    option value="approve" { "approve" }
-                    option value="request-changes" { "request-changes" }
-                    option value="comment" { "comment" }
+            p.muted { "verdict" }
+            div.picker {
+                label.opt {
+                    input type="radio" name="verdict" value="approve" checked;
+                    span.dot {}
+                    "approve"
+                }
+                label.opt {
+                    input type="radio" name="verdict" value="request-changes";
+                    span.dot {}
+                    "request-changes"
+                }
+                label.opt {
+                    input type="radio" name="verdict" value="comment";
+                    span.dot {}
+                    "comment"
                 }
             }
             label { "body" textarea name="body" {} }
@@ -720,7 +747,8 @@ fn parse_oid(text: &str) -> Result<ObjectId> {
 /// which case the caller shows a truncation notice). Best-effort: a change
 /// this function cannot read renders as a bare file header with no hunks
 /// rather than failing the whole page.
-fn diff_sections(
+fn diff_sections<O>(
+    state: &AppState<O>,
     repo: &gix::Repository,
     old_tree: &gix::Tree<'_>,
     new_tree: &gix::Tree<'_>,
@@ -742,7 +770,7 @@ fn diff_sections(
         if is_tree_change(&change) {
             return Ok(std::ops::ControlFlow::Continue(()));
         }
-        let (section, bytes) = render_change(repo, &change);
+        let (section, bytes) = render_change(state, repo, &change);
         total = total.saturating_add(bytes);
         sections.push(section);
         if total > MAX_DIFF_BYTES {
@@ -766,12 +794,18 @@ fn is_tree_change(change: &Change<'_, '_, '_>) -> bool {
 }
 
 /// One changed file's `.diff` section: a `.file`-classed header naming the
-/// path (and, on a rename, the old path it moved from), followed by either
-/// a `.meta`-classed "binary file changed" notice or the colorized unified
-/// diff between its old and new blob content. Returns the section's
-/// rendered byte cost, so [`diff_sections`] can track the page's overall
-/// budget.
-fn render_change(repo: &gix::Repository, change: &Change<'_, '_, '_>) -> (Markup, usize) {
+/// path (and, on a rename, the old path it moved from) beside its own
+/// [`super::editor_open`] pill -- the web↔editor handoff motif beside every
+/// code location (README's `EditorPill` inventory entry names diff headers
+/// explicitly) -- followed by either a `.meta`-classed "binary file
+/// changed" notice or the colorized unified diff between its old and new
+/// blob content. Returns the section's rendered byte cost, so
+/// [`diff_sections`] can track the page's overall budget.
+fn render_change<O>(
+    state: &AppState<O>,
+    repo: &gix::Repository,
+    change: &Change<'_, '_, '_>,
+) -> (Markup, usize) {
     let (old_id, new_id, path, rename_from) = match *change {
         Change::Addition { location, id, .. } => (
             None,
@@ -823,6 +857,8 @@ fn render_change(repo: &gix::Repository, change: &Change<'_, '_, '_>) -> (Markup
         span.ln.file {
             @if let Some(from) = &rename_from { (from) " \u{2192} " }
             (path)
+            " "
+            (super::editor_open(state, &path, None))
             "\n"
         }
     };

@@ -69,6 +69,7 @@ where
         "Account",
         html! {
             div.readable {
+                h2 { "Signing key" }
                 @match &enrolled {
                     Some((username, member)) => {
                         p {
@@ -80,14 +81,22 @@ where
                         (super::members::member_card(username.as_str(), member, true))
                     }
                     None => {
-                        div.card {
+                        div.card.member-card {
+                            div.member-head {
+                                span.member-name { "Unenrolled key" }
+                                @if let Some(key_type) = pubkey.split_whitespace().next() {
+                                    span.key-badge { (key_type) }
+                                }
+                            }
                             p {
                                 "This signing key is not enrolled as a "
                                 a href="/members" { "member" }
                                 " of this repository. Edits still sign with it; enroll "
                                 "the key to have them attributed to a username."
                             }
-                            pre { (pubkey) }
+                            div.member-key {
+                                pre { (pubkey) }
+                            }
                         }
                     }
                 }
@@ -99,7 +108,7 @@ where
                 }
                 (view)
                 details {
-                    summary { "Edit" }
+                    summary { "Edit login mapping" }
                     form method="post" action="/account" {
                         (super::csrf_input(&session))
                         label { "member" input type="text" name="member" value=(member_value) list="members"; }

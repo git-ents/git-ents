@@ -1,10 +1,11 @@
 //! Static assets embedded at compile time so the built binary stays
 //! self-contained -- no runtime fetch, no separate asset bundle to ship
-//! alongside `git-ents`. `ents.css` is the hand-rolled pre-redo stylesheet
-//! (`pre-redo:crates/git-ents-server/src/web/style.css`), ported rather
-//! than vendored -- including its type stack, which this crate's own
-//! system-font fallback carries rather than the pre-redo Google Fonts load
-//! (see `ents.css`'s own header comment). `ents.js` is new to this crate
+//! alongside `git-ents`. `ents.css` is the hand-rolled workbench
+//! stylesheet, keyed to the design handoff's tokens and component specs;
+//! its `@font-face` rules load the [`FONTS`] IBM Plex faces this crate
+//! serves itself (`GET /fonts/{name}`) rather than fetching them from
+//! Google Fonts, so the design's exact type ships without a network
+//! dependency. `ents.js` is new to this crate
 //! (pre-redo had no client-side script at all): a vanilla,
 //! dependency-free progressive enhancement over `crate::pages::files`'s
 //! raw-source blob view -- click-to-select a line or range and an inline
@@ -18,18 +19,14 @@
 //! `include_str!`-and-tag pattern
 //! `pre-redo:crates/git-ents-server/src/web/icons.rs` used. The workbench
 //! shell's own chrome (the `.rail` page-family icons, the `.palette`
-//! search glass, the `.branch` pill) draws from [`sprite`] instead: one
-//! hand-rolled `<symbol>` sprite embedded per page by
-//! `crate::pages::layout`, each use site a tiny [`icon_use`] reference
-//! rather than a repeated inline SVG. Every sprite symbol -- the `i-ed-*`
-//! editor marks `crate::pages`'s `editor_open` uses included -- is an
-//! original drawing in the sprite's own stroke style, never a vendored
-//! asset, so no third-party icon license applies to the sprite. The
-//! editor marks are simplified glyphs *evoking* each product's logo
-//! (shown nominatively, naming the editor `$ENTS_EDITOR`/`$EDITOR`
-//! already configured), not copies of the trademarked logo files; the
-//! Octicons under `assets/icons/` remain this module's only third-party
-//! assets.
+//! search glass, the `.branch` pill, the `.editor-open` pill's `↗` mark)
+//! draws from [`sprite`] instead: one hand-rolled `<symbol>` sprite
+//! embedded per page by `crate::pages::layout`, each use site a tiny
+//! [`icon_use`] reference rather than a repeated inline SVG. Every sprite
+//! symbol is an original drawing in the design handoff's 24×24 stroke style
+//! (`stroke-width: 1.7`, round caps), never a vendored asset, so no
+//! third-party icon license applies to the sprite; the Octicons under
+//! `assets/icons/` remain this module's only third-party assets.
 
 use std::sync::LazyLock;
 
@@ -40,6 +37,55 @@ pub(crate) const OVERRIDES: &str = include_str!("assets/ents.css");
 /// The client-side line-selection/comment-composer script
 /// [`crate::router`]'s `GET /ents.js` serves -- see this module's own doc.
 pub(crate) const SCRIPT: &str = include_str!("assets/ents.js");
+
+/// The self-hosted IBM Plex webfonts the workbench renders in
+/// (`assets/fonts/`, SIL OFL, see `assets/fonts/LICENSE`), embedded so the
+/// design's exact type is served without a runtime Google Fonts fetch --
+/// the same "self-contained binary, no network dependency" rule
+/// [`OVERRIDES`] and the vendored Octicons already hold. `ents.css`'s
+/// `@font-face` rules name each by its `GET /fonts/{name}` URL; [`font`]
+/// resolves that name back to these bytes.
+pub(crate) const FONTS: &[(&str, &[u8])] = &[
+    (
+        "plex-sans-400.woff2",
+        include_bytes!("assets/fonts/plex-sans-400.woff2"),
+    ),
+    (
+        "plex-sans-500.woff2",
+        include_bytes!("assets/fonts/plex-sans-500.woff2"),
+    ),
+    (
+        "plex-sans-600.woff2",
+        include_bytes!("assets/fonts/plex-sans-600.woff2"),
+    ),
+    (
+        "plex-sans-700.woff2",
+        include_bytes!("assets/fonts/plex-sans-700.woff2"),
+    ),
+    (
+        "plex-mono-400.woff2",
+        include_bytes!("assets/fonts/plex-mono-400.woff2"),
+    ),
+    (
+        "plex-mono-500.woff2",
+        include_bytes!("assets/fonts/plex-mono-500.woff2"),
+    ),
+    (
+        "plex-mono-600.woff2",
+        include_bytes!("assets/fonts/plex-mono-600.woff2"),
+    ),
+];
+
+/// The embedded woff2 bytes for `name`, or `None` for a name no
+/// `@font-face` rule references -- [`crate::router`]'s `GET /fonts/{name}`
+/// handler serves the hit and 404s the miss, so an unknown path can never
+/// read outside this fixed table.
+pub(crate) fn font(name: &str) -> Option<&'static [u8]> {
+    FONTS
+        .iter()
+        .find(|(file, _)| *file == name)
+        .map(|(_, bytes)| *bytes)
+}
 
 /// Adapt a vendored Octicon to this UI: tag it with the `.icon` class the
 /// stylesheet targets and mark it decorative for assistive tech. Every

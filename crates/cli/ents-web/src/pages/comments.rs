@@ -172,6 +172,10 @@ where
     };
     let resolved = comment.state == "resolved";
     let return_to = format!("/comments/{id}");
+    let authorship = ents_model::namespace::comment_ref(&id)
+        .ok()
+        .and_then(|ref_name| state.refs.get(ref_name.as_ref()).ok().flatten())
+        .and_then(|tip| super::commit_authorship(&*state.objects(), tip).ok());
     let body =
         crate::asciidoc::to_html(&comment.body).unwrap_or_else(|_| html! { p { (comment.body) } });
     Ok(super::layout(
@@ -184,28 +188,39 @@ where
             div.readable {
                 div.card {
                     div.comment-meta {
-                        span.comment-state { (comment.state) }
+                        @if let Some((author, seconds)) = &authorship {
+                            (super::avatar(author))
+                            span.author { (author) }
+                            span { (super::ago(*seconds)) }
+                        }
+                        @if let Some(parent) = &comment.parent {
+                            a.reply href={ "/comments/" (parent) } {
+                                "\u{21b3} reply to " (ents_forge::abbreviate_id(parent))
+                            }
+                        }
                         @if let Some(context) = &comment.context {
                             (context_link(context))
                         }
-                        @if let Some(parent) = &comment.parent {
-                            a href={ "/comments/" (parent) } {
-                                "in reply to " (ents_forge::abbreviate_id(parent))
-                            }
-                        }
+                        span.spacer {}
                         @if let Some((anchor, _)) = &projected {
                             a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
                                 (anchor.path) (line_label(anchor.lines))
                             }
                             (super::editor_open(&state, &anchor.path, anchor.lines.map(|range| range.start)))
+                        } @else {
+                            span { "unanchored" }
                         }
+                        @if let Some((_, Projection::Outdated { .. })) = &projected {
+                            span.outdated { "outdated" }
+                        }
+                        span.comment-state { (comment.state) }
                     }
+                    div.comment-body { (body) }
                     @if let Some((_, projection)) = &projected {
                         div.comment-meta {
                             span { "at " (query.rev) ": " (projection_label(projection)) }
                         }
                     }
-                    div.doc-body { (body) }
                 }
                 (action_forms(&session, &id, resolved, &return_to))
             }
@@ -287,23 +302,30 @@ fn listing_card<O: Find + Write>(
     html! {
         div.card {
             div.comment-meta {
-                a href={ "/comments/" (id) } { (ents_forge::abbreviate_id(id)) }
                 @if let Some((author, seconds)) = &authorship {
+                    (super::avatar(author))
                     span.author { (author) }
                     span { (super::ago(*seconds)) }
                 }
-                span.comment-state { (comment.state) }
+                a href={ "/comments/" (id) } { (ents_forge::abbreviate_id(id)) }
+                @if comment.parent.is_some() {
+                    span.reply { "\u{21b3} reply" }
+                }
                 @if let Some(context) = &comment.context {
                     (context_link(context))
                 }
+                span.spacer {}
                 @if let Some(anchor) = &anchor {
                     a href={ "/files/" (anchor.path) (line_fragment(anchor.lines)) } {
                         (anchor.path) (line_label(anchor.lines))
                     }
                     (super::editor_open(state, &anchor.path, anchor.lines.map(|range| range.start)))
+                } @else {
+                    span { "unanchored" }
                 }
+                span.comment-state { (comment.state) }
             }
-            div.doc-body { (body) }
+            div.comment-body { (body) }
         }
     }
 }
@@ -770,8 +792,10 @@ pub(crate) fn comment_card(index: usize, comment: &FileComment, link: LinkMode) 
     html! {
         div.card id={ "comment-" (index) } {
             div.comment-meta {
+                (super::avatar(&comment.author))
                 span.author { (comment.author) }
                 span { (super::ago(comment.seconds)) }
+                span.spacer {}
                 @if let Some(range) = comment.lines {
                     @match link {
                         LinkMode::SameFile => {
@@ -793,7 +817,7 @@ pub(crate) fn comment_card(index: usize, comment: &FileComment, link: LinkMode) 
                     span.outdated { "outdated" }
                 }
             }
-            div.doc-body { (comment.body) }
+            div.comment-body { (comment.body) }
         }
     }
 }
@@ -826,15 +850,17 @@ pub(crate) fn thread_comment_card<O: Find + Write>(
         div.card id={ "thread-" (id) } {
             div.comment-meta {
                 @if let Some((author, seconds)) = &authorship {
+                    (super::avatar(author))
                     span.author { (author) }
                     span { (super::ago(*seconds)) }
                 }
                 @if comment.parent.is_some() {
-                    span { "reply" }
+                    span.reply { "\u{21b3} reply" }
                 }
+                span.spacer {}
                 span.comment-state { (comment.state) }
             }
-            div.doc-body { (body) }
+            div.comment-body { (body) }
             (action_forms(session, id, comment.state == "resolved", return_to))
         }
     }

@@ -60,17 +60,7 @@ where
             html! { "Import one with " code { "git ents toolchain import" } "." },
         )
     } else {
-        html! {
-            div.card {
-                ul.string-list {
-                    @for name in &names {
-                        li {
-                            a href=(format!("/toolchains/{name}")) { (name) }
-                        }
-                    }
-                }
-            }
-        }
+        crate::render::string_list(&names, |name| format!("/toolchains/{name}"))
     };
     Ok(super::layout_meta(
         &super::RepoHeader::from_state(&state),
@@ -192,14 +182,35 @@ where
         Ok((toolchain, recipe)) => {
             let log = toolchain::log(state.refs.as_ref(), &*objects, &name).unwrap_or_default();
             html! {
-                dl {
-                    dt { "name" } dd { (toolchain.name) }
-                    dt { "recipe" } dd { (format!("{recipe:?}")) }
+                div.card {
+                    dl.entity-view {
+                        dt { "name" } dd { (toolchain.name) }
+                        dt { "recipe" } dd { (format!("{recipe:?}")) }
+                    }
                 }
                 h2 { "Import Log" }
-                ul {
-                    @for oid in &log {
-                        li { (oid.to_string()) }
+                @if log.is_empty() {
+                    (super::blankslate(
+                        "No import log",
+                        html! { "This toolchain has no recorded import history." },
+                    ))
+                } @else {
+                    div.card {
+                        ul.string-list {
+                            @for oid in &log {
+                                li {
+                                    code { (super::short_oid(oid)) }
+                                    // Best-effort per entry: an unreadable
+                                    // commit in the chain (practically
+                                    // unreachable -- `toolchain::log` itself
+                                    // already errors on one) drops just its
+                                    // own authorship, not the whole log.
+                                    @if let Ok((author, seconds)) = super::commit_authorship(&*objects, *oid) {
+                                        span.muted { " · " (author) " · " (super::ago(seconds)) }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

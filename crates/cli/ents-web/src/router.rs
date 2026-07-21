@@ -107,6 +107,7 @@ where
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))
+        .route("/fonts/{name}", get(font))
         // Layer order: axum runs the last-added layer first, so the
         // session middleware (added below) resolves the session before
         // the auth middleware consults it.
@@ -264,6 +265,27 @@ async fn script() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         assets::SCRIPT,
     )
+}
+
+/// `GET /fonts/{name}`: one embedded IBM Plex woff2 face
+/// (`crate::assets::font`), named by `ents.css`'s own `@font-face` `src`
+/// URLs. Immutable and content-addressed by filename, so it carries a
+/// year-long `immutable` cache; a name outside the fixed [`assets::FONTS`]
+/// table is a plain 404, never a path escape. Served under the same
+/// no-session-gating rule as [`style`] -- a face is needed to render every
+/// page, including one reached before a session exists.
+async fn font(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    match assets::font(&name) {
+        Some(bytes) => (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Bind a loopback-or-otherwise socket for [`serve_on`], returning the

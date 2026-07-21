@@ -88,8 +88,8 @@ where
                         "Prove control of an enrolled member key. Run this "
                         "on your own machine -- the key never leaves it:"
                     }
-                    pre.signin-cmd {
-                        "git ents login https://" (realm.host) " " (display)
+                    pre.login-code {
+                        "git ents login https://" span.code { (realm.host) " " (display) }
                     }
                     p.muted {
                         "This page refreshes on its own; the code is "

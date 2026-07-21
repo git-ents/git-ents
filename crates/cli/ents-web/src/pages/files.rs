@@ -246,13 +246,16 @@ fn tree_entries(tree: &gix::Tree<'_>) -> Result<Vec<(String, bool, Option<u64>)>
 }
 
 /// The Code split's `.tree` sidebar (`crate::pages::layout_split`): a
-/// crumb trail back to the repository root, then the entries of the
-/// directory at `dir` (the viewed directory itself, or a viewed blob's
-/// parent), directories first -- not a full recursive tree, just enough
-/// context to move one level in any direction. `active` names the full
-/// path of the entry (or trailing crumb) being viewed. Best-effort: a
-/// subtree that fails to read renders an empty entry list rather than
-/// failing the page around it.
+/// crumb trail back to the repository root (plain labels, no icon -- the
+/// same bare style [`crumbs`] renders above the pane), then the entries of
+/// the directory at `dir` (the viewed directory itself, or a viewed blob's
+/// parent) each as an icon
+/// ([`assets::icon_folder`]/[`assets::icon_file`]) beside its name,
+/// directories first -- not a full recursive tree, just enough context to
+/// move one level in any direction. `active` names the full path of the
+/// entry (or trailing crumb) being viewed, and gets `.active`
+/// ([`tree_class`]). Best-effort: a subtree that fails to read renders an
+/// empty entry list rather than failing the page around it.
 fn tree_sidebar(head_tree: &gix::Tree<'_>, dir: &str, active: &str) -> Markup {
     let mut entries = if dir.is_empty() {
         tree_entries(head_tree).unwrap_or_default()
@@ -292,6 +295,7 @@ fn tree_sidebar(head_tree: &gix::Tree<'_>, dir: &str, active: &str) -> Markup {
             @let full = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
             a class=(tree_class(*is_dir, entry_depth, full == active))
                 href=(child_href(dir, name)) {
+                @if *is_dir { (assets::icon_folder()) } @else { (assets::icon_file()) }
                 (name) @if *is_dir { "/" }
             }
         }
@@ -614,8 +618,9 @@ struct BlobHeaderMeta<'a> {
     editor: Markup,
 }
 
-/// The header bar above every blob view -- the file's name and metadata on
-/// the left (`span.blob-title`/`span.blob-meta`), the actions that used to
+/// The header bar above every blob view -- a leading file icon
+/// ([`assets::icon_file`]), the file's name and metadata
+/// (`span.blob-title`/`span.blob-meta`), the actions that used to
 /// trail [`crumbs`] on the right (`span.blob-actions`): a jump into
 /// `crate::pages::commits`'s `GET /commits` history (the file browser's
 /// one entry point into commit history, since history is a view of the
@@ -631,6 +636,7 @@ struct BlobHeaderMeta<'a> {
 fn blob_header(meta: &BlobHeaderMeta<'_>) -> Markup {
     html! {
         div.blob-header {
+            (assets::icon_file())
             span.blob-title { (meta.name) }
             span.blob-meta {
                 @if let Some(lines) = meta.line_count {
@@ -789,18 +795,24 @@ fn source_view(
 
 /// The below-the-blob section for comments with no current line range to
 /// interleave at (a whole-file anchor, or
-/// `ents_anchor::Projection::Outdated`) -- titled to distinguish it from
-/// the inline cards [`source_view`] interleaves directly into the blob,
-/// since every comment reaching here either predates line-level anchoring
-/// or has literally gone stale. Renders nothing at all when `comments` is
-/// empty (mirrors [`super::comments::comments_section`]'s identical
-/// stance).
+/// `ents_anchor::Projection::Outdated`) -- a warn-glyphed heading
+/// (`div.outdated-head`, [`assets::icon_use`]'s `"i-warn"`) distinguishing
+/// it from the inline cards [`source_view`] interleaves directly into the
+/// blob, since every comment reaching here either predates line-level
+/// anchoring or has literally gone stale, then each comment through the
+/// same [`super::comments::comment_card`] every other blob-adjacent comment
+/// renders through. Renders nothing at all when `comments` is empty
+/// (mirrors [`super::comments::comments_section`]'s identical stance).
 fn outdated_comments_section(comments: &[(usize, &super::comments::FileComment)]) -> Markup {
     if comments.is_empty() {
         return html! {};
     }
     html! {
-        h2 { "Outdated Comments" }
+        div.outdated-head {
+            (assets::icon_use("i-warn"))
+            span { "Outdated Comments" }
+        }
+        p.muted { "Anchored to lines that no longer map onto HEAD." }
         @for &(index, comment) in comments {
             (super::comments::comment_card(index, comment, super::comments::LinkMode::SameFile))
         }

@@ -13,7 +13,9 @@
 //! `vscode://file/...`). Neovim has no scheme of its own, so its links
 //! use the community `nvim://file/...` shape -- they work only where the
 //! reader has registered a handler for it, which is stated here rather
-//! than hidden: the icon still names the editor the user configured.
+//! than hidden: the affordance's `title` names the editor the user
+//! configured (`crate::pages`'s `editor_open` renders the shared teal
+//! `↗` pill for every editor alike).
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -38,15 +40,6 @@ impl Editor {
             Self::Zed => "Zed",
             Self::VsCode => "VS Code",
             Self::Neovim => "Neovim",
-        }
-    }
-
-    /// The editor's `crate::assets::sprite` symbol id.
-    pub(crate) fn icon(self) -> &'static str {
-        match self {
-            Self::Zed => "i-ed-zed",
-            Self::VsCode => "i-ed-code",
-            Self::Neovim => "i-ed-nvim",
         }
     }
 

@@ -400,7 +400,7 @@ async fn style_css_is_served_with_no_session_required() {
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("utf8 css");
     assert!(!body.is_empty());
-    assert!(body.contains("--color-bg"));
+    assert!(body.contains("--bg"));
 }
 
 /// `roots.web-agnostic`: the dashboard actually renders real content
@@ -997,7 +997,7 @@ async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
     );
     let detail = get_body(&router, &format!("/issues/{issue_id}")).await;
     assert!(
-        detail.contains(&format!("class=\"active\" href=\"/issues/{issue_id}\"")),
+        detail.contains(&format!("class=\"side-row active\" href=\"/issues/{issue_id}\"")),
         "the viewed issue highlights in the sidebar"
     );
 }
@@ -2090,8 +2090,8 @@ async fn commit_page_shows_a_seeded_review_verdict_and_a_review_comment() {
     let page = get_body(&router, &format!("/commit/{oid}")).await;
     assert!(page.contains("Reviews"), "the reviews section renders");
     assert!(
-        page.contains("class=\"verdict\""),
-        "the verdict renders prominently"
+        page.contains("class=\"verdict verdict-request-changes\""),
+        "the verdict renders prominently, colored by its value"
     );
     assert!(page.contains("request-changes"), "the verdict text renders");
     assert!(page.contains("needs a test"), "the review body renders");

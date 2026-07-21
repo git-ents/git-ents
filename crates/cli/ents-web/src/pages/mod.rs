@@ -291,7 +291,7 @@ pub(crate) fn layout_shell(
                 (crate::assets::sprite())
                 div.wb {
                     aside.rail {
-                        span.nav-mark { "✳" }
+                        span.nav-mark { "ge" }
                         (rail_link(active, Tab::Overview, "/", "Dashboard", "i-home"))
                         (rail_link(active, Tab::Files, "/files", "Code", "i-files"))
                         (rail_link(active, Tab::Commits, "/commits", "Review", "i-commit"))
@@ -306,7 +306,7 @@ pub(crate) fn layout_shell(
                             span.repo-path {
                                 span.here { (repo.name) }
                                 @if let Some(branch) = &repo.branch {
-                                    span.branch { (crate::assets::icon_use("i-commit")) (branch) }
+                                    span.branch { (crate::assets::icon_use("i-branch")) (branch) }
                                 }
                             }
                             form.palette method="get" action="/search" {
@@ -314,7 +314,7 @@ pub(crate) fn layout_shell(
                                 input type="search" name="q" placeholder="Jump to file, commit, issue, member…" aria-label="Search";
                                 kbd { "⌘K" }
                             }
-                            a.id-chip href="/account" { (identity) }
+                            a.id-chip href="/account" { (avatar(identity)) span { (identity) } }
                         }
                         (content)
                     }
@@ -406,13 +406,19 @@ pub(crate) fn editor_open<O>(state: &AppState<O>, path: &str, line: Option<u64>)
     };
     let root = std::fs::canonicalize(&state.path).unwrap_or_else(|_io| state.path.clone());
     let abs = root.join(path);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let loc = match line {
+        Some(line) => format!("{name}:{line}"),
+        None => name.to_owned(),
+    };
     html! {
         a.editor-open
             href=(editor.deep_link(&abs, line))
             data-editor-base=(editor.deep_link(&abs, None))
             title={ "Open in " (editor.label()) }
         {
-            (crate::assets::icon_use(editor.icon()))
+            (crate::assets::icon_use("i-editor"))
+            span.ed-loc { (loc) }
         }
     }
 }
@@ -424,6 +430,19 @@ pub(crate) fn editor_open<O>(state: &AppState<O>, path: &str, line: Option<u64>)
 /// chrome inputs (the same reason a [`Session`] is never threaded into it).
 pub(crate) fn identity_label<O>(state: &AppState<O>) -> String {
     state.identity.label()
+}
+
+/// The design's initials avatar (`.avatar`): the first two characters of
+/// `label` on the shared indigo→teal gradient, the same mark the top bar's
+/// `.id-chip`, every comment card's author line, and an issue's assignee
+/// list all render beside a name (README: initials on a gradient, no image
+/// assets). Two characters because that is what the mock's own avatars show
+/// ("ada.lang" → "ad"); a shorter label renders however many it has.
+pub(crate) fn avatar(label: &str) -> Markup {
+    let initials: String = label.chars().take(2).collect();
+    html! {
+        span.avatar { (initials) }
+    }
 }
 
 /// A hidden CSRF input every form this crate renders carries
@@ -578,4 +597,30 @@ pub(crate) fn child_crumbs(parent: &str, parent_href: &str, here: &str) -> Marku
 /// 7-character prefix is invalid for `oid`'s hash kind.
 pub(crate) fn short_oid(oid: &ObjectId) -> String {
     gix_hash::Prefix::new(oid, 7).map_or_else(|_| oid.to_string(), |prefix| prefix.to_string())
+}
+
+/// Split a Scoped-Commits subject (`<scope>: <description>`,
+/// scopedcommits.com) into its scope and description -- `None` when the
+/// subject carries no `^[a-z-]+:` prefix, in which case the whole subject
+/// renders unchipped. Shared by [`super::dashboard`]'s history strip and
+/// [`super::commits`]'s commit rows, the two places a commit subject chips
+/// its scope, so both split it the same way.
+pub(crate) fn split_scope(subject: &str) -> Option<(&str, &str)> {
+    let (scope, rest) = subject.split_once(':')?;
+    if scope.is_empty() || !scope.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return None;
+    }
+    Some((scope, rest.trim_start()))
+}
+
+/// The `.scope-c{n}` color class for `scope`: a stable hash of the scope
+/// name onto the stylesheet's six deterministic chip colors (README's
+/// "deterministic-color, fixed 52px" [`ScopeChip`]), so the same scope
+/// always chips the same color across pages and requests. Shared with
+/// [`split_scope`] by every page that renders a commit subject.
+pub(crate) fn scope_class(scope: &str) -> String {
+    let hash = scope.bytes().fold(0u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(byte))
+    });
+    format!("scope-c{}", hash.checked_rem(6).unwrap_or(0))
 }

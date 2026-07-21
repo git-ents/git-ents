@@ -50,6 +50,7 @@ where
         .into_iter()
         .map(|entry| (entry.refname, entry.error))
         .collect();
+    let labels = known_labels(&rows);
     Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -65,29 +66,49 @@ where
                         html! { "Open one with the form below." },
                     ))
                 }
-                h2 { "Open an Issue" }
-                (new_form(&session))
+                div.card {
+                    div.card-header { "Open an Issue" }
+                    (new_form(&session, &labels))
+                }
                 (super::members_datalist(&state))
             }
         },
     ))
 }
 
-/// The Issues split's `.tree` sidebar: every issue as a two-line row --
-/// its title, then a muted locator of its state, assignees, and labels --
-/// linking to its own page, `active` naming the viewed issue's id.
+/// The Issues split's `.tree` sidebar: a `.tree-head` naming the family and
+/// carrying the "+ New" link into the composer, then every issue as a
+/// two-line `.side-row` -- its title (`.side-title`), then a `.side-meta`
+/// locator of a state-colored `.dot`, its state, assignees, and labels --
+/// linking to its own page, `.active` naming the viewed issue's id.
 fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) -> Markup {
     html! {
+        div.tree-head {
+            span { "Issues" }
+            a.btn.btn-sm.btn-ghost[active.is_some()] href="/issues" { "+ New" }
+        }
         @if rows.is_empty() {
             span.tree-note { "No issues yet." }
         }
         @for (id, issue) in rows {
-            a.active[active == Some(id.as_str())] href={ "/issues/" (id) } {
-                span { (issue.title) }
-                span class="where" {
-                    (issue.state)
-                    @if !issue.assignees.is_empty() { " \u{b7} " (join_members(&issue.assignees)) }
-                    @if !issue.labels.is_empty() { " \u{b7} " (issue.labels.join(", ")) }
+            a.side-row.active[active == Some(id.as_str())] href={ "/issues/" (id) } {
+                span.side-title { (issue.title) }
+                span.side-meta {
+                    (state_dot(&issue.state))
+                    span.locator {
+                        (issue.state)
+                        " \u{b7} "
+                        @if issue.assignees.is_empty() {
+                            "unassigned"
+                        } @else {
+                            "@" (issue.assignees[0].as_str())
+                            @if issue.assignees.len() > 1 {
+                                " +" (issue.assignees.len() - 1)
+                            }
+                        }
+                        " \u{b7} "
+                        @if issue.labels.is_empty() { "no labels" } @else { (issue.labels.join(", ")) }
+                    }
                 }
             }
         }
@@ -144,6 +165,7 @@ where
     // navigation chrome, never a reason to fail the issue's own page.
     let (rows, _unreadable) =
         issue::list_all(state.refs.as_ref(), &*state.objects()).unwrap_or_default();
+    let labels = known_labels(&rows);
     Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -154,20 +176,47 @@ where
             (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))
             div.readable {
                 div.card {
-                    dl {
-                        dt { "state" } dd { span.comment-state { (issue.state) } }
-                        dt { "assignees" } dd { (join_members(&issue.assignees)) }
-                        dt { "labels" } dd { (issue.labels.join(", ")) }
+                    h1.commit-subject { (issue.title) }
+                    dl.entity-view {
+                        dt { "state" }
+                        dd { (state_chip(&issue.state)) }
+                        dt { "assignees" }
+                        dd {
+                            @if issue.assignees.is_empty() {
+                                span { "unassigned" }
+                            } @else {
+                                @for assignee in &issue.assignees {
+                                    (super::avatar(assignee.as_str())) " @" (assignee.as_str()) " "
+                                }
+                            }
+                        }
+                        dt { "labels" }
+                        dd {
+                            @if issue.labels.is_empty() {
+                                span { "none" }
+                            } @else {
+                                @for label in &issue.labels {
+                                    span.label-chip { (label) } " "
+                                }
+                            }
+                        }
                     }
                     div.doc-body { (body) }
                 }
                 details {
-                    summary { "Edit" }
-                    (edit_form(&session, &issue))
+                    summary { "Edit state, assignees, labels" }
+                    (edit_form(&session, &issue, &labels))
                     (super::members_datalist(&state))
                 }
                 h2 { "Discussion" }
-                (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
+                @if thread.is_empty() {
+                    (super::blankslate(
+                        "No comments yet",
+                        html! { "Start the discussion below." },
+                    ))
+                } @else {
+                    (crate::pages::comments::thread_section(&state, &session, &thread, &return_to))
+                }
                 h2 { "Add a Comment" }
                 (comment_form(&session, &id))
             }
@@ -350,61 +399,53 @@ where
     Ok(Redirect::to(&format!("/issues/{id}")))
 }
 
-/// The open-an-issue form (`POST /issues`). The `state` field is a free
-/// text input with a [`state_datalist`] of the conventional values, never
-/// a closed `select` -- `model.issue` keeps states an open vocabulary
-/// ("custom states are schema, not platform features"; see
-/// [`ents_forge::Issue`]'s own doc).
-fn new_form(session: &Session) -> Markup {
+/// The open-an-issue form (`POST /issues`). State picks from
+/// [`state_picker`]'s closed three-option enumeration (the redesign's
+/// `StatePicker`/`StateChip`, open / in-progress / closed) rather than the
+/// pre-redesign free-text-plus-datalist field: `model.issue` itself still
+/// stores state as an arbitrary string (`ents_forge::Issue`'s own doc,
+/// "custom states are schema, not a platform feature"), so this form
+/// narrowing its own three quick-pick buttons never closes that schema --
+/// a state outside the trio stays reachable through `git ents issue edit`
+/// or a direct edit, same as any other schema-level custom field.
+fn new_form(session: &Session, known_labels: &[String]) -> Markup {
     html! {
         form method="post" action="/issues" {
             (super::csrf_input(session))
             label { "title" input type="text" name="title"; }
-            label {
-                "state"
-                input type="text" name="state" value="open" list="issue-states";
+            div {
+                label { "state" }
+                (state_picker("open"))
             }
-            (state_datalist())
             label { "assignees" input type="text" name="assignees" placeholder="alice, bob" list="members"; }
-            label { "labels" input type="text" name="labels" placeholder="bug, gate"; }
+            (label_picker(known_labels, &[]))
             label { "body" textarea name="body" {} }
-            button type="submit" { "Open Issue" }
+            div.composer-buttons {
+                a.composer-cancel href="/issues" { "Cancel" }
+                button type="submit" { "Open Issue" }
+            }
         }
     }
 }
 
 /// The edit-issue form (`POST /issues/{id}`), its fields pre-filled from
-/// the current issue. Its `state` field carries the same [`state_datalist`]
-/// as [`new_form`]'s, for the same open-vocabulary reason.
-fn edit_form(session: &Session, issue: &ents_forge::Issue) -> Markup {
+/// the current issue. Its `state` field carries the same
+/// [`state_picker`] as [`new_form`]'s, for the same reason (see
+/// [`new_form`]'s own doc).
+fn edit_form(session: &Session, issue: &ents_forge::Issue, known_labels: &[String]) -> Markup {
     html! {
         form method="post" action="" {
             (super::csrf_input(session))
-            label {
-                "state"
-                input type="text" name="state" value=(issue.state) list="issue-states";
+            div {
+                label { "state" }
+                (state_picker(&issue.state))
             }
-            (state_datalist())
             label {
                 "assignees"
                 input type="text" name="assignees" value=(join_members(&issue.assignees)) list="members";
             }
-            label { "labels" input type="text" name="labels" value=(issue.labels.join(", ")); }
+            (label_picker(known_labels, &issue.labels))
             button type="submit" { "Save" }
-        }
-    }
-}
-
-/// The `datalist` of conventional issue states both forms above attach to
-/// their `state` input -- suggestions only, since `model.issue`'s state is
-/// an open string vocabulary, not an enum a `select` could close over.
-/// Rendered once per form; the two forms never share a page, so the id
-/// never collides.
-fn state_datalist() -> Markup {
-    html! {
-        datalist id="issue-states" {
-            option value="open" {}
-            option value="closed" {}
         }
     }
 }
@@ -416,6 +457,162 @@ fn comment_form(session: &Session, id: &str) -> Markup {
             (super::csrf_input(session))
             label { "body" textarea name="body" {} }
             button type="submit" { "Comment" }
+        }
+    }
+}
+
+/// The three conventional issue states the redesign's `StatePicker` closes
+/// over (`model.issue`'s own field stays an open string; see [`new_form`]'s
+/// doc for why the form narrows to these three anyway).
+const ISSUE_STATES: [&str; 3] = ["open", "in-progress", "closed"];
+
+/// The `.chip`/`.dot` color class for a known state, or `None` for a
+/// custom one this form's [`state_picker`] does not enumerate -- shared by
+/// [`state_chip`] (the detail card's big pill) and [`state_dot`] (the
+/// sidebar row's small status dot), so a state's color is spelled in
+/// exactly one place.
+fn state_class(state: &str) -> Option<&'static str> {
+    match state {
+        "open" => Some("state-open"),
+        "in-progress" => Some("state-in-progress"),
+        "closed" => Some("state-closed"),
+        _ => None,
+    }
+}
+
+/// The issue detail card's state `dd`: a `.chip.chip-pill` carrying a
+/// leading `.dot` and the state's own color (see [`state_class`]), plain
+/// neutral for a custom state outside the three [`ISSUE_STATES`].
+fn state_chip(state: &str) -> Markup {
+    let class = match state_class(state) {
+        Some(extra) => format!("chip chip-pill {extra}"),
+        None => "chip chip-pill".to_owned(),
+    };
+    html! {
+        span class=(class) {
+            span.dot {}
+            (state)
+        }
+    }
+}
+
+/// The sidebar row's status `.dot` (see [`issues_sidebar`]): green open,
+/// amber in-progress, grey closed or custom (see [`state_class`]).
+fn state_dot(state: &str) -> Markup {
+    let class = match state_class(state) {
+        Some(extra) => format!("dot {extra}"),
+        None => "dot".to_owned(),
+    };
+    html! { span class=(class) {} }
+}
+
+/// One [`state_picker`] option's class: `.opt`, plus `.active` and the
+/// state's own color class (see [`state_class`]) when it is `current`'s
+/// own value -- an inactive option stays the picker's plain neutral look
+/// (mirrors the design handoff's own `statePicker`, which colors only the
+/// selected option).
+fn picker_opt_class(current: &str, state: &str) -> String {
+    if current == state {
+        match state_class(state) {
+            Some(extra) => format!("opt active {extra}"),
+            None => "opt active".to_owned(),
+        }
+    } else {
+        "opt".to_owned()
+    }
+}
+
+/// The state `.picker` both [`new_form`] and [`edit_form`] render: three
+/// `name="state"` radios, one per [`ISSUE_STATES`] entry, styled as
+/// `.picker .opt` pills (a `hidden` native radio inside a `<label>` still
+/// toggles on click -- label-click activation reaches a `hidden` control
+/// same as any other -- so the pill shows no native radio glyph without
+/// needing any stylesheet change). Exactly one radio is always checked, so
+/// the field is never posted empty: `current` itself when it names one of
+/// the three, or a fourth unlabeled hidden radio carrying `current`
+/// verbatim when it does not (a custom state this form's picker does not
+/// enumerate stays intact until the reader deliberately picks a different
+/// one).
+fn state_picker(current: &str) -> Markup {
+    html! {
+        div.picker {
+            @for state in ISSUE_STATES {
+                label class=(picker_opt_class(current, state)) {
+                    input type="radio" name="state" value=(state) checked[state == current] hidden;
+                    span.dot {}
+                    (state)
+                }
+            }
+            @if !ISSUE_STATES.contains(&current) {
+                input type="radio" name="state" value=(current) checked hidden;
+            }
+        }
+    }
+}
+
+/// Every label already used across every issue in this repository, deduped
+/// and sorted -- [`label_picker`]'s "pick existing" set, derived from the
+/// same `issue::list_all` read [`issues_sidebar`] renders from rather than
+/// a second query of its own.
+fn known_labels(rows: &[(String, ents_forge::Issue)]) -> Vec<String> {
+    let mut labels: Vec<String> = Vec::new();
+    for (_, issue) in rows {
+        for label in &issue.labels {
+            if !labels.contains(label) {
+                labels.push(label.clone());
+            }
+        }
+    }
+    labels.sort();
+    labels
+}
+
+/// The labels field both [`new_form`] and [`edit_form`] render: `known`'s
+/// labels previewed as `.label-chip` (`.on` for one already in `current`),
+/// then the actual control -- a single free-text `input[name=labels]`
+/// pre-filled from `current` and completed by a [`label_datalist`] of
+/// `known`'s own names. `model.issue`'s labels stay this one
+/// comma/whitespace-separated string field end to end (`EditForm`/
+/// `NewForm`'s own `labels: String`, `parse_labels`), so unlike
+/// [`state_picker`]'s single-choice radios, real independently-toggleable
+/// checkboxes are not this control's shape here: a checkbox group needs
+/// either a repeating-key field (breaking the scalar `labels` the create/
+/// edit handlers and `tests/router.rs`'s own `seed_issue` already commit
+/// to) or client-side script to merge checkbox state into one text value
+/// (excluded -- this crate works with no JS at all). The datalist gives
+/// "pick existing" a real, working affordance; typing any other word is
+/// "type-and-create".
+fn label_picker(known: &[String], current: &[String]) -> Markup {
+    html! {
+        div {
+            label { "labels" }
+            @if !known.is_empty() {
+                div.picker {
+                    @for label in known {
+                        @let on = current.iter().any(|applied| applied == label);
+                        span class={ "label-chip" (if on { " on" } else { "" }) } { (label) }
+                    }
+                }
+            }
+            input
+                type="text"
+                name="labels"
+                value=(current.join(", "))
+                placeholder="bug, gate"
+                list="issue-labels";
+            (label_datalist(known))
+        }
+    }
+}
+
+/// The `datalist` of every already-used label [`label_picker`]'s free-text
+/// input completes from. Rendered once per form; the two forms never
+/// share a page, so the id never collides (same reasoning the
+/// pre-redesign `state_datalist` carried).
+fn label_datalist(known: &[String]) -> Markup {
+    html! {
+        datalist id="issue-labels" {
+            @for label in known { option value=(label) {} }
         }
     }
 }

@@ -95,19 +95,21 @@ where
     ))
 }
 
-/// One member's identity card: the username prominent (a link on the list
-/// page, plain on the member's own page), the key type as a badge, the
-/// state and provenance as muted badges, and the key material truncated
-/// through the middle ([`truncate_middle`]) with the full key line behind
-/// a `<details>` toggle -- no digest dependency, so no fingerprint; the
-/// truncated material plus the expandable full line is the identity a
-/// reader compares. Also `crate::pages::account`'s signed-in-as card, so
-/// "you" and "a member" render identically.
+/// One member's identity card: [`super::avatar`] beside the username
+/// prominent (a link on the list page, plain on the member's own page),
+/// the key type as a badge, the state and provenance as muted badges, and
+/// the key material truncated through the middle ([`truncate_middle`])
+/// with the full key line behind a `<details>` toggle -- no digest
+/// dependency, so no fingerprint; the truncated material plus the
+/// expandable full line is the identity a reader compares. Also
+/// `crate::pages::account`'s signed-in-as card, so "you" and "a member"
+/// render identically.
 pub(crate) fn member_card(username: &str, member: &Member, link: bool) -> Markup {
     let (key_type, material) = split_key(&member.key);
     html! {
         div.card.member-card {
             div.member-head {
+                (super::avatar(username))
                 @if link {
                     a.member-name href={ "/members/" (username) } { (username) }
                 } @else {

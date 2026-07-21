@@ -23,6 +23,7 @@ use gix_object::{Find, Write};
 use maud::{Markup, html};
 
 use crate::error::Result;
+use crate::pages::{scope_class, split_scope};
 use crate::state::AppState;
 
 /// How many commits the History card shows -- a dashboard lane, not the
@@ -66,19 +67,40 @@ where
     );
 
     let attention = attention_card(&state, &open_comments, open_issues.len());
-    Ok(super::layout(
+    // A bespoke `.page-header` rather than [`super::layout`]'s plain
+    // title-only one: the desk's header carries a subtitle and a
+    // right-aligned "local · trusted deployment" line beside the title,
+    // which the shared helper has no slot for. [`super::layout_shell`] is
+    // the same chrome one layer down, so this still shares every other
+    // page's `.wb`/`.wb-bar` shell -- only the `.content` wrapper below is
+    // grown by hand to match.
+    Ok(super::layout_shell(
         &repo,
         &super::identity_label(&state),
         super::Tab::Overview,
         "Dashboard",
         html! {
-            div.desk {
-                (working_tree_card(&state, changes.as_deref()))
-                (attention)
-                (issues_card(&open_issues))
-            }
-            div.desk-wide {
-                (history_card(&history_title, &history))
+            main.content {
+                div.page-header {
+                    div {
+                        h1.page-title { "Dashboard" }
+                        p.page-sub {
+                            "Your morning desk \u{2014} " span.mono { "git status" } " for review and ticketing."
+                        }
+                    }
+                    div.desk-status {
+                        span.dot {}
+                        "local \u{b7} trusted deployment"
+                    }
+                }
+                div.desk {
+                    (working_tree_card(&state, changes.as_deref()))
+                    (attention)
+                    (issues_card(&open_issues))
+                }
+                div.desk-wide {
+                    (history_card(&history_title, &history))
+                }
             }
         },
     ))
@@ -86,31 +108,60 @@ where
 
 /// The "Working tree" card: every changed file [`worktree_changes`] found,
 /// each linking into the Files browser with its open-in-editor affordance
-/// ([`super::editor_open`]) beside it and its change kind right-aligned.
-/// `None` (the status walk itself failed) renders a note row; an empty
-/// list renders a "clean" row -- either way the card itself always
-/// renders, so the desk's shape is stable.
+/// ([`super::editor_open`]) beside it and its change kind chip
+/// ([`kind_chip_class`]) right-aligned. The path sits in a
+/// `.desk-path` container so a long path ellipsizes from the front
+/// (`direction: rtl`) rather than colliding with the editor pill and kind
+/// chip -- both of the latter render inside a plain wrapping `span` so
+/// `ents.css`'s blanket `.card-row a { flex: 1 }` rule (aimed at the path
+/// link) never reaches into them through the descendant selector. `None`
+/// (the status walk itself failed) renders a note row; an empty list
+/// renders a "clean" row -- either way the card itself always renders, so
+/// the desk's shape is stable.
 fn working_tree_card<O: Find>(
     state: &AppState<O>,
     changes: Option<&[(String, &'static str)]>,
 ) -> Markup {
     html! {
         section.card {
-            div.card-header { "Working tree" }
+            div.card-header {
+                "Working tree"
+                @if let Some(changes) = changes {
+                    span.entry-size { (changes.len()) " changed" }
+                }
+            }
             @match changes {
                 None => { div.card-row.muted { "Working-tree status unavailable." } },
                 Some([]) => { div.card-row.muted { "Clean \u{2014} no uncommitted changes." } },
                 Some(changes) => {
                     @for (path, kind) in changes {
                         div.card-row {
-                            a href={ "/files/" (path) } { (path) }
-                            (super::editor_open(state, path, None))
-                            span.entry-size { (kind) }
+                            a.desk-path href={ "/files/" (path) } { (path) }
+                            span { (super::editor_open(state, path, None)) }
+                            span class={ "chip " (kind_chip_class(kind)) } { (kind) }
                         }
                     }
                 },
             }
         }
+    }
+}
+
+/// The `.chip-*` color class for a working-tree row's change-kind label
+/// (README's ChangeKindLabel component): green for a new addition, amber
+/// for an ordinary modification, red for a deletion or an unresolved
+/// conflict, indigo for a rename, and the neutral gray fallback for
+/// anything else ([`change_kind`]'s "untracked" and "type changed" both
+/// land here, matching the prototype's own `kindStyle` fallback). `.chip`
+/// itself (`ents.css`) supplies the pill's shape; this only picks its
+/// color.
+fn kind_chip_class(kind: &str) -> &'static str {
+    match kind {
+        "added" => "chip-added",
+        "modified" => "chip-modified",
+        "deleted" | "conflict" => "chip-deleted",
+        "renamed" => "chip-renamed",
+        _ => "chip-untracked",
     }
 }
 
@@ -130,7 +181,10 @@ fn attention_card<O: Find>(
             }
             @for (id, comment) in open_comments {
                 a.attention-row href={ "/comments/" (id) } {
-                    span.what { "open thread \u{2014} \u{201c}" (what_line(&comment.body)) "\u{201d}" }
+                    span.what {
+                        span.lead { "open thread" }
+                        " \u{2014} \u{201c}" (what_line(&comment.body)) "\u{201d}"
+                    }
                     span class="where" { (comment_where(state, comment)) }
                 }
             }
@@ -153,7 +207,7 @@ fn issues_card(open_issues: &[(String, ents_forge::Issue)]) -> Markup {
         section.card {
             div.card-header {
                 "Issues"
-                a.btn.btn-ghost href="/issues" { "New" }
+                a.btn.btn-ghost.btn-sm href="/issues" { "+ New" }
             }
             @if open_issues.is_empty() {
                 div.card-row.muted { "No open issues." }
@@ -188,7 +242,7 @@ fn history_card(title: &str, rows: &[super::commits::CommitRow]) -> Markup {
                         },
                         None => { span.desk-subject { (row.subject) } },
                     }
-                    span.entry-size { (row.ago) }
+                    span.desk-when { (row.ago) }
                 }
             }
         }
@@ -225,28 +279,6 @@ fn comment_where<O: Find>(state: &AppState<O>, comment: &ents_forge::comment::Co
         .context
         .clone()
         .unwrap_or_else(|| "unanchored".to_owned())
-}
-
-/// Split a Scoped-Commits subject (`<scope>: <description>`,
-/// scopedcommits.com) into its scope and description -- `None` when the
-/// subject carries no `^[a-z-]+:` prefix, in which case the whole subject
-/// renders unchipped.
-fn split_scope(subject: &str) -> Option<(&str, &str)> {
-    let (scope, rest) = subject.split_once(':')?;
-    if scope.is_empty() || !scope.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
-        return None;
-    }
-    Some((scope, rest.trim_start()))
-}
-
-/// The `.scope-c{n}` color class for `scope`: a stable hash of the scope
-/// name onto the stylesheet's six `--s-*` syntax-token colors, so the same
-/// scope always chips the same color across pages and requests.
-fn scope_class(scope: &str) -> String {
-    let hash = scope.bytes().fold(0u32, |acc, byte| {
-        acc.wrapping_mul(31).wrapping_add(u32::from(byte))
-    });
-    format!("scope-c{}", hash.checked_rem(6).unwrap_or(0))
 }
 
 /// Every changed path in the working tree against `HEAD` and the index --
