@@ -7,7 +7,7 @@
 # (`roots.single-node-hosted`, phase 6), a dedicated app so its shared
 # anycast proxy never round-robins traffic onto legacy's stopped machine.
 
-app = 'git-ents-hosted'
+app = 'git-ents-server'
 primary_region = 'iad'
 
 [build]
@@ -22,16 +22,13 @@ primary_region = 'iad'
   PUBLIC_HOST = 'git.ents.cloud'
 
 [mounts]
-  source = 'git_ents_hosted'
+  source = 'git_ents_server'
   destination = '/data'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Suspend, not stop: web sessions and sign-in challenges are memory-only
-  # by spec (`roots.web-session`), and suspend preserves RAM across idle
-  # periods — a deploy or crash still drops them, which the spec accepts.
-  auto_stop_machines = 'suspend'
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
