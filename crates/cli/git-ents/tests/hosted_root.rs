@@ -117,6 +117,9 @@ fn bootstrap_push_round_trips_through_the_hosted_root() {
     let key = common::write_key_in(clone_dir.path(), 21);
     build_member_commit(clone_dir.path(), &key, "jdc");
 
+    // The very first push, before any member is enrolled, is admitted
+    // unsigned — the bootstrap window (`gate.bootstrap`)'s transport
+    // counterpart: nobody is enrolled yet to have signed it as.
     let push = git(
         clone_dir.path(),
         &["push", "origin", "refs/meta/member/jdc"],
@@ -247,7 +250,13 @@ fn unauthorized_push_is_refused_by_the_hosted_root() {
     )
     .expect("evaluates");
     git_ents::mutate::outcome_to_result(outcome, None).expect("admin may set the epoch");
-    let push = git(admin_clone.path(), &["push", "origin", "refs/meta/config"]);
+    // Admin is now an enrolled, active member, so this push must itself
+    // carry a valid signed-push certificate under the admin's key.
+    common::configure_signing(admin_clone.path(), &admin_key);
+    let push = git(
+        admin_clone.path(),
+        &["push", "--signed=if-asked", "origin", "refs/meta/config"],
+    );
     assert!(push.status.success(), "{push:?}");
 
     // Now a second, unenrolled signer tries to enroll a member directly —
@@ -270,9 +279,20 @@ fn unauthorized_push_is_refused_by_the_hosted_root() {
     assert!(fetch.status.success(), "{fetch:?}");
     build_member_commit(outsider_clone.path(), &outsider_key, "mallory");
 
+    // Admin is already enrolled by this point, so the hosted root now
+    // requires every push to be signed; sign this one too, so the
+    // rejection below demonstrates the mandatory gate refusing an
+    // unauthorized (if honestly identified) signer, not merely an
+    // unsigned push.
+    common::configure_signing(outsider_clone.path(), &outsider_key);
     let push = git(
         outsider_clone.path(),
-        &["push", "origin", "refs/meta/member/mallory"],
+        &[
+            "push",
+            "--signed=if-asked",
+            "origin",
+            "refs/meta/member/mallory",
+        ],
     );
     assert!(
         !push.status.success(),

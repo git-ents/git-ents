@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore as _};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 
 use crate::error::{Error, Result};
@@ -53,9 +53,10 @@ pub fn run(root: &LocalRoot, key: Option<PathBuf>) -> Result<PathBuf> {
 
 /// Run `git ents setup --hosted` against the bare repository at `path`:
 /// resolve or generate a signing key for the hosted worker (recorded as
-/// `path`'s own `user.signingkey`/`gpg.format=ssh`, same as [`run`]), and
+/// `path`'s own `user.signingkey`/`gpg.format=ssh`, same as [`run`]),
 /// install this binary's `hook pre-receive`/`hook post-receive` as
-/// `path`'s own git hooks (`roots.single-node-hosted`).
+/// `path`'s own git hooks (`roots.single-node-hosted`), and require every
+/// push to carry a verifiable signed-push certificate (below).
 ///
 /// `receive.denyCurrentBranch=updateInstead` is deliberately not set here:
 /// it is the local-root, checked-out-worktree edge case
@@ -79,7 +80,40 @@ pub fn run_hosted(path: &Path, key: Option<PathBuf>) -> Result<PathBuf> {
     }
     write_pubkey(&resolved)?;
     install_hooks(path)?;
+    configure_signed_push(path)?;
     Ok(resolved)
+}
+
+/// Make `receive-pack` advertise and require the `push-cert` capability:
+/// without `receive.certNonceSeed` set, stock git never advertises it at
+/// all, so `git push --signed` fails with "the receiving end does not
+/// support --signed push" regardless of what `hook pre_receive` goes on
+/// to verify. The seed itself only needs to stay stable across the two
+/// requests one push makes (the capability advertisement and the push
+/// itself) — not across pushes — but is generated once and reused on
+/// every later boot anyway, so an in-flight push spanning a restart still
+/// verifies. `certNonceSlop` tolerates the two requests landing in
+/// different seconds.
+fn configure_signed_push(path: &Path) -> Result<()> {
+    let seed = match get_local_config(path, "receive.certNonceSeed")? {
+        Some(existing) => existing,
+        None => generate_nonce_seed(),
+    };
+    for (key, value) in [
+        ("receive.certNonceSeed", seed.as_str()),
+        ("receive.certNonceSlop", "60"),
+    ] {
+        set_local_config(path, key, value)?;
+    }
+    Ok(())
+}
+
+/// 32 random bytes, hex-encoded — plenty of entropy for a nonce-signing
+/// secret that never leaves this repository's local config.
+fn generate_nonce_seed() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Write the key's public half to `<key>.pub` — the front proxy publishes
@@ -190,6 +224,27 @@ fn set_local_config(repo_path: &Path, key: &str, value: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Read `key` from `repo_path`'s own local config, or `None` if it is
+/// unset — used to make [`configure_signed_push`] idempotent across boots
+/// rather than mint a fresh nonce seed (and so a fresh push-cert
+/// namespace) every deploy.
+fn get_local_config(repo_path: &Path, key: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["config", "--local", "--get", key])
+        .output()
+        .map_err(|source| Error::Io {
+            path: repo_path.to_owned(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 /// Generate a fresh, unencrypted ed25519 key at `path` (creating parent

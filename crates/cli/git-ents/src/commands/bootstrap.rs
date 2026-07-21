@@ -54,6 +54,10 @@ pub fn run(
             discovered
         }
     };
+    // `push`'s `--signed=if-asked` needs git's own signing config to
+    // match the key this command signs the enrollment commits with —
+    // ambient global config may point at a different key, or none.
+    configure_push_signing(root, key.as_deref())?;
     members::add(root, username, None, key.clone())?;
     push(root, remote, username)?;
     let _ = writeln!(out, "enrolled {username} (self-admitting first push)");
@@ -66,14 +70,53 @@ pub fn run(
     Ok(())
 }
 
+/// Set `root`'s own `user.signingkey`/`gpg.format=ssh` to the key this
+/// command signs enrollment commits with, so [`push`]'s `--signed=if-asked`
+/// produces a push certificate under the same key rather than whatever
+/// (or nothing) the ambient global config names.
+fn configure_push_signing(root: &LocalRoot, key: Option<&std::path::Path>) -> Result<()> {
+    let repo = gix::open(&root.path)?;
+    let resolved = crate::sign::resolve_key_path(&repo, key)?;
+    for (name, value) in [
+        ("user.signingkey", resolved.to_string_lossy().into_owned()),
+        ("gpg.format", "ssh".to_owned()),
+    ] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root.path)
+            .args(["config", "--local", name, &value])
+            .output()
+            .map_err(|source| Error::Io {
+                path: root.path.clone(),
+                source,
+            })?;
+        if !output.status.success() {
+            return Err(Error::Io {
+                path: root.path.clone(),
+                source: std::io::Error::other(format!(
+                    "git config --local {name} {value} failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Push `username`'s member ref to `remote` via a real `git push`, so the
 /// remote's own hooks gate the enrollment exactly as any other push.
+///
+/// `--signed=if-asked` signs the push whenever `remote` advertises
+/// `push-cert` (the single-node hosted root does, once `git ents setup
+/// --hosted` has run) and pushes unsigned otherwise — an operator's own
+/// unenrolled key has nothing to sign *as* yet on the very first push of
+/// all, so this cannot unconditionally require `--signed`.
 fn push(root: &LocalRoot, remote: &str, username: &str) -> Result<()> {
     let refspec = format!("refs/meta/member/{username}");
     let output = Command::new("git")
         .arg("-C")
         .arg(&root.path)
-        .args(["push", remote, &refspec])
+        .args(["push", "--signed=if-asked", remote, &refspec])
         .output()
         .map_err(|source| Error::Io {
             path: root.path.clone(),

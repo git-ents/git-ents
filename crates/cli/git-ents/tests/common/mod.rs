@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, reason = "integration test")]
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use ssh_key::private::{Ed25519Keypair, KeypairData};
 use ssh_key::{LineEnding, PrivateKey};
@@ -65,6 +66,27 @@ pub fn write_key(path: &Path, seed: u8) {
     let key = PrivateKey::new(KeypairData::from(pair), "git-ents-test").expect("well-formed");
     key.write_openssh_file(path, LineEnding::LF)
         .expect("write key");
+}
+
+/// Configure `dir`'s own local git config to sign with `key`
+/// (`user.signingkey` + `gpg.format=ssh`) — what a real operator's
+/// `git ents setup` does for a clone, needed here so `git push
+/// --signed=if-asked` against the hosted root (which now always
+/// advertises `push-cert`) actually produces a certificate instead of
+/// silently pushing unsigned.
+pub fn configure_signing(dir: &Path, key: &Path) {
+    for (name, value) in [
+        ("user.signingkey", key.to_str().expect("utf8 path")),
+        ("gpg.format", "ssh"),
+    ] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["config", "--local", name, value])
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "{output:?}");
+    }
 }
 
 /// The path to the built `git-ents` binary under test — `cargo test`
