@@ -4,11 +4,24 @@
 # nginx+fcgiwrap) invokes its `pre-receive`/`post-receive` hooks. No
 # Postgres/Tigris/gix-receive here — that is `git-ents-server`, phase 8.
 #
-# No Rust toolchain, no cargo build, in this image: `docker/bin/git-ents` is
-# a musl static binary cross-compiled on the host (`cargo zigbuild --target
-# x86_64-unknown-linux-musl`) and materialized here from the on-disk blob
-# recorded at `refs/meta/releases/<source-commit-sha>` — never a normal
-# tracked file on `refs/heads` (see `.gitignore`).
+# The binary builds *in* this image, from the same source tree the rest
+# of the deploy comes from — never a separately cross-compiled artifact
+# copied in by hand. That used to be `docker/bin/git-ents`, a musl binary
+# built on the host and materialized here before `docker build`; the
+# whole point of that indirection was to skip a slow in-container Rust
+# build, but it silently deployed stale code whenever someone forgot the
+# manual rebuild step, exactly the failure mode a deploy pipeline exists
+# to prevent.
+FROM rust:1-slim-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-unknown-linux-musl
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p git-ents
+
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 # git: the bare repo + git-http-backend CGI itself.
@@ -26,7 +39,7 @@ RUN apt-get update \
 RUN curl -fsSL https://sprites.dev/install.sh \
     | env SPRITE_INSTALL_PREFERRED_DIRS=/usr/local/bin \
           SPRITE_INSTALL_DEFAULT_BIN_DIR=/usr/local/bin bash
-COPY docker/bin/git-ents /usr/local/bin/git-ents
+COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/git-ents /usr/local/bin/git-ents
 RUN chmod +x /usr/local/bin/git-ents
 COPY docker/nginx.conf /etc/git-ents/nginx.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
