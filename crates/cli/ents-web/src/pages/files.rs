@@ -143,6 +143,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             "Files",
+            false,
             tree_sidebar(&head_tree, "", ""),
             html! {
                 (dir_listing(path, entries))
@@ -170,6 +171,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            true,
             tree_sidebar(&head_tree, path, path),
             html! {
                 (crumbs(path))
@@ -198,6 +200,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            true,
             tree_sidebar(&head_tree, parent, path),
             html! {
                 (crumbs(path))

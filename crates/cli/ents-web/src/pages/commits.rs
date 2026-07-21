@@ -279,6 +279,7 @@ where
         &super::identity_label(&state),
         super::Tab::Commits,
         &subject,
+        false,
         commits_sidebar(&sidebar_rows, object_id),
         html! {
             (super::child_crumbs("commits", "/commits", &super::short_oid(&object_id)))

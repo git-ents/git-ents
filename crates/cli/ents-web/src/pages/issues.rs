@@ -56,6 +56,7 @@ where
         &super::identity_label(&state),
         super::Tab::Issues,
         "Issues",
+        false,
         issues_sidebar(&rows, None),
         html! {
             div.readable {
@@ -171,6 +172,7 @@ where
         &super::identity_label(&state),
         super::Tab::Issues,
         &issue.title,
+        false,
         issues_sidebar(&rows, Some(&id)),
         html! {
             (super::child_crumbs("issues", "/issues", ents_forge::abbreviate_id(&id)))

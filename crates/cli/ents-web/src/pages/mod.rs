@@ -366,11 +366,18 @@ pub(crate) fn layout_meta(
 /// page's own `.page-header` title and `pane` body) on the right. Every
 /// selection in the sidebar is a real URL and the sidebar always renders,
 /// so the split stays SSR-friendly (`docs/web-workbench-plan.adoc`).
+///
+/// `path_title` marks `title` itself as a repository-relative path
+/// (`super::files`'s tree/blob views, the only pages whose title is a path
+/// rather than a name) so the title renders in `.page-title.path`'s
+/// monospace, matching the `.crumbs` trail underneath it instead of
+/// clashing with it in the ordinary heading font.
 pub(crate) fn layout_split(
     repo: &RepoHeader,
     identity: &str,
     active: Tab,
     title: &str,
+    path_title: bool,
     sidebar: Markup,
     pane: Markup,
 ) -> Markup {
@@ -383,7 +390,7 @@ pub(crate) fn layout_split(
             div.split {
                 nav.tree { (sidebar) }
                 main.pane {
-                    div.page-header { h1.page-title { (title) } }
+                    div.page-header { h1.page-title.path[path_title] { (title) } }
                     (pane)
                 }
             }

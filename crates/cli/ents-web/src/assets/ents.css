@@ -312,15 +312,24 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .content h2, .pane h2 { margin: 26px 0 12px; font-size: 14px; font-weight: 600; }
 .content h2:first-child, .pane h2:first-child { margin-top: 0; }
 p.muted { margin-bottom: 16px; font-size: 13px; text-wrap: pretty; }
-.page-header { margin-bottom: 22px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.page-header {
+  margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
 .page-title { font-size: 22px; font-weight: 600; letter-spacing: -.3px; line-height: 1.25; }
+/* A page-title that is itself a repository path (a tree/blob view -- the
+ * `.crumbs` trail right under it names the exact same path) -- monospace so
+ * it reads as the path it is, not prose competing with the crumb trail for
+ * the same information. */
+.page-title.path { font-family: var(--mono); font-size: 18px; word-break: break-all; }
 .page-sub { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
 .page-header .mono { font-family: var(--mono); color: var(--ink-2); }
 /* A `.crumbs` trail directly under a `.page-header` reads as its subtitle --
- * hug it to the title instead of the header's own bottom margin, and push
- * the larger gap to below the crumbs, in front of the page's content. */
-.page-header:has(+ .crumbs) { margin-bottom: 6px; }
-.page-header + .crumbs { margin-bottom: 22px; }
+ * hug it to the title instead of the header's own bottom border/margin, and
+ * move that border/gap to below the crumbs, in front of the page's content,
+ * so the title and its path trail read as one grouped header. */
+.page-header:has(+ .crumbs) { margin-bottom: 6px; padding-bottom: 0; border-bottom: none; }
+.page-header + .crumbs { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 
 /* ========================= CARDS ========================= */
 .card {
@@ -641,7 +650,7 @@ form button:hover { background: var(--accent-2); }
 /* Inline comment composer (`assets/ents.js` clones `composer-template`). */
 .blob tr.blob-composer td { padding: 0; background: var(--surface); }
 .composer-form {
-  margin: 5px 26px 8px 52px; background: var(--surface); border: 1px solid var(--accent);
+  margin: 5px 26px 8px 52px; max-width: 640px; background: var(--surface); border: 1px solid var(--accent);
   border-radius: 9px; padding: 12px 13px; box-shadow: 0 4px 14px rgba(74, 63, 196, .1);
 }
 .composer-form textarea { min-height: 74px; }
