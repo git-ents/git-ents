@@ -110,6 +110,7 @@ where
         )
         .route("/agents/{id}", get(pages::agents::show::<O>))
         .route("/agents/{id}/confirm", post(pages::agents::confirm::<O>))
+        .route("/agents/{id}/review", post(pages::agents::open_review::<O>))
         .route(
             "/agents/{id}/chat",
             get(pages::agent_chat::show::<O>).post(pages::agent_chat::send::<O>),

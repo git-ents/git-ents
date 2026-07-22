@@ -19,7 +19,9 @@ pub use command::{
     confirm, draft_plan, draft_plan_transition, finish, finish_transition, list, list_all, new,
     reopen, revise_plan, show,
 };
-pub use dispatch::{Dispatch, PlanDispatch, dispatch, dispatch_plan};
+pub use dispatch::{
+    Dispatch, PlanDispatch, ReviewDispatch, dispatch, dispatch_plan, dispatch_review,
+};
 pub use entity::{
     AgentSession, Confirm, FailureReason, ReviewPolicy, SessionMeta, Status, ToolchainPin,
 };

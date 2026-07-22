@@ -280,6 +280,23 @@ pub fn post_receive(
                 &|payload| signer.sign(payload),
                 Mode::Mandatory,
             )?;
+        } else if effect_name == crate::review_worker::AGENT_REVIEW_NAME {
+            // The `agent-review` effect (`docs/agent-sessions-plan.adoc`'s
+            // Phase 5) needs its own bespoke handling too, but for the
+            // opposite reason `agent-exec`/`agent-plan` do: it runs no
+            // sandboxed command at all (`crate::review_worker`'s own doc),
+            // so `executor`/`toolchains`/`effect.run` — resolved above for
+            // every effect uniformly — are simply unused for this one.
+            crate::review_worker::run_agent_review(
+                &root.refs,
+                &root.objects,
+                &root.events,
+                oid,
+                ents_model::MemberId::new(crate::root::HOSTED_WORKER_NAME),
+                &author,
+                &|payload| signer.sign(payload),
+                Mode::Mandatory,
+            )?;
         } else {
             run_one(
                 &root.refs,

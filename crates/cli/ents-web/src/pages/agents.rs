@@ -175,6 +175,7 @@ where
     // navigation chrome, never a reason to fail the session's own page.
     let (rows, _unreadable) =
         agent::list_all(state.refs.as_ref(), &*state.objects()).unwrap_or_default();
+    let offer_manual_review = manual_review_still_open(&state, &agent_session);
 
     Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
@@ -233,6 +234,9 @@ where
                     }
                     @if agent_session.awaiting_confirmation() {
                         (confirm_form(&session, &id))
+                    }
+                    @if offer_manual_review {
+                        (open_review_form(&session, &id))
                     }
                 }
                 h2 { "Timeline" }
@@ -525,6 +529,164 @@ where
 /// The form fields `POST /agents/{id}/confirm` accepts.
 #[derive(Debug, Deserialize)]
 pub struct ConfirmForm {
+    /// The per-session CSRF token (`roots.web-session`).
+    csrf: String,
+}
+
+/// Whether [`show`] should offer the manual one-tap "Open review" form
+/// (`docs/agent-sessions-plan.adoc`'s Phase 5, "manual yields none ... and
+/// the session page offers one-tap open"): the session is `Done` with a
+/// result branch, its resolved review policy (the confirm's own frozen
+/// value, falling back to [`ents_forge::agent::SessionMeta::review_policy`]
+/// for the same defensive reason [`ents_forge::agent::dispatch_review`]
+/// itself consults the confirm first) is
+/// [`ReviewPolicy::Manual`], and no review of that result branch's current
+/// tip exists yet under the viewing identity's own resolved member --
+/// mirroring [`ents_forge::agent::dispatch_review`]'s own precondition on
+/// the auto-open side, so the two paths never both claim (or both refuse)
+/// the same session.
+fn manual_review_still_open<O: Find>(state: &AppState<O>, agent_session: &AgentSession) -> bool {
+    if agent_session.meta.status != SessionStatus::Done {
+        return false;
+    }
+    let resolved_policy = agent_session
+        .confirm
+        .as_ref()
+        .map_or(agent_session.meta.review_policy, |confirm| {
+            confirm.review_policy
+        });
+    if resolved_policy != ReviewPolicy::Manual {
+        return false;
+    }
+    let Some(branch) = &agent_session.meta.result_branch else {
+        return false;
+    };
+    let Some(target_hex) = branch_tip_hex(state, branch) else {
+        return false;
+    };
+    let member = session_owner(state);
+    !review_exists(state, &target_hex, &member)
+}
+
+/// The hex oid of `branch`'s current `refs/heads/<branch>` tip, or `None`
+/// when that ref does not resolve in this ref store -- the same lookup
+/// [`result_branch_cell`] performs, factored out so
+/// [`manual_review_still_open`] can reuse it without also building that
+/// cell's own markup.
+fn branch_tip_hex<O: Find>(state: &AppState<O>, branch: &str) -> Option<String> {
+    let name: gix::refs::FullName = format!("refs/heads/{branch}").try_into().ok()?;
+    state
+        .refs
+        .get(name.as_ref())
+        .ok()
+        .flatten()
+        .map(|oid| oid.to_string())
+}
+
+/// Whether a review of `target_hex` already exists under `member`'s own
+/// composite key (`model.review`) -- a plain ref-existence check, since the
+/// manual-open path only ever targets a session's result branch at its
+/// current (post-`Done`, immutable) tip, never a moving target a
+/// fast-forward re-review would need to resolve ancestry for.
+fn review_exists<O: Find>(
+    state: &AppState<O>,
+    target_hex: &str,
+    member: &ents_model::MemberId,
+) -> bool {
+    ents_model::namespace::review_ref(target_hex, member)
+        .ok()
+        .and_then(|name| state.refs.get(name.as_ref()).ok().flatten())
+        .is_some()
+}
+
+/// The one-tap "Open review" form (`POST /agents/{id}/review`): rendered
+/// only while [`manual_review_still_open`] holds -- a plain button, no
+/// fields but the CSRF token, mirroring [`confirm_form`]'s identical
+/// one-tap shape so opening a manual review from a phone is a single tap
+/// too (`docs/agent-sessions-plan.adoc`'s Phase 5).
+fn open_review_form(session: &Session, id: &str) -> Markup {
+    html! {
+        form method="post" action=(format!("/agents/{id}/review")) {
+            (super::csrf_input(session))
+            button type="submit" { "Open review" }
+        }
+    }
+}
+
+/// `POST /agents/{id}/review`: open a review of `id`'s result branch's
+/// current tip -- the manual counterpart of the `agent-review` effect's own
+/// auto-open (`git_ents::review_worker::run_agent_review`), writing through
+/// the identical primitive both that effect and
+/// `crate::pages::commits::review` ultimately share
+/// ([`ents_receive::propose_entity_with_pin`], `receive.multi-ref-atomicity`)
+/// rather than `ents_forge::review::new`'s own repo-path rev-resolution:
+/// the branch tip this page already resolved to decide whether to offer
+/// the form ([`branch_tip_hex`]) is read off this same ref store, so the
+/// commit a POST here reviews is guaranteed to be the exact commit the GET
+/// that rendered the form showed -- no second, possibly divergent
+/// resolution of the same branch name. The opened review carries
+/// [`ents_forge::review::Verdict::Comment`] and a body naming the session,
+/// exactly like the effect's own auto-opened review -- judgment is left to
+/// the reviewer's first comment on it, not this one-tap action.
+///
+/// # Errors
+///
+/// [`crate::Error::BadCsrf`] if `form.csrf` does not match;
+/// [`crate::Error::InvalidArgument`] if the session has no result branch, or
+/// that branch's own ref does not resolve; otherwise propagates
+/// [`ents_receive::propose_entity_with_pin`]'s own failures.
+// @relation(model.review, model.review-pin, receive.multi-ref-atomicity, roots.web-signing, roots.web-session, scope=function)
+pub async fn open_review<O>(
+    State(state): State<Arc<AppState<O>>>,
+    axum::Extension(session): axum::Extension<Session>,
+    Path(id): Path<String>,
+    Form(form): Form<OpenReviewForm>,
+) -> Result<impl IntoResponse>
+where
+    O: Find + Write + Send + 'static,
+{
+    super::require_csrf(&session, &form.csrf)?;
+    let agent_session = agent::show(state.refs.as_ref(), &*state.objects(), &id)?;
+    let branch = agent_session.meta.result_branch.clone().ok_or_else(|| {
+        Error::InvalidArgument(format!("agent session {id} has no result branch to review"))
+    })?;
+    let target_hex = branch_tip_hex(&state, &branch).ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "agent session {id}'s result branch {branch:?} does not resolve"
+        ))
+    })?;
+    let target = ObjectId::from_hex(target_hex.as_bytes()).map_err(|_source| {
+        Error::InvalidArgument(format!("not a well-formed oid: {target_hex}"))
+    })?;
+    let member = session_owner(&state);
+    let review_ref = ents_model::namespace::review_ref(&target_hex, &member)?;
+    let pin_ref = ents_model::namespace::review_pin_ref(&target_hex, &member)?;
+    let review = ents_forge::review::Review::new(
+        target,
+        ents_forge::review::Verdict::Comment,
+        format!("Review opened for agent session {id}."),
+    );
+    let identity = state.identity.as_ref();
+    let outcome = ents_receive::propose_entity_with_pin(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        review_ref,
+        &review,
+        pin_ref,
+        target,
+        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
+        &format!("Open review of agent session {id}'s result"),
+        &format!("Pin review {target_hex}/{member}"),
+        state.mode,
+    )?;
+    crate::error::outcome_to_result(outcome)?;
+    Ok(Redirect::to(&format!("/agents/{id}")))
+}
+
+/// The form fields `POST /agents/{id}/review` accepts.
+#[derive(Debug, Deserialize)]
+pub struct OpenReviewForm {
     /// The per-session CSRF token (`roots.web-session`).
     csrf: String,
 }

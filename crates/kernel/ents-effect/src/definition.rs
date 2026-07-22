@@ -144,6 +144,55 @@ pub fn agent_plan(toolchains: Vec<String>, run: impl Into<String>) -> Effect {
     }
 }
 
+/// The canonical `agent-review` effect's own name
+/// (`docs/agent-sessions-plan.adoc`'s Phase 5, "Auto-open is a follow-on
+/// effect") — the final segment of `refs/meta/effects/agent-review`.
+pub const AGENT_REVIEW_NAME: &str = "agent-review";
+
+/// `agent-review`'s trigger: every `agent-exec` result recorded `pass`
+/// (`query.results`) — the follow-on's own words, "subscribed via
+/// `results(agent-exec)`," resolved to `query.grammar`'s actual two-argument
+/// `results(effect, status)` form. Only a `pass` result is a completed run
+/// with a result branch to review; a `fail`/`error` result names a run that
+/// never reached `Done`, for which there is nothing to open a review of.
+/// This module's own tests pin the exact syntax against the real parser,
+/// mirroring [`AGENT_EXEC_TRIGGER`] and [`AGENT_PLAN_TRIGGER`]'s own tests.
+pub const AGENT_REVIEW_TRIGGER: &str = "results(agent-exec, pass)";
+
+/// The canonical `agent-review` [`Effect`] definition
+/// (`docs/agent-sessions-plan.adoc`'s Phase 5): opening a review is pure
+/// repository mutation (a signed commit onto the review's own entity ref
+/// plus its retention pin) with no sandboxed command to run at all, unlike
+/// [`agent_exec`] and [`agent_plan`] — so unlike those two constructors,
+/// this one takes no `toolchains`/`run` parameters to fix: an effect
+/// definition still carries the two fields (`model.effect-definition`
+/// requires them of every effect), but this handler
+/// (`git_ents::review_worker::run_agent_review`) never resolves a toolchain
+/// or invokes an [`ents_effect`]-crate `Executor` for it, so there is
+/// nothing meaningful a caller could fix them to.
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::definition::{agent_review, validate};
+///
+/// let effect = agent_review();
+/// assert_eq!(effect.name, "agent-review");
+/// assert!(effect.toolchains.is_empty());
+/// validate(&effect).expect("the canonical trigger validates");
+/// ```
+#[must_use]
+pub fn agent_review() -> Effect {
+    Effect {
+        name: AGENT_REVIEW_NAME.to_owned(),
+        trigger: AGENT_REVIEW_TRIGGER.to_owned(),
+        toolchains: Vec::new(),
+        run: "no sandboxed command: agent-review is pure repository mutation, handled entirely \
+              by its composition-root handler"
+            .to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, reason = "unit test")]
@@ -253,5 +302,34 @@ mod tests {
     fn agent_plan_and_agent_exec_share_a_trigger_but_not_a_name() {
         assert_eq!(AGENT_PLAN_TRIGGER, AGENT_EXEC_TRIGGER);
         assert_ne!(AGENT_PLAN_NAME, AGENT_EXEC_NAME);
+    }
+
+    // ---- The canonical `agent-review` definition
+    // (`docs/agent-sessions-plan.adoc`'s Phase 5) ----
+
+    #[rstest]
+    // @relation(query.grammar, query.results, scope=function, role=Verifies)
+    fn agent_review_trigger_parses_against_the_real_query_grammar() {
+        let query: ents_query::Query = AGENT_REVIEW_TRIGGER
+            .parse()
+            .expect("the canonical agent-review trigger parses");
+        assert_eq!(query.results_dependencies(), ["agent-exec"]);
+    }
+
+    #[rstest]
+    // @relation(effect.validation, scope=function, role=Verifies)
+    fn agent_review_definition_validates() {
+        let effect = agent_review();
+        assert_eq!(effect.name, AGENT_REVIEW_NAME);
+        assert!(effect.toolchains.is_empty());
+        validate(&effect).expect("the canonical agent-review definition validates");
+    }
+
+    #[rstest]
+    // @relation(scope=function, role=Verifies)
+    fn agent_review_is_downstream_of_agent_exec_pass_only() {
+        assert!(AGENT_REVIEW_TRIGGER.contains("pass"));
+        assert_ne!(AGENT_REVIEW_NAME, AGENT_EXEC_NAME);
+        assert_ne!(AGENT_REVIEW_NAME, AGENT_PLAN_NAME);
     }
 }

@@ -3766,6 +3766,177 @@ async fn result_record_ref_is_derived_from_the_chains_own_confirmed_commit() {
 }
 
 // ---------------------------------------------------------------------
+// `crate::pages::agents`'s manual one-tap "Open review"
+// (`docs/agent-sessions-plan.adoc`'s Phase 5).
+// ---------------------------------------------------------------------
+
+/// Push a real `refs/heads/<branch>` tip directly through `state`'s own ref
+/// store -- a branch ref needs no signature at all
+/// (`gate.principled-split`), mirroring `git-ents`'s own
+/// `tests/agent.rs::advance_branch` but against this crate's `AppState`
+/// rather than a `LocalRoot`.
+fn advance_branch(state: &AppState<ObjectStore>, branch: &str, seconds: i64) -> gix_hash::ObjectId {
+    let tree = state.objects().write(&Tree::empty()).expect("tree");
+    let oid = write_commit(
+        &*state.objects(),
+        &CommitSpec {
+            tree,
+            parents: vec![],
+            message: format!("agent-exec output for {branch}"),
+            seconds,
+        },
+        None,
+    );
+    let name: gix::refs::FullName = format!("refs/heads/{branch}")
+        .try_into()
+        .expect("valid refname");
+    state
+        .refs
+        .transaction(&[gix_ref_store::RefEdit {
+            name,
+            expected: gix_ref_store::Expected::Any,
+            new: Some(oid),
+        }])
+        .expect("moves the ref");
+    oid
+}
+
+/// A `Done`, `manual`-policy session with a result branch offers the
+/// one-tap "Open review" form; posting it (`POST /agents/{id}/review`)
+/// opens a review of the branch's own tip through the same signed web path
+/// `crate::pages::commits::review` uses for a commit-page review, after
+/// which the form no longer renders -- the review it would open already
+/// exists (`docs/agent-sessions-plan.adoc`'s Phase 5 acceptance: "manual
+/// yields none and the session page offers one-tap open").
+#[tokio::test]
+// @relation(model.review, model.review-pin, roots.web-signing, roots.web-session, lens.parity, scope=function, role=Verifies)
+async fn manual_session_offers_a_one_tap_open_review_form_that_opens_one() {
+    let seed = 30u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "ship the fix").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revise_plan reaches an outcome");
+    ents_forge::agent::confirm(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        None,
+        &identity,
+        state.mode,
+    )
+    .expect("confirm reaches an outcome");
+    ents_forge::agent::claim(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::ClaimAgentSession {
+            worker: MemberId::new("worker-bot"),
+            sprite: "sprite-9".to_owned(),
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("claim reaches an outcome");
+    let branch = "agent/filer/deadbeef";
+    ents_forge::agent::finish(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::FinishAgentSession {
+            outcome: ents_forge::agent::FinishOutcome::Done,
+            result_branch: Some(branch.to_owned()),
+            thread: vec![b"final log".to_vec()],
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("finish reaches an outcome");
+    advance_branch(&state, branch, 1_100);
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("done"));
+    assert!(
+        detail.contains("Open review"),
+        "a done, manual session with a result branch offers the one-tap open: {detail}"
+    );
+
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/agents/{id}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "{:?}",
+        response.status()
+    );
+
+    let after = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(
+        !after.contains("Open review"),
+        "once opened, the one-tap form must not render again"
+    );
+}
+
+/// `POST /agents/{id}/review` without a valid CSRF token is rejected --
+/// this is a state-changing route like every other signed mutation
+/// (`roots.web-session`).
+#[tokio::test]
+// @relation(roots.web-session, scope=function, role=Verifies)
+async fn open_review_is_rejected_without_a_valid_csrf_token() {
+    let seed = 31u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "ship the fix").await;
+
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/agents/{id}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("csrf=not-the-token"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------
 // `crate::pages::agent_chat` (`docs/agent-sessions-plan.adoc`'s Phase 4:
 // the laptop planning-chat page).
 // ---------------------------------------------------------------------
