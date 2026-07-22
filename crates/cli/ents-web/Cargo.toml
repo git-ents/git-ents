@@ -21,6 +21,7 @@ ents-receive = { workspace = true }
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
 facet-reflect = "0.50.0-rc.5"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 getrandom = { workspace = true }
 gix = { workspace = true }
 gix-hash = { workspace = true }

@@ -233,6 +233,7 @@ pub fn build_hosted_state(
         objects,
         events,
         executor: _,
+        credentials: _,
     } = root;
     Ok(Arc::new(
         AppState::new(

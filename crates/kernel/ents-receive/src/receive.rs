@@ -106,7 +106,7 @@ const REDACTIONS_PREFIX: &str = "refs/meta/redactions/";
 ///
 /// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
 /// let config_ref: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
-/// write_meta_entity(&refs, &objects, config_ref, &Config { epoch: Some(200) }, Some(&admin), 200);
+/// write_meta_entity(&refs, &objects, config_ref, &Config { epoch: Some(200), ..Config::default() }, Some(&admin), 200);
 ///
 /// let issue = Issue {
 ///     title: "t".into(), body: "b".into(), state: "open".into(),

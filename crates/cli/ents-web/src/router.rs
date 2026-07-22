@@ -106,6 +106,22 @@ where
             get(pages::issues::show::<O>).post(pages::issues::edit::<O>),
         )
         .route("/issues/{id}/comment", post(pages::issues::comment::<O>))
+        .route(
+            "/agents",
+            get(pages::agents::list::<O>).post(pages::agents::create::<O>),
+        )
+        .route("/agents/{id}", get(pages::agents::show::<O>))
+        .route("/agents/{id}/confirm", post(pages::agents::confirm::<O>))
+        .route("/agents/{id}/review", post(pages::agents::open_review::<O>))
+        .route(
+            "/agents/{id}/chat",
+            get(pages::agent_chat::show::<O>).post(pages::agent_chat::send::<O>),
+        )
+        .route(
+            "/agents/{id}/plan",
+            post(pages::agent_chat::commit_plan::<O>),
+        )
+        .route("/agents/{id}/reopen", post(pages::agent_chat::reopen::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))

@@ -244,12 +244,22 @@ pub fn verify(refs: &dyn RefStoreRead, objects: &dyn Find, update: &Update) -> R
     }
 
     // gate.owner-mutation: a hash-identified entity's ref advances only
-    // under its genesis signer (∪ admins); a review advances only under
-    // the member its refname names. Creation stays provenance-keyed,
-    // already judged by `authorize` above.
+    // under its genesis signer (∪ admins, ∪ designated workers for an
+    // agent session — `docs/agent-sessions-plan.adoc`'s Phase 2a); a
+    // review advances only under the member its refname names. Creation
+    // stays provenance-keyed, already judged by `authorize` above.
     // @relation(gate.owner-mutation, scope=function)
-    if let Some(refusal) = owner_mutation(objects, &update.name, old, new, &members, &id, &member)?
-    {
+    let workers = config::designated_workers(refs, objects)?;
+    if let Some(refusal) = owner_mutation(
+        objects,
+        &update.name,
+        old,
+        new,
+        &members,
+        &id,
+        &member,
+        &workers,
+    )? {
         return Ok(Verdict::Fail(refusal));
     }
 
@@ -611,7 +621,14 @@ fn identity_binding(
         Namespace::Effect | Namespace::Toolchain => {
             bind_natural_key(objects, name, commit.tree, "name", &final_segment(name))
         }
-        Namespace::Comment | Namespace::Issue => bind_hash_identified(objects, name, new),
+        // An agent session is hash-identified exactly like a comment or an
+        // issue: the refname's final segment must be the genesis oid, and
+        // the all-roots walk must find no doppelgänger
+        // (`docs/agent-sessions-plan.adoc`'s Phase 1b, `meta-ref.
+        // identity-binding`).
+        Namespace::Comment | Namespace::Issue | Namespace::AgentSession => {
+            bind_hash_identified(objects, name, new)
+        }
         Namespace::Review => {
             let Some((target, member)) = namespace::parse_review_ref(name.as_ref()) else {
                 return Ok(binding_refusal(
@@ -775,11 +792,18 @@ fn identity_binding(
 }
 
 /// Ownership keys mutation (`gate.owner-mutation`): a hash-identified
-/// entity's ref advances only under its genesis signer or an
-/// admin-registered member; a review advances only under the member its
-/// refname names. Creation stays provenance-keyed (judged by `authorize`),
-/// so this fires only on an advance.
+/// entity's ref advances only under its genesis signer, an admin-registered
+/// member, or — for an agent session only — a designated worker
+/// (`docs/agent-sessions-plan.adoc`'s Phase 2a, `workers`); a review
+/// advances only under the member its refname names. Creation stays
+/// provenance-keyed (judged by `authorize`), so this fires only on an
+/// advance.
 // @relation(gate.owner-mutation, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a private continuation of verify(); grouping these into a struct would only rename \
+              the arguments, same rationale as bootstrap()'s own expect"
+)]
 fn owner_mutation(
     objects: &dyn Find,
     name: &FullName,
@@ -788,6 +812,7 @@ fn owner_mutation(
     members: &[Enrolled],
     signer_id: &MemberId,
     signer: &Member,
+    workers: &[MemberId],
 ) -> Result<Option<Refusal>> {
     let Some(namespace) = namespace::classify(name.as_ref()) else {
         return Ok(None);
@@ -802,6 +827,8 @@ fn owner_mutation(
     };
     let is_admin = signer.provenance == Provenance::AdminRegistered;
     match namespace {
+        // A comment or issue's mutation owner is exactly its genesis
+        // signer (∪ admins).
         Namespace::Comment | Namespace::Issue => {
             // Creation is provenance-keyed; only an advance is owner-keyed.
             if old.is_none() {
@@ -821,6 +848,46 @@ fn owner_mutation(
                 Ok(refuse(format!(
                     "{signer_id} is neither the member whose signature this entity's genesis \
                      carries nor an admin-registered member, so may not advance {}",
+                    name.as_bstr()
+                )))
+            }
+        }
+        // An agent session's mutation owner is its genesis signer (∪
+        // admins, ∪ designated workers): Phase 1b kept this owner-only
+        // because `ents-gate` had no notion of "a claim, once made,
+        // authorizes a different signer"; Phase 2a is that machinery — a
+        // signer listed in `refs/meta/config`'s `workers` roster
+        // (`Config::workers`) may advance any member's session, exactly the
+        // additive narrowing this crate's own module doc predicted for a
+        // future `effect.official` roster over `refs/meta/results/*`. A
+        // worker's advance still passes through every other check
+        // unchanged: `gate.fast-forward` still refuses a non-descendant
+        // tip, and `gate.identity-binding` still refuses a mismatched
+        // refname — a designated worker gains a new signer authorized to
+        // advance the ref, never a way around what "advance" means.
+        Namespace::AgentSession => {
+            // Creation is provenance-keyed; only an advance is owner-keyed.
+            if old.is_none() {
+                return Ok(None);
+            }
+            if is_admin {
+                return Ok(None);
+            }
+            if workers.iter().any(|worker| worker == signer_id) {
+                return Ok(None);
+            }
+            let genesis = all_roots(objects, new)?;
+            let genesis_signer = match genesis.first() {
+                Some(root) => commit_signer(objects, members, *root)?,
+                None => None,
+            };
+            if genesis_signer.as_ref() == Some(signer_id) {
+                Ok(None)
+            } else {
+                Ok(refuse(format!(
+                    "{signer_id} is neither the member whose signature this entity's genesis \
+                     carries, an admin-registered member, nor a designated worker, so may not \
+                     advance {}",
                     name.as_bstr()
                 )))
             }

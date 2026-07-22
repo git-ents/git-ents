@@ -32,6 +32,7 @@ use gix_ref_store::RefStore;
 
 use crate::auth::ChallengeStore;
 use crate::identity::SigningIdentity;
+use crate::planner::{Planner, UnconfiguredPlanner};
 use crate::session::SessionStore;
 
 /// Who may mutate through this deployment's web UI — injected by the
@@ -101,6 +102,11 @@ pub struct AppState<O> {
     /// unless the composition root said otherwise via
     /// [`AppState::with_access`].
     pub access: AccessPolicy,
+    /// The planning-chat page's LLM seam
+    /// (`docs/agent-sessions-plan.adoc`'s Phase 4): [`UnconfiguredPlanner`]
+    /// unless the composition root said otherwise via
+    /// [`AppState::with_planner`].
+    pub planner: Box<dyn Planner>,
 }
 
 impl<O> AppState<O> {
@@ -124,6 +130,7 @@ impl<O> AppState<O> {
             path,
             sessions: SessionStore::default(),
             access: AccessPolicy::Trusted,
+            planner: Box::new(UnconfiguredPlanner),
         }
     }
 
@@ -136,6 +143,17 @@ impl<O> AppState<O> {
     #[must_use]
     pub fn with_access(mut self, access: AccessPolicy) -> Self {
         self.access = access;
+        self
+    }
+
+    /// Replace the default [`UnconfiguredPlanner`] — a real Planner is
+    /// wired the same consuming-builder way once one exists (per-member
+    /// credentials, `docs/agent-sessions-plan.adoc`'s Phase 6), so every
+    /// existing `new` caller stays untouched until a composition root
+    /// opts in.
+    #[must_use]
+    pub fn with_planner(mut self, planner: Box<dyn Planner>) -> Self {
+        self.planner = planner;
         self
     }
 

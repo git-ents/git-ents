@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use ents_kiln::Toolchain;
 use ents_model::{Account, Effect, MemberId, Provenance, Redaction, ResultRecord, Status};
-use ents_receive::{Mode, NullEventSink};
+use ents_receive::{Identity, Mode, NullEventSink};
 use ents_testutil::{
     CommitSpec, Keypair, MemRefStore, ObjectStore, enroll_member, record_result, write_commit,
     write_meta_entity,
@@ -997,7 +997,9 @@ async fn split_pages_render_a_sidebar_with_the_current_selection_active() {
     );
     let detail = get_body(&router, &format!("/issues/{issue_id}")).await;
     assert!(
-        detail.contains(&format!("class=\"side-row active\" href=\"/issues/{issue_id}\"")),
+        detail.contains(&format!(
+            "class=\"side-row active\" href=\"/issues/{issue_id}\""
+        )),
         "the viewed issue highlights in the sidebar"
     );
 }
@@ -1094,6 +1096,7 @@ async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
         "/commits",
         "/reviews",
         "/issues",
+        "/agents",
         "/comments",
         "/meta",
         "/account",
@@ -1103,7 +1106,9 @@ async fn the_rail_carries_every_page_family_and_issues_left_the_meta_rail() {
             "the rail links {href}"
         );
     }
-    for label in ["Dashboard", "Code", "Commits", "Reviews", "Issues", "Threads"] {
+    for label in [
+        "Dashboard", "Code", "Commits", "Reviews", "Issues", "Agents", "Threads",
+    ] {
         assert!(
             overview.contains(&format!("title=\"{label}\"")),
             "the rail tooltips {label}"
@@ -3258,4 +3263,931 @@ async fn mutations_require_a_live_signed_in_member_and_csrf_still_gates() {
             .is_none(),
         "a revoked member is signed out, not left holding a dead session"
     );
+}
+
+// ---------------------------------------------------------------------
+// `crate::pages::agents` (`docs/agent-sessions-plan.adoc`'s Phase 3).
+// ---------------------------------------------------------------------
+
+/// The actor signature every [`Identity`] the agent tests below build
+/// carries -- shaped exactly like [`FixtureIdentity::actor`]. Only this
+/// half factors into a helper: [`Identity::sign`] borrows its closure
+/// (`ents_web::identity`'s own doc explains why: the closure must live in
+/// the caller's own stack frame), so each test still builds its own
+/// `Identity` literal around this, the same shape
+/// `ents_web::receive_identity!` expands to.
+fn fixture_actor(name: &'static str) -> gix::actor::Signature {
+    gix::actor::Signature {
+        name: name.into(),
+        email: format!("{name}@ents.test").into(),
+        time: gix::date::Time {
+            seconds: 1_000,
+            offset: 0,
+        },
+    }
+}
+
+/// `POST /agents`, seeding `prompt` as a fresh session's initial thread
+/// turn -- what the agent tests below start a session through, exercising
+/// the actual signed-write path (`ents_forge::agent::new`) rather than
+/// poking the ref store directly. Asserts the write succeeded (a redirect
+/// to the new session's own page) and returns its id, read from that
+/// redirect's `Location` (`/agents/<id>`).
+async fn seed_agent_via_web(
+    router: &axum::Router,
+    state: &AppState<ObjectStore>,
+    prompt: &str,
+) -> String {
+    let (cookie, csrf) = session_cookie_and_csrf(router, state, "/agents").await;
+    let form = format!(
+        "prompt={}&base_ref=refs%2Fheads%2Fmain&model=claude-sonnet-5&review_policy=manual&csrf={csrf}",
+        prompt.replace(' ', "+")
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/agents")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(form))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "agent session create did not succeed: {:?}",
+        response.status()
+    );
+    response
+        .headers()
+        .get(header::LOCATION)
+        .expect("a successful agent create redirects to the new session")
+        .to_str()
+        .expect("ascii")
+        .strip_prefix("/agents/")
+        .expect("redirect targets /agents/<id>")
+        .to_owned()
+}
+
+/// A freshly started session (no plan yet) renders as `planning` on both
+/// the index and its own detail page, offers no confirm form, and never
+/// leaks its seed prompt -- a thread turn like any other, never rendered
+/// (`ents_forge::agent::AgentSession`'s own "never rendered" contract).
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn agents_index_and_detail_render_a_freshly_started_session_as_planning_with_no_thread_leak()
+{
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(21),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "top secret task instructions").await;
+
+    let index = get_body(&router, "/agents").await;
+    assert!(index.contains(ents_forge::abbreviate_id(&id)));
+    assert!(index.contains("planning"));
+    assert!(
+        !index.contains("top secret task instructions"),
+        "thread content (the seed prompt) must never render on the list page"
+    );
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("planning"));
+    assert!(detail.contains("No plan has been drafted yet."));
+    assert!(
+        !detail.contains("Confirm plan"),
+        "no confirm form before a plan exists"
+    );
+    assert!(
+        !detail.contains("top secret task instructions"),
+        "thread content (the seed prompt) must never render on the detail page either"
+    );
+}
+
+/// `roots.web-session`: starting a session is a state-changing route, so a
+/// `POST /agents` with no CSRF field at all is rejected, and one with the
+/// wrong token is a bad request -- the same gate every mutation in this
+/// crate runs behind.
+#[tokio::test]
+// @relation(roots.web-session, scope=function, role=Verifies)
+async fn agent_create_is_rejected_without_a_valid_csrf_token() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(22),
+    });
+    let router = ents_web::router(Arc::clone(&state));
+
+    let no_csrf = router
+        .clone()
+        .oneshot(
+            Request::post("/agents")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "prompt=sneaky&base_ref=HEAD&model=claude-sonnet-5&review_policy=manual",
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        !no_csrf.status().is_success() && !no_csrf.status().is_redirection(),
+        "a POST with no csrf field must not start a session"
+    );
+
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let wrong = router
+        .oneshot(
+            Request::post("/agents")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(
+                    "prompt=sneaky&base_ref=HEAD&model=claude-sonnet-5&review_policy=manual&csrf=not-the-token",
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A plan drafted (via `ents_forge::agent::revise_plan`, standing in for
+/// Phase 4's not-yet-built planning surface) puts a session in `awaiting
+/// confirmation` with a one-tap Confirm form; posting it
+/// (`POST /agents/{id}/confirm`) is a signed, CSRF-checked mutation that
+/// binds the plan's hash and reads back as `queued`, with the confirm form
+/// gone.
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn confirming_an_awaiting_session_transitions_it_to_queued_through_a_signed_post() {
+    let seed = 23u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "draft a fix").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revise_plan reaches an outcome");
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("awaiting confirmation"));
+    assert!(
+        detail.contains("Confirm plan"),
+        "a plan with no current confirm shows the one-tap confirm form"
+    );
+
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/agents/{id}/confirm"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "{:?}",
+        response.status()
+    );
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("queued"));
+    assert!(
+        !detail.contains("Confirm plan"),
+        "a queued session no longer shows the confirm form"
+    );
+}
+
+/// Every one of the six derived states
+/// (`docs/agent-sessions-plan.adoc`'s Phase 3: planning, awaiting
+/// confirmation, queued, running, done, failed) renders distinctly on the
+/// index, the running session's own sandbox name renders verbatim, the
+/// done/failed sessions show their result branch/failure detail -- and no
+/// session's thread content ever appears on either the index or any
+/// detail page, whatever its state.
+#[tokio::test]
+// @relation(lens.parity, scope=function, role=Verifies)
+async fn agents_index_renders_every_derived_state_distinctly_and_never_leaks_thread_content() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+
+    let base = |member: &str, seconds: i64| {
+        ents_forge::agent::SessionMeta::new(
+            MemberId::new(member),
+            seconds,
+            "claude-sonnet-5",
+            vec![],
+            "refs/heads/main",
+            ents_forge::agent::ReviewPolicy::Manual,
+            None,
+        )
+    };
+
+    let planning = ents_forge::agent::AgentSession {
+        meta: base("jdc", 100),
+        plan: None,
+        confirm: None,
+        thread: vec![b"thread marker planning".to_vec()],
+    };
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-planning").expect("valid"),
+        &planning,
+        None,
+        100,
+    );
+
+    let mut awaiting = ents_forge::agent::AgentSession {
+        meta: base("jdc", 200),
+        plan: Some("draft plan".to_owned()),
+        confirm: None,
+        thread: vec![b"thread marker awaiting".to_vec()],
+    };
+    awaiting.meta.status = ents_forge::agent::Status::Ready;
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-awaiting").expect("valid"),
+        &awaiting,
+        None,
+        200,
+    );
+
+    let mut queued = ents_forge::agent::AgentSession {
+        meta: base("jdc", 300),
+        plan: Some("confirmed plan".to_owned()),
+        confirm: None,
+        thread: vec![b"thread marker queued".to_vec()],
+    };
+    queued.meta.status = ents_forge::agent::Status::Ready;
+    let hash = queued.plan_hash().expect("plan set");
+    queued.confirm = Some(ents_forge::agent::Confirm::new(
+        hash,
+        ents_forge::agent::ReviewPolicy::Manual,
+    ));
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-queued").expect("valid"),
+        &queued,
+        None,
+        300,
+    );
+
+    let mut running = ents_forge::agent::AgentSession {
+        meta: base("jdc", 400),
+        plan: Some("confirmed plan".to_owned()),
+        confirm: None,
+        thread: vec![b"thread marker running".to_vec()],
+    };
+    running.meta.status = ents_forge::agent::Status::Running;
+    running.meta.sprite = Some("sprite-42".to_owned());
+    running.meta.worker = Some(MemberId::new("worker-bot"));
+    running.meta.started = Some(400);
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-running").expect("valid"),
+        &running,
+        None,
+        400,
+    );
+
+    let mut done = ents_forge::agent::AgentSession {
+        meta: base("jdc", 500),
+        plan: Some("confirmed plan".to_owned()),
+        confirm: None,
+        thread: vec![b"thread marker done".to_vec()],
+    };
+    done.meta.status = ents_forge::agent::Status::Done;
+    done.meta.result_branch = Some("agent/jdc/deadbeef".to_owned());
+    done.meta.finished = Some(500);
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-done").expect("valid"),
+        &done,
+        None,
+        500,
+    );
+
+    let mut failed = ents_forge::agent::AgentSession {
+        meta: base("jdc", 600),
+        plan: Some("confirmed plan".to_owned()),
+        confirm: None,
+        thread: vec![b"thread marker failed".to_vec()],
+    };
+    failed.meta.status = ents_forge::agent::Status::Failed(ents_forge::agent::FailureReason {
+        detail: "sandbox died".to_owned(),
+    });
+    failed.meta.finished = Some(600);
+    write_meta_entity(
+        &refs,
+        &objects,
+        ents_model::namespace::agent_session_ref("s-failed").expect("valid"),
+        &failed,
+        None,
+        600,
+    );
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "filer",
+            key: Keypair::from_seed(24),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state.clone());
+
+    let index = get_body(&router, "/agents").await;
+    for label in [
+        "planning",
+        "awaiting confirmation",
+        "queued",
+        "running",
+        "done",
+        "failed",
+    ] {
+        assert!(index.contains(label), "the index shows the {label} state");
+    }
+    for marker in [
+        "thread marker planning",
+        "thread marker awaiting",
+        "thread marker queued",
+        "thread marker running",
+        "thread marker done",
+        "thread marker failed",
+    ] {
+        assert!(
+            !index.contains(marker),
+            "thread content must never render on the list page: {marker}"
+        );
+    }
+
+    let running_detail = get_body(&router, "/agents/s-running").await;
+    assert!(
+        running_detail.contains("sprite-42"),
+        "the sandbox name renders verbatim while running"
+    );
+    assert!(!running_detail.contains("thread marker running"));
+
+    let done_detail = get_body(&router, "/agents/s-done").await;
+    assert!(done_detail.contains("agent/jdc/deadbeef"));
+    assert!(!done_detail.contains("thread marker done"));
+
+    let failed_detail = get_body(&router, "/agents/s-failed").await;
+    assert!(failed_detail.contains("sandbox died"));
+    assert!(!failed_detail.contains("thread marker failed"));
+}
+
+/// The "result record" ref [`crate::pages::agents::show`] displays for a
+/// terminal session is derived from the chain's own confirmed-and-queued
+/// commit -- exactly what `git-ents::agent_worker::run_agent_exec` reads
+/// as its own dispatched oid -- and reads back as "not yet recorded" until
+/// a result actually lands at that derived ref, then as recorded once one
+/// does.
+#[tokio::test]
+// @relation(lens.parity, effect.results-writeback, scope=function, role=Verifies)
+async fn result_record_ref_is_derived_from_the_chains_own_confirmed_commit() {
+    let seed = 25u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "ship the fix").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revise_plan reaches an outcome");
+    ents_forge::agent::confirm(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        None,
+        &identity,
+        state.mode,
+    )
+    .expect("confirm reaches an outcome");
+
+    let ref_name = ents_model::namespace::agent_session_ref(&id).expect("valid");
+    let confirmed_tip = state
+        .refs
+        .get(ref_name.as_ref())
+        .expect("read")
+        .expect("confirmed tip exists");
+
+    ents_forge::agent::claim(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::ClaimAgentSession {
+            worker: MemberId::new("worker-bot"),
+            sprite: "sprite-9".to_owned(),
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("claim reaches an outcome");
+    ents_forge::agent::finish(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::FinishAgentSession {
+            outcome: ents_forge::agent::FinishOutcome::Done,
+            result_branch: Some("agent/filer/deadbeef".to_owned()),
+            thread: vec![b"final log".to_vec()],
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("finish reaches an outcome");
+
+    let expected_short = ents_effect::run::short_oid(confirmed_tip);
+    let result_ref =
+        ents_model::namespace::result_ref("agent-exec", &expected_short).expect("valid");
+    let result_ref_display = result_ref.as_bstr().to_string();
+
+    let before = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(before.contains(&result_ref_display));
+    assert!(before.contains("not yet recorded"));
+
+    let record = ResultRecord::new("agent-exec", confirmed_tip, Status::Pass);
+    ents_receive::propose_entity(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        result_ref.clone(),
+        &record,
+        &identity,
+        "Record agent-exec result",
+        state.mode,
+    )
+    .expect("reaches an outcome");
+
+    let after = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(after.contains(&result_ref_display));
+    assert!(!after.contains("not yet recorded"));
+}
+
+// ---------------------------------------------------------------------
+// `crate::pages::agents`'s manual one-tap "Open review"
+// (`docs/agent-sessions-plan.adoc`'s Phase 5).
+// ---------------------------------------------------------------------
+
+/// Push a real `refs/heads/<branch>` tip directly through `state`'s own ref
+/// store -- a branch ref needs no signature at all
+/// (`gate.principled-split`), mirroring `git-ents`'s own
+/// `tests/agent.rs::advance_branch` but against this crate's `AppState`
+/// rather than a `LocalRoot`.
+fn advance_branch(state: &AppState<ObjectStore>, branch: &str, seconds: i64) -> gix_hash::ObjectId {
+    let tree = state.objects().write(&Tree::empty()).expect("tree");
+    let oid = write_commit(
+        &*state.objects(),
+        &CommitSpec {
+            tree,
+            parents: vec![],
+            message: format!("agent-exec output for {branch}"),
+            seconds,
+        },
+        None,
+    );
+    let name: gix::refs::FullName = format!("refs/heads/{branch}")
+        .try_into()
+        .expect("valid refname");
+    state
+        .refs
+        .transaction(&[gix_ref_store::RefEdit {
+            name,
+            expected: gix_ref_store::Expected::Any,
+            new: Some(oid),
+        }])
+        .expect("moves the ref");
+    oid
+}
+
+/// A `Done`, `manual`-policy session with a result branch offers the
+/// one-tap "Open review" form; posting it (`POST /agents/{id}/review`)
+/// opens a review of the branch's own tip through the same signed web path
+/// `crate::pages::commits::review` uses for a commit-page review, after
+/// which the form no longer renders -- the review it would open already
+/// exists (`docs/agent-sessions-plan.adoc`'s Phase 5 acceptance: "manual
+/// yields none and the session page offers one-tap open").
+#[tokio::test]
+// @relation(model.review, model.review-pin, roots.web-signing, roots.web-session, lens.parity, scope=function, role=Verifies)
+async fn manual_session_offers_a_one_tap_open_review_form_that_opens_one() {
+    let seed = 30u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "ship the fix").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revise_plan reaches an outcome");
+    ents_forge::agent::confirm(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        None,
+        &identity,
+        state.mode,
+    )
+    .expect("confirm reaches an outcome");
+    ents_forge::agent::claim(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::ClaimAgentSession {
+            worker: MemberId::new("worker-bot"),
+            sprite: "sprite-9".to_owned(),
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("claim reaches an outcome");
+    let branch = "agent/filer/deadbeef";
+    ents_forge::agent::finish(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        ents_forge::agent::FinishAgentSession {
+            outcome: ents_forge::agent::FinishOutcome::Done,
+            result_branch: Some(branch.to_owned()),
+            thread: vec![b"final log".to_vec()],
+        },
+        &identity,
+        state.mode,
+    )
+    .expect("finish reaches an outcome");
+    advance_branch(&state, branch, 1_100);
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("done"));
+    assert!(
+        detail.contains("Open review"),
+        "a done, manual session with a result branch offers the one-tap open: {detail}"
+    );
+
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/agents/{id}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        response.status().is_redirection(),
+        "{:?}",
+        response.status()
+    );
+
+    let after = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(
+        !after.contains("Open review"),
+        "once opened, the one-tap form must not render again"
+    );
+}
+
+/// `POST /agents/{id}/review` without a valid CSRF token is rejected --
+/// this is a state-changing route like every other signed mutation
+/// (`roots.web-session`).
+#[tokio::test]
+// @relation(roots.web-session, scope=function, role=Verifies)
+async fn open_review_is_rejected_without_a_valid_csrf_token() {
+    let seed = 31u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "ship the fix").await;
+
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/agents").await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/agents/{id}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("csrf=not-the-token"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------
+// `crate::pages::agent_chat` (`docs/agent-sessions-plan.adoc`'s Phase 4:
+// the laptop planning-chat page).
+// ---------------------------------------------------------------------
+
+/// `POST path` with a signed-in session's cookie and a form-encoded body,
+/// returning the response -- the chat-page tests' own thin wrapper around
+/// the same request shape [`agent_create_is_rejected_without_a_valid_csrf_token`]
+/// builds inline, factored out here since every test below needs at least
+/// one.
+async fn post_form(
+    router: &axum::Router,
+    path: &str,
+    cookie: &str,
+    body: String,
+) -> axum::http::Response<Body> {
+    router
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call")
+}
+
+/// A freshly started (`planning`) session's detail page links to its own
+/// planning-chat page, which itself renders the composer and the seeded
+/// prompt (the one place a thread blob is deliberately rendered -- see
+/// `crate::pages::agent_chat`'s own doc: it is the very page that wrote
+/// it, for the member who wrote it).
+#[tokio::test]
+// @relation(lens.parity, scope=function, role=Verifies)
+async fn agent_detail_links_to_chat_and_chat_renders_the_composer_and_prompt() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(30),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "reproduce the flaky test").await;
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains(&format!("/agents/{id}/chat")));
+
+    let chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(chat.contains("data-agent-chat"));
+    assert!(chat.contains("reproduce the flaky test"));
+    assert!(!chat.contains("Reopen for planning"));
+}
+
+/// `POST /agents/{id}/chat` appends the member's message and the injected
+/// `Planner`'s reply (`ents_web::planner::UnconfiguredPlanner`, the
+/// default every composition root installs) in one commit, both of which
+/// then render on a reload of the chat page.
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn agent_chat_send_appends_the_turn_pair_and_renders_the_stub_planners_reply() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(31),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=what+should+the+plan+look+like%3F&csrf={csrf}"),
+    )
+    .await;
+    assert!(response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(
+        session.thread.len(),
+        3,
+        "prompt + user turn + assistant turn"
+    );
+
+    let chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(chat.contains("what should the plan look like?"));
+    assert!(chat.to_lowercase().contains("not configured"));
+}
+
+/// `roots.web-session`: `POST /agents/{id}/chat` is a state-changing route,
+/// refused without a valid CSRF token exactly like every other mutation in
+/// this crate.
+#[tokio::test]
+// @relation(roots.web-session, scope=function, role=Verifies)
+async fn agent_chat_send_is_rejected_without_a_valid_csrf_token() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(32),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, _csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        "message=sneaky&csrf=wrong".to_owned(),
+    )
+    .await;
+    assert!(!response.status().is_success() && !response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(
+        session.thread.len(),
+        1,
+        "the bad-csrf message must not land"
+    );
+}
+
+/// `docs/agent-sessions-plan.adoc`'s Phase 4 acceptance: once a session is
+/// confirmed and queued, `POST /agents/{id}/chat` refuses rather than
+/// silently un-queueing it; `POST /agents/{id}/reopen` is the explicit
+/// un-queue that returns it to `planning`, after which chatting works
+/// again.
+#[tokio::test]
+// @relation(scope=function, role=Verifies)
+async fn agent_chat_refuses_a_queued_session_until_explicitly_reopened() {
+    let seed = 33u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revises");
+    ents_forge::agent::confirm(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        None,
+        &identity,
+        state.mode,
+    )
+    .expect("confirms");
+    assert!(
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id)
+            .expect("shows")
+            .queued()
+    );
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let refused = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=let%27s+change+something&csrf={csrf}"),
+    )
+    .await;
+    assert!(
+        !refused.status().is_success() && !refused.status().is_redirection(),
+        "a queued session must refuse a chat message rather than silently un-queue"
+    );
+
+    let queued_chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(queued_chat.contains("Reopen for planning"));
+
+    let reopened = post_form(
+        &router,
+        &format!("/agents/{id}/reopen"),
+        &cookie,
+        format!("csrf={csrf}"),
+    )
+    .await;
+    assert!(reopened.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(session.meta.status, ents_forge::agent::Status::Planning);
+    assert!(session.confirm.is_none());
+
+    let sent = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=let%27s+change+something&csrf={csrf}"),
+    )
+    .await;
+    assert!(
+        sent.status().is_redirection(),
+        "chatting works again once the session is reopened"
+    );
+}
+
+/// `POST /agents/{id}/plan` commits the plan editor's text via
+/// `ents_forge::agent::revise_plan`, transitioning the session to
+/// `ready`/awaiting-confirmation -- the same commit path
+/// `docs/agent-sessions-plan.adoc`'s Phase 4 names for both this chat page
+/// and the headless `agent-plan` effect.
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn agent_plan_commit_transitions_to_ready_awaiting_confirmation() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(34),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/plan"),
+        &cookie,
+        format!("plan=1.+read+the+test%0A2.+fix+it&csrf={csrf}"),
+    )
+    .await;
+    assert!(response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(session.meta.status, ents_forge::agent::Status::Ready);
+    assert!(session.awaiting_confirmation());
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("Confirm plan"));
 }

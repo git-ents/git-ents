@@ -76,7 +76,10 @@ fn forge() -> Forge {
         &refs,
         &objects,
         config_ref,
-        &Config { epoch: Some(200) },
+        &Config {
+            epoch: Some(200),
+            ..Config::default()
+        },
         Some(&admin),
         200,
     );

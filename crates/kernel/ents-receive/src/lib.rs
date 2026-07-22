@@ -70,7 +70,7 @@
 //! enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
 //! let config_ref: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
 //! let tip = write_meta_entity(
-//!     &refs, &objects, config_ref.clone(), &Config { epoch: Some(200) }, Some(&admin), 200,
+//!     &refs, &objects, config_ref.clone(), &Config { epoch: Some(200), ..Config::default() }, Some(&admin), 200,
 //! );
 //!
 //! // The fixture already moved the ref; re-propose the same tip through
@@ -100,8 +100,8 @@ pub use error::{Error, Result};
 pub use outcome::{Mode, Outcome, TxResult};
 pub use proposal::{Proposal, RefTransition, TransportAuth};
 pub use propose::{
-    Identity, propose_delete, propose_entity, propose_entity_with_pin, propose_genesis,
-    propose_genesis_retaining, propose_pin,
+    Identity, entity_transition, propose_delete, propose_entity, propose_entity_with_pin,
+    propose_genesis, propose_genesis_retaining, propose_pin,
 };
 pub use receive::receive;
 pub use reconcile::reconcile;

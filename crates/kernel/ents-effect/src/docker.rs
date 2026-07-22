@@ -73,20 +73,34 @@ pub fn ensure_docker() -> Result<()> {
 /// use ents_effect::executor::EXIT_MARKER;
 /// use std::path::Path;
 ///
-/// let args = run_args(Path::new("/tmp/s/work"), &[], "cargo test");
+/// let args = run_args(Path::new("/tmp/s/work"), &[], "cargo test", &[]);
 /// assert!(args.contains(&"/tmp/s/work:/work".to_owned()));
 /// assert!(args.contains(&"debian:stable-slim".to_owned()));
 /// let script = args.last().expect("has a script");
 /// assert!(script.contains("cargo test") && script.contains(EXIT_MARKER));
 /// ```
 #[must_use]
-pub fn run_args(workdir: &Path, toolchains: &[(String, PathBuf)], command: &str) -> Vec<String> {
+pub fn run_args(
+    workdir: &Path,
+    toolchains: &[(String, PathBuf)],
+    command: &str,
+    env: &[(String, String)],
+) -> Vec<String> {
     let mut args = vec![
         "run".to_owned(),
         "--rm".to_owned(),
         "-v".to_owned(),
         format!("{}:{WORKDIR}", workdir.display()),
     ];
+    // Passed as literal argv entries, never through a shell — `docker run`
+    // itself sets these on the container's environment, so a secret (a
+    // BYOK credential, `SandboxInputs::env`) needs no shell quoting at all
+    // here (unlike `crate::sprite::SpriteExecutor`, which ships the whole
+    // command as one remote shell-script string).
+    for (var, secret) in env {
+        args.push("-e".to_owned());
+        args.push(format!("{var}={secret}"));
+    }
     let mut sandbox_dirs = Vec::with_capacity(toolchains.len());
     for (name, host_dir) in toolchains {
         let sandbox_dir = format!("{TOOLCHAINS_DIR}/{name}/bin");
@@ -115,7 +129,12 @@ impl Executor for DockerExecutor {
     // @relation(effect.result-taxonomy, scope=function)
     fn run(&self, inputs: &SandboxInputs<'_>) -> Result<RunOutput> {
         ensure_docker()?;
-        let args = run_args(inputs.workdir, inputs.toolchains, inputs.command);
+        let args = run_args(
+            inputs.workdir,
+            inputs.toolchains,
+            inputs.command,
+            inputs.env,
+        );
         let output = Command::new("docker")
             .args(&args)
             .output()
@@ -150,7 +169,7 @@ mod tests {
     #[rstest]
     // @relation(effect.execution, scope=function, role=Verifies)
     fn run_args_binds_the_workdir() {
-        let args = run_args(Path::new("/tmp/s/work"), &[], "cargo test");
+        let args = run_args(Path::new("/tmp/s/work"), &[], "cargo test", &[]);
         assert_eq!(
             args,
             vec![
@@ -171,7 +190,7 @@ mod tests {
     #[rstest]
     // @relation(effect.result-taxonomy, scope=function, role=Verifies)
     fn run_args_script_completes_with_the_exit_marker() {
-        let args = run_args(Path::new("/w"), &[], "true");
+        let args = run_args(Path::new("/w"), &[], "true", &[]);
         let script = args.last().expect("has a script");
         assert!(
             script.contains(crate::executor::EXIT_MARKER),
@@ -184,7 +203,7 @@ mod tests {
     // @relation(effect.execution, effect.toolchains, scope=function, role=Verifies)
     fn run_args_binds_each_toolchain_read_only_and_activates_it() {
         let toolchains = vec![("rust".to_owned(), PathBuf::from("/cache/rust/bin"))];
-        let args = run_args(Path::new("/w"), &toolchains, "cargo test");
+        let args = run_args(Path::new("/w"), &toolchains, "cargo test", &[]);
         assert!(args.contains(&"/cache/rust/bin:/toolchains/rust/bin:ro".to_owned()));
         let last = args.last().expect("has a command");
         assert!(last.contains("export PATH=/toolchains/rust/bin:$PATH; cargo test"));
@@ -193,10 +212,23 @@ mod tests {
     #[rstest]
     // @relation(effect.execution, scope=function, role=Verifies)
     fn run_args_uses_the_minimal_base_image() {
-        let args = run_args(Path::new("/w"), &[], "true");
+        let args = run_args(Path::new("/w"), &[], "true", &[]);
         assert_eq!(
             args.get(args.len().saturating_sub(4)).map(String::as_str),
             Some(IMAGE)
         );
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn run_args_passes_env_as_literal_docker_flags_not_shell_text() {
+        let env = vec![("ANTHROPIC_API_KEY".to_owned(), "sk-ant-abc".to_owned())];
+        let args = run_args(Path::new("/w"), &[], "true", &env);
+        assert!(args.contains(&"-e".to_owned()));
+        assert!(args.contains(&"ANTHROPIC_API_KEY=sk-ant-abc".to_owned()));
+        // Never folded into the shell script itself — that's the sprite
+        // backend's own quoting concern, not docker's.
+        let script = args.last().expect("has a script");
+        assert!(!script.contains("sk-ant-abc"));
     }
 }

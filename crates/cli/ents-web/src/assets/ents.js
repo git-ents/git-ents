@@ -222,6 +222,119 @@
 })();
 
 /*
+ * Progressive enhancement for the agent-sessions planning-chat page
+ * (`crate::pages::agent_chat`, `docs/agent-sessions-plan.adoc`'s Phase 4):
+ * intercept the composer's (`form[data-agent-chat]`) submit and stream the
+ * assistant's reply into the transcript instead of a full-page POST and
+ * redirect. The form's own `action`/`method` already work as a plain POST
+ * with no script at all (`crate::pages::agent_chat::send`'s own doc); this
+ * only asks that same route for a streamed, `Accept: text/event-stream`
+ * response instead, via `fetch` (unlike `EventSource`, `fetch` can read a
+ * streamed body from a POST, so no second route is needed just to stream
+ * from -- see that handler's own doc for why a mutating `GET` route was
+ * deliberately rejected).
+ */
+(function () {
+  "use strict";
+
+  var form = document.querySelector("form[data-agent-chat]");
+  var thread = document.querySelector("[data-chat-thread]");
+  if (!form || !thread || typeof window.fetch !== "function") {
+    return;
+  }
+  var input = form.querySelector('textarea[name="message"]');
+
+  function appendTurn(role, text) {
+    var row = document.createElement("div");
+    row.className = "chat-turn chat-" + role;
+    var roleEl = document.createElement("span");
+    roleEl.className = "chat-role";
+    roleEl.textContent = role;
+    var textEl = document.createElement("p");
+    textEl.textContent = text;
+    row.appendChild(roleEl);
+    row.appendChild(textEl);
+    thread.appendChild(row);
+  }
+
+  // A minimal SSE frame parser over a `fetch` response body: `\n\n`
+  // separates events, `field: value` lines within one. Only the two
+  // fields this page's own server side ever sends (`event`, `data`) are
+  // recognized; anything else is ignored rather than failing the stream.
+  function parseFrame(frame) {
+    var event = "message";
+    var data = "";
+    frame.split("\n").forEach(function (line) {
+      if (line.indexOf("event:") === 0) {
+        event = line.slice(6).trim();
+      } else if (line.indexOf("data:") === 0) {
+        data += line.slice(5).trim();
+      }
+    });
+    return { event: event, data: data };
+  }
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var message = input ? input.value : "";
+    if (!message) {
+      return;
+    }
+    appendTurn("user", message);
+    if (input) {
+      input.value = "";
+    }
+    var body = new URLSearchParams();
+    Array.prototype.forEach.call(new FormData(form).entries(), function (entry) {
+      body.append(entry[0], entry[1]);
+    });
+
+    fetch(form.getAttribute("action"), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "text/event-stream",
+      },
+      body: body.toString(),
+    })
+      .then(function (response) {
+        if (!response.body) {
+          return response.text().then(function () {
+            window.location.reload();
+          });
+        }
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) {
+              return;
+            }
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var frames = buffer.split("\n\n");
+            buffer = frames.pop();
+            frames.forEach(function (raw) {
+              var parsed = parseFrame(raw);
+              if (parsed.event === "message" && parsed.data) {
+                appendTurn("assistant", parsed.data);
+              }
+            });
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .catch(function () {
+        // Best-effort enhancement: a network failure mid-stream leaves the
+        // user's own turn visible above, already appended server-side by
+        // the request that just failed to finish streaming its response.
+      });
+  });
+})();
+
+/*
  * Standalone comment triggers -- "comment on this file"
  * (`crate::pages::files::blob_header`) and "comment on this commit"
  * (`crate::pages::commits::commit_comment_template`) -- toggle a

@@ -170,6 +170,11 @@ pub fn run_one(
         workdir: &workdir,
         toolchains,
         command: &effect.run,
+        // An ordinary effect run has no per-member credential to inject
+        // (`roots.config-isolation`'s BYOK seam is `agent_worker`'s and
+        // `plan_worker`'s own concern, in `git-ents`); every backend still
+        // accepts the field uniformly, it is simply empty here.
+        env: &[],
     };
     let output = executor.run(&inputs)?;
     let status = match output.status {

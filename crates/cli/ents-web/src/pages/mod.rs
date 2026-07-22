@@ -15,18 +15,22 @@
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
 //! share one `meta` rail item and `META_SECTIONS` rail rather than each
 //! carrying its own top-level entry (see `Tab`'s own doc); [`meta`] is that
-//! group's `GET /meta` landing page. [`commits`], [`reviews`], and
-//! [`issues`] are rail items of their own -- `Tab::Commits`, `Tab::Reviews`,
-//! and `Tab::Issues` in [`layout`]'s icon rail, alongside the dashboard,
-//! code, threads, and meta items. `reviews::list` (`GET /reviews`) is a
-//! read-only aggregate across every commit's own reviews
-//! (`commits::reviews_section` renders the same [`ents_forge::review`]
-//! entities scoped to one commit; this module has no writes of its own --
-//! every mutation still posts through `commits`'s own routes). [`search`]
+//! group's `GET /meta` landing page. [`commits`], [`reviews`], [`issues`],
+//! and [`agents`] are rail items of their own -- `Tab::Commits`,
+//! `Tab::Reviews`, `Tab::Issues`, and `Tab::Agents` (Agents,
+//! `docs/agent-sessions-plan.adoc`'s Phase 3) in [`layout`]'s icon rail,
+//! alongside the dashboard, code, threads, and meta items. `reviews::list`
+//! (`GET /reviews`) is a read-only aggregate across every commit's own
+//! reviews (`commits::reviews_section` renders the same
+//! [`ents_forge::review`] entities scoped to one commit; this module has no
+//! writes of its own -- every mutation still posts through `commits`'s own
+//! routes). [`search`]
 //! renders with no rail item active at all; it is reached from the
 //! `.wb-bar`'s own `.palette` search form rather than any rail item.
 
 pub mod account;
+pub mod agent_chat;
+pub mod agents;
 pub mod comments;
 pub mod commits;
 pub mod dashboard;
@@ -117,7 +121,8 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// the horizontal tab strip became the vertical icon rail, but the
 /// "handler names its own section" contract is unchanged). The rail reads,
 /// top to bottom: Dashboard (`Overview`), Code (`Files`), Commits, Reviews,
-/// Issues, Threads (`Comments`); then, past the spacer, Repo & governance
+/// Issues, Agents (`docs/agent-sessions-plan.adoc`'s Phase 3), Threads
+/// (`Comments`); then, past the spacer, Repo & governance
 /// (`Meta`) and Account. Commits and Reviews are two rail items, not one,
 /// even though every review still lives on its own commit's page
 /// (`super::commits::reviews_section`) -- browsing history and judging a
@@ -138,6 +143,7 @@ pub(crate) enum Tab {
     Commits,
     Reviews,
     Issues,
+    Agents,
     Comments,
     Meta,
     Account,
@@ -272,8 +278,8 @@ fn rail_link(active: Tab, tab: Tab, href: &str, title: &str, icon: &str) -> Mark
 
 /// The workbench shell itself (the "Proposal C" chrome,
 /// `docs/web-workbench-plan.adoc`): a `.wb` grid pairing the sticky icon
-/// `.rail` (Dashboard / Code / Review / Issues / Threads, then governance
-/// and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
+/// `.rail` (Dashboard / Code / Review / Issues / Agents / Threads, then
+/// governance and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
 /// column whose sticky `.wb-bar` top bar names the served repository and
 /// its branch pill, carries the `.palette` search form (a plain GET to
 /// `/search` for now -- the `⌘K` kbd is a hint at the palette phase, not
@@ -309,6 +315,7 @@ pub(crate) fn layout_shell(
                         (rail_link(active, Tab::Commits, "/commits", "Commits", "i-commit"))
                         (rail_link(active, Tab::Reviews, "/reviews", "Reviews", "i-review"))
                         (rail_link(active, Tab::Issues, "/issues", "Issues", "i-issue"))
+                        (rail_link(active, Tab::Agents, "/agents", "Agents", "i-agent"))
                         (rail_link(active, Tab::Comments, "/comments", "Threads", "i-comment"))
                         span.spacer {}
                         (rail_link(active, Tab::Meta, "/meta", "Repo & governance", "i-meta"))
