@@ -171,11 +171,21 @@ pub struct SessionMeta {
     pub member: MemberId,
     /// When the session was created, in seconds since the Unix epoch.
     pub created: i64,
+    /// The worker that claimed this session, if one ever has
+    /// ([`super::command::claim`] sets this) — the member whose signature
+    /// the gate's designated-worker roster admits to advance this session
+    /// on [`Self::member`]'s behalf (`docs/agent-sessions-plan.adoc`'s
+    /// Phase 2a).
+    pub worker: Option<MemberId>,
+    /// The name of the sandbox executing this run, verbatim, once claimed
+    /// ([`super::command::claim`] sets this) — the plan's own "sandbox
+    /// name verbatim while running" (Phase 3's detail page).
+    pub sprite: Option<String>,
     /// When a worker claimed the session and began running it, if it ever
-    /// has (Phase 2 sets this).
+    /// has ([`super::command::claim`] sets this).
     pub started: Option<i64>,
-    /// When the run reached a terminal state, if it ever has (Phase 2 sets
-    /// this).
+    /// When the run reached a terminal state, if it ever has
+    /// ([`super::command::finish`] sets this).
     pub finished: Option<i64>,
     /// The model id the run executes against.
     pub model: String,
@@ -214,6 +224,8 @@ impl SessionMeta {
         Self {
             member,
             created,
+            worker: None,
+            sprite: None,
             started: None,
             finished: None,
             model: model.into(),

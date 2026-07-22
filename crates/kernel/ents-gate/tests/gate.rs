@@ -65,7 +65,10 @@ fn forge() -> Forge {
         &refs,
         &objects,
         config_ref,
-        &Config { epoch: Some(200) },
+        &Config {
+            epoch: Some(200),
+            ..Config::default()
+        },
         Some(&admin),
         200,
     );
@@ -835,6 +838,113 @@ fn a_self_attested_non_owner_cannot_advance_an_agent_session() {
     expect_fail(&run(&f, &refname, Some(advance)), Requirement::TipSigned);
 }
 
+// ---------------------------------------------------------------------
+// Designated workers (`docs/agent-sessions-plan.adoc`'s Phase 2a): an
+// additive ∪ onto the agent-session advance rule, read from
+// `refs/meta/config`'s `workers` roster.
+// ---------------------------------------------------------------------
+
+/// Advance `refs/meta/config` past `forge()`'s own epoch-setting write,
+/// designating `worker_id` in [`Config::workers`] — a signed fast-forward
+/// exactly like any other config mutation, not a special write path.
+fn designate_worker(f: &Forge, worker_id: &str, seconds: i64) {
+    let config_ref: FullName = namespace::CONFIG_REF.try_into().expect("valid");
+    write_meta_entity(
+        &f.refs,
+        &f.objects,
+        config_ref,
+        &Config {
+            epoch: Some(200),
+            workers: vec![MemberId::new(worker_id)],
+        },
+        Some(&f.admin),
+        seconds,
+    );
+}
+
+#[rstest]
+// @relation(gate.owner-mutation, model.member-worker, scope=function, role=Verifies)
+fn a_designated_worker_may_advance_another_members_agent_session() {
+    // The new ∪ term: a member listed in `refs/meta/config`'s `workers`
+    // roster may advance a session it neither created nor administers —
+    // the machinery Phase 1b deferred ("a worker's status-advance commits
+    // stay Phase 2's concern").
+    let f = forge();
+    let worker = Keypair::from_seed(OUTSIDER_SEED);
+    enroll_member(
+        &f.refs,
+        &f.objects,
+        "worker",
+        &worker,
+        Provenance::AdminRegistered,
+        210,
+    );
+    designate_worker(&f, "worker", 220);
+
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    let refname = agent_session_ref(genesis);
+    f.refs.set(refname.as_ref(), genesis);
+    let advance = commit(&f, vec![genesis], Some(&worker), 310);
+    expect_pass(
+        &run(&f, &refname, Some(advance)),
+        AdmissionKind::TipInvariant,
+    );
+}
+
+#[rstest]
+// @relation(gate.owner-mutation, model.member-provenance, model.member-worker, scope=function, role=Verifies)
+fn an_unpromoted_member_cannot_advance_an_agent_session_merely_by_being_listed_as_a_worker() {
+    // Listing a member id in `Config::workers` is not itself a promotion:
+    // a self-attested member stays refused for canonical refs
+    // (`model.member-provenance`) even when a signed config write names
+    // its id as a designated worker — the roster narrows an already
+    // *authorized* signer's owner-mutation reach, it does not grant
+    // canonical-ref authorization on its own. This is the "undesignated
+    // member may not" boundary in this codebase's actual two-tier
+    // provenance model: the only signer that ever reaches the
+    // owner-mutation check unauthorized is a self-attested one, and even a
+    // roster listing cannot carry it past `authorize`'s earlier refusal.
+    let f = forge();
+    designate_worker(&f, "guest", 220);
+
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    let refname = agent_session_ref(genesis);
+    f.refs.set(refname.as_ref(), genesis);
+    let advance = commit(&f, vec![genesis], Some(&f.guest), 310);
+    expect_fail(&run(&f, &refname, Some(advance)), Requirement::TipSigned);
+}
+
+#[rstest]
+// @relation(gate.owner-mutation, gate.fast-forward, model.member-worker, scope=function, role=Verifies)
+fn a_designated_worker_still_cannot_rewrite_history() {
+    // Owner-mutation admitting a new signer is not a way around what
+    // "advance" means: a designated worker's tip that does not descend
+    // from the session's current tip is still refused for fast-forward,
+    // exactly as it would be for the genesis signer or an admin.
+    let f = forge();
+    let worker = Keypair::from_seed(OUTSIDER_SEED);
+    enroll_member(
+        &f.refs,
+        &f.objects,
+        "worker",
+        &worker,
+        Provenance::AdminRegistered,
+        210,
+    );
+    designate_worker(&f, "worker", 220);
+
+    let genesis = commit(&f, vec![], Some(&f.admin), 300);
+    let refname = agent_session_ref(genesis);
+    let first_advance = commit(&f, vec![genesis], Some(&f.admin), 305);
+    f.refs.set(refname.as_ref(), first_advance);
+    // `sibling` is rooted at the same genesis (so identity-binding's
+    // all-roots walk holds) but does not descend from `first_advance`, the
+    // ref's current tip — a worker signing a divergent sibling is still
+    // refused for fast-forward, not admitted as an "advance".
+    let sibling = commit(&f, vec![genesis], Some(&worker), 310);
+    expect_fail(&run(&f, &refname, Some(sibling)), Requirement::FastForward);
+}
+
 #[rstest]
 // @relation(gate.owner-mutation, model.review, scope=function, role=Verifies)
 fn the_wrong_member_cannot_advance_a_review() {
@@ -1038,8 +1148,14 @@ fn the_epoch_setting_commit_is_itself_the_first_gated_tip() {
         guest: Keypair::from_seed(SELF_ATTESTED_SEED),
     };
 
-    let tree = facet_git_tree::serialize_into(&Config { epoch: Some(200) }, &f.objects)
-        .expect("config serializes");
+    let tree = facet_git_tree::serialize_into(
+        &Config {
+            epoch: Some(200),
+            ..Config::default()
+        },
+        &f.objects,
+    )
+    .expect("config serializes");
     let make = |key: Option<&Keypair>| {
         write_commit(
             &f.objects,
@@ -1079,7 +1195,10 @@ fn bare_forge_with_epoch() -> Forge {
         &refs,
         &objects,
         config_ref,
-        &Config { epoch: Some(50) },
+        &Config {
+            epoch: Some(50),
+            ..Config::default()
+        },
         None,
         50,
     );
@@ -1284,7 +1403,16 @@ fn refusals_render_an_actionable_reason_with_the_inbox_alternative() {
 #[rstest]
 // @relation(gate.epoch, scope=function, role=Verifies)
 fn config_round_trips_with_and_without_an_epoch() {
-    for config in [Config { epoch: None }, Config { epoch: Some(42) }] {
+    for config in [
+        Config {
+            epoch: None,
+            ..Config::default()
+        },
+        Config {
+            epoch: Some(42),
+            ..Config::default()
+        },
+    ] {
         let (root, store) = facet_git_tree::serialize(&config).expect("serialize");
         let back: Config = facet_git_tree::deserialize(&root, &store).expect("deserialize");
         assert_eq!(back, config);

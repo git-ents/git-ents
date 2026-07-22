@@ -83,7 +83,10 @@ fn boot(refs: &MemRefStore, objects: &ObjectStore, admin: &Keypair, bob: Option<
         refs,
         objects,
         config,
-        &Config { epoch: Some(200) },
+        &Config {
+            epoch: Some(200),
+            ..Config::default()
+        },
         Some(admin),
         200,
     );

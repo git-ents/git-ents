@@ -10,7 +10,10 @@
     reason = "integration test: fixtures panic on setup failure"
 )]
 
-use ents_forge::agent::{self, FailureReason, NewAgentSession, ReviewPolicy, Status};
+use ents_forge::agent::{
+    self, ClaimAgentSession, FailureReason, FinishAgentSession, FinishOutcome, NewAgentSession,
+    ReviewPolicy, Status,
+};
 use ents_model::MemberId;
 use ents_receive::{Identity, Mode, NullEventSink, TxResult};
 use ents_testutil::{Keypair, MemRefStore, ObjectStore};
@@ -90,6 +93,59 @@ impl Fixture {
             Mode::Advisory,
         )
         .expect("revises")
+    }
+
+    fn confirm(&self, id: &str) -> ents_receive::Outcome {
+        agent::confirm(
+            &self.refs,
+            &self.objects,
+            &NullEventSink,
+            id,
+            None,
+            &self.identity(),
+            Mode::Advisory,
+        )
+        .expect("confirms")
+    }
+
+    /// A session revised and confirmed against its own plan — `queued`,
+    /// the only precondition [`agent::claim`] accepts.
+    fn queued_session(&self) -> String {
+        let id = self.new_session();
+        self.revise_plan(&id, "do the thing");
+        self.confirm(&id);
+        id
+    }
+
+    fn claim(&self, id: &str) -> ents_forge::Result<ents_receive::Outcome> {
+        agent::claim(
+            &self.refs,
+            &self.objects,
+            &NullEventSink,
+            id,
+            ClaimAgentSession {
+                worker: MemberId::new("worker"),
+                sprite: "sprite-1".to_owned(),
+            },
+            &self.identity(),
+            Mode::Advisory,
+        )
+    }
+
+    fn finish(
+        &self,
+        id: &str,
+        finish: FinishAgentSession,
+    ) -> ents_forge::Result<ents_receive::Outcome> {
+        agent::finish(
+            &self.refs,
+            &self.objects,
+            &NullEventSink,
+            id,
+            finish,
+            &self.identity(),
+            Mode::Advisory,
+        )
     }
 }
 
@@ -311,4 +367,192 @@ fn new_refuses_an_unknown_toolchain() {
     )
     .expect_err("refused");
     assert!(matches!(error, ents_forge::Error::NotFound { .. }));
+}
+
+// ---------------------------------------------------------------------
+// `claim` and `finish` (`docs/agent-sessions-plan.adoc`'s Phase 2a): the
+// guards around advancing to `Running` and to a terminal state.
+// ---------------------------------------------------------------------
+
+/// `claim` refuses a session that is not queued: still `planning` (no
+/// plan at all), and `ready` but awaiting confirmation (a plan with no
+/// confirm bound to it).
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn claim_refuses_a_session_that_is_not_queued() {
+    let fixture = Fixture::new();
+
+    let planning = fixture.new_session();
+    let error = fixture
+        .claim(&planning)
+        .expect_err("refused: still planning");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+
+    fixture.revise_plan(&planning, "do the thing");
+    let error = fixture
+        .claim(&planning)
+        .expect_err("refused: awaiting confirmation, not queued");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
+/// `claim` on a queued session advances it to `Running`, recording the
+/// worker, the sprite name, and the claim's own timestamp as `started`.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn claim_advances_a_queued_session_to_running_with_worker_sprite_and_started() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+
+    let outcome = fixture.claim(&id).expect("claims");
+    assert_eq!(outcome.result, TxResult::Applied);
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.status, Status::Running);
+    assert_eq!(session.meta.worker, Some(MemberId::new("worker")));
+    assert_eq!(session.meta.sprite.as_deref(), Some("sprite-1"));
+    assert_eq!(session.meta.started, Some(1_000));
+    assert!(!session.queued(), "Running is past queued");
+}
+
+/// A second `claim` against an already-claimed session refuses at the
+/// command layer: the first claim already advanced the session past
+/// `queued`, so the ordinary precondition check refuses it — first worker
+/// wins, the loser gets an ordinary [`ents_forge::Error::InvalidArgument`],
+/// never a second `Running` write.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn a_second_claim_refuses_at_the_command_layer() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+    fixture.claim(&id).expect("first claim succeeds");
+
+    let error = fixture.claim(&id).expect_err("refused: no longer queued");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+
+    // The session still carries the first claim's worker, untouched by
+    // the refused second attempt.
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.worker, Some(MemberId::new("worker")));
+}
+
+/// `finish` refuses a session that was never claimed (`planning`,
+/// `ready`/awaiting-confirmation, and `ready`/queued) — only a `Running`
+/// session may be finished.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn finish_refuses_a_session_that_is_not_running() {
+    let fixture = Fixture::new();
+    let done = FinishAgentSession {
+        outcome: FinishOutcome::Done,
+        result_branch: None,
+        thread: vec![],
+    };
+
+    let planning = fixture.new_session();
+    let error = fixture
+        .finish(&planning, done.clone())
+        .expect_err("refused: still planning");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+
+    let queued = fixture.queued_session();
+    let error = fixture
+        .finish(&queued, done)
+        .expect_err("refused: queued, never claimed");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
+/// `finish` refuses a session that already reached a terminal state —
+/// `finish` may not be called twice.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn finish_refuses_a_session_already_finished() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+    fixture.claim(&id).expect("claims");
+    fixture
+        .finish(
+            &id,
+            FinishAgentSession {
+                outcome: FinishOutcome::Done,
+                result_branch: None,
+                thread: vec![],
+            },
+        )
+        .expect("finishes");
+
+    let error = fixture
+        .finish(
+            &id,
+            FinishAgentSession {
+                outcome: FinishOutcome::Done,
+                result_branch: None,
+                thread: vec![],
+            },
+        )
+        .expect_err("refused: already done");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
+/// `finish` from `Running` with `Done` records the finished timestamp, the
+/// result branch, and appends the execution transcript to `thread/`.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn finish_done_records_branch_timestamp_and_appends_the_transcript() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+    fixture.claim(&id).expect("claims");
+
+    let before = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    let turns_before = before.thread.len();
+
+    let outcome = fixture
+        .finish(
+            &id,
+            FinishAgentSession {
+                outcome: FinishOutcome::Done,
+                result_branch: Some(format!("agent/jdc/{id}")),
+                thread: vec![b"turn: ran the fix".to_vec()],
+            },
+        )
+        .expect("finishes");
+    assert_eq!(outcome.result, TxResult::Applied);
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.status, Status::Done);
+    assert_eq!(session.meta.finished, Some(1_000));
+    assert_eq!(session.meta.result_branch, Some(format!("agent/jdc/{id}")));
+    assert_eq!(session.thread.len(), turns_before.saturating_add(1));
+    assert_eq!(
+        session.thread.last().map(Vec::as_slice),
+        Some(b"turn: ran the fix".as_slice())
+    );
+}
+
+/// `finish` from `Running` with `Failed` records the failure reason as the
+/// session's terminal state.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn finish_failed_records_the_failure_reason() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+    fixture.claim(&id).expect("claims");
+
+    fixture
+        .finish(
+            &id,
+            FinishAgentSession {
+                outcome: FinishOutcome::Failed("sandbox died".to_owned()),
+                result_branch: None,
+                thread: vec![],
+            },
+        )
+        .expect("finishes");
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(
+        session.meta.status,
+        Status::Failed(FailureReason {
+            detail: "sandbox died".to_owned()
+        })
+    );
 }

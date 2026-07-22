@@ -56,6 +56,50 @@ pub fn validate(effect: &Effect) -> Result<()> {
     Ok(())
 }
 
+/// The canonical `agent-exec` effect's own name
+/// (`docs/agent-sessions-plan.adoc`'s Phase 2) — the final segment of
+/// `refs/meta/effects/agent-exec` (`model.effect-definition`).
+pub const AGENT_EXEC_NAME: &str = "agent-exec";
+
+/// `agent-exec`'s trigger: every author-written `refs/meta/agent-sessions/*`
+/// tip — every commit entering the agent-sessions namespace
+/// (`docs/agent-sessions-plan.adoc`'s Phase 2, "An `agent-exec` effect
+/// subscribed via `meta(...)` to the agent namespace"). `meta()`'s own
+/// grammar rule (`query.meta`) only forbids matching an effect-written
+/// namespace — `refs/meta/results/*` or `refs/meta/index/*` — and
+/// `refs/meta/agent-sessions/*` is neither, so this glob needs no
+/// grammar extension (`query.no-extensions`); this module's own tests pin
+/// that against the real parser.
+pub const AGENT_EXEC_TRIGGER: &str = "meta(refs/meta/agent-sessions/*)";
+
+/// The canonical `agent-exec` [`Effect`] definition
+/// (`docs/agent-sessions-plan.adoc`'s Phase 2): fires once per commit
+/// entering the agent-sessions namespace. `toolchains` and `run` are a
+/// deployment's own choice — this constructor only fixes the two fields
+/// that make the effect *this* effect, `name` and `trigger`
+/// (`model.effect-definition`); a real deployment still writes its own
+/// signed commit onto `refs/meta/effects/agent-exec` through the ordinary
+/// admin-only path (`effect.admin-only`), this fixture is not that write.
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::definition::{agent_exec, validate};
+///
+/// let effect = agent_exec(vec!["agent-runtime".to_owned()], "git-ents agent-exec run");
+/// assert_eq!(effect.name, "agent-exec");
+/// validate(&effect).expect("the canonical trigger validates");
+/// ```
+#[must_use]
+pub fn agent_exec(toolchains: Vec<String>, run: impl Into<String>) -> Effect {
+    Effect {
+        name: AGENT_EXEC_NAME.to_owned(),
+        trigger: AGENT_EXEC_TRIGGER.to_owned(),
+        toolchains,
+        run: run.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, reason = "unit test")]
@@ -101,5 +145,40 @@ mod tests {
     // @relation(effect.validation, scope=function, role=Verifies)
     fn validate_rejects_an_invalid_toolchain_name() {
         assert!(validate(&effect("rev(refs/heads/main)", &["../escape"])).is_err());
+    }
+
+    // ---- The canonical `agent-exec` definition
+    // (`docs/agent-sessions-plan.adoc`'s Phase 2) ----
+
+    #[rstest]
+    // @relation(query.grammar, scope=function, role=Verifies)
+    fn agent_exec_trigger_parses_against_the_real_query_grammar() {
+        AGENT_EXEC_TRIGGER
+            .parse::<ents_query::Query>()
+            .expect("the canonical agent-exec trigger parses");
+    }
+
+    #[rstest]
+    // @relation(effect.validation, query.meta, scope=function, role=Verifies)
+    fn agent_exec_definition_validates() {
+        let effect = agent_exec(vec!["agent-runtime".to_owned()], "git-ents agent-exec run");
+        assert_eq!(effect.name, AGENT_EXEC_NAME);
+        validate(&effect).expect("the canonical agent-exec definition validates");
+    }
+
+    /// `query.meta` forbids `meta(glob)` from matching only
+    /// `refs/meta/results/*` and `refs/meta/index/*` — the agent-sessions
+    /// namespace is neither, so it must never be rejected as
+    /// effect-written the way `validate_rejects_a_meta_glob_naming_an_effect_written_namespace`
+    /// proves the results namespace is.
+    #[rstest]
+    // @relation(query.meta, scope=function, role=Verifies)
+    fn the_agent_sessions_namespace_is_not_rejected_as_effect_written() {
+        assert!(
+            validate(&effect(AGENT_EXEC_TRIGGER, &[])).is_ok(),
+            "refs/meta/agent-sessions/* is an author-written namespace, not one of \
+             query.meta's forbidden effect-written namespaces (refs/meta/results/*, \
+             refs/meta/index/*)"
+        );
     }
 }

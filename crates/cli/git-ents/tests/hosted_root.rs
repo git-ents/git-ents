@@ -177,7 +177,10 @@ fn unauthorized_push_is_refused_by_the_hosted_root() {
         &admin_root.objects,
         &admin_root.events,
         config_ref,
-        &ents_gate::Config { epoch: Some(1_000) },
+        &ents_gate::Config {
+            epoch: Some(1_000),
+            ..ents_gate::Config::default()
+        },
         &identity,
         "Enable the tip invariant",
         admin_root.mode(),

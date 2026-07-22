@@ -18,7 +18,9 @@ use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind, Write};
 use gix_ref_store::{RefStore, RefStoreRead};
 
-use super::{AgentSession, Confirm, ReviewPolicy, SessionMeta, Status, ToolchainPin};
+use super::{
+    AgentSession, Confirm, FailureReason, ReviewPolicy, SessionMeta, Status, ToolchainPin,
+};
 use crate::error::{Error, Result};
 
 /// The tree of the commit at `oid` — duplicated from `crate::issue::command`'s
@@ -248,6 +250,165 @@ pub fn confirm(
         &session,
         identity,
         &format!("Confirm agent session {id}"),
+        mode,
+    )?)
+}
+
+/// What `git ents agent claim` needs: which worker is claiming the session,
+/// and the sandbox's name for this run.
+#[derive(Debug, Clone)]
+pub struct ClaimAgentSession {
+    /// The worker claiming the session — becomes [`SessionMeta::worker`].
+    pub worker: MemberId,
+    /// The sandbox's name for this run — becomes [`SessionMeta::sprite`].
+    pub sprite: String,
+}
+
+/// `git ents agent claim`: a worker claims `id`'s session, advancing it to
+/// `Running` with the worker, the sandbox name, and the claim's own
+/// timestamp as [`SessionMeta::started`] — the point of no return past
+/// which no plan revision or un-queue is legal
+/// (`docs/agent-sessions-plan.adoc`'s Phase 2, "Claim = CAS a `running`
+/// status commit through `receive`; first worker wins, losers no-op": a
+/// second `claim` call against the same session finds it no longer
+/// [`AgentSession::queued`], since the first claim already advanced its
+/// status past `Ready`, so it refuses exactly like any other
+/// precondition miss — no separate "already claimed" error variant is
+/// needed).
+///
+/// This is the command layer only: legality is judged purely from the
+/// decoded tip's own state, never from who is signing — the gate's
+/// designated-worker roster (`docs/agent-sessions-plan.adoc`'s Phase 2a)
+/// is what actually authorizes a worker's signature onto the ref; this
+/// function would happily build the same commit for any caller, exactly
+/// as [`confirm`] does not itself check that `identity` is the session's
+/// own member.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
+/// if the session is not queued — not `Ready`, or `Ready` without a confirm
+/// binding the current plan (`AgentSession::queued`) — including a session
+/// a prior claim already advanced to `Running` or past; otherwise
+/// propagates serialization or `receive` failures.
+// @relation(lens.parity, scope=function)
+pub fn claim(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    id: &str,
+    claim: ClaimAgentSession,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
+    let mut session = session_at(refs, objects, id)?;
+    if !session.queued() {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} is not queued; only a queued session (ready, with a confirm \
+             binding its current plan) may be claimed"
+        )));
+    }
+    session.meta.status = Status::Running;
+    session.meta.worker = Some(claim.worker);
+    session.meta.sprite = Some(claim.sprite);
+    session.meta.started = Some(identity.actor.time.seconds);
+
+    let ref_name = ents_model::namespace::agent_session_ref(id)?;
+    Ok(propose_entity(
+        refs,
+        objects,
+        events,
+        ref_name,
+        &session,
+        identity,
+        &format!("Claim agent session {id}"),
+        mode,
+    )?)
+}
+
+/// How a run ended, for [`finish`].
+#[derive(Debug, Clone)]
+pub enum FinishOutcome {
+    /// The run completed and its result landed.
+    Done,
+    /// The run could not complete, or was refused, for the carried reason.
+    Failed(String),
+}
+
+/// What `git ents agent finish` needs: the run's outcome, the result
+/// branch the worker pushed (if any), and the execution transcript to
+/// append to `thread/`.
+#[derive(Debug, Clone)]
+pub struct FinishAgentSession {
+    /// How the run ended.
+    pub outcome: FinishOutcome,
+    /// The branch the worker pushed the run's commits to
+    /// (`agent/<member>/<abbrev-genesis>`, per the plan's resolved-by-default
+    /// item) — becomes [`SessionMeta::result_branch`] when given; `None`
+    /// leaves any existing value untouched (a `Failed` run that never
+    /// reached the point of pushing a branch has nothing to record here).
+    pub result_branch: Option<String>,
+    /// Opaque, verbatim execution transcript blobs to append to
+    /// [`AgentSession::thread`] — never typed or decoded by this crate,
+    /// exactly like the prompt turn [`new`] seeds.
+    pub thread: Vec<Vec<u8>>,
+}
+
+/// `git ents agent finish`: a worker finishes `id`'s session, advancing it
+/// to a terminal state — `Done`, or `Failed` with a reason — and recording
+/// the finish's own timestamp as [`SessionMeta::finished`], the result
+/// branch when the run produced one, and the run's execution transcript
+/// appended to `thread/` (`docs/agent-sessions-plan.adoc`'s Phase 2,
+/// "Finalize = one atomic multi-ref push: thread blobs + `done`/`failed`
+/// meta into the session tree" — the session-tree half of that multi-ref
+/// write; landing the result ref and the result branch alongside it in the
+/// same [`ents_receive::receive`] proposal is the composition root's job,
+/// this crate never holding key material or touching those other refs).
+///
+/// Like [`claim`], this is the command layer only: legality is judged from
+/// the decoded tip's own state, never from who is signing.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
+/// if the session is not `Running` — a session that was never claimed, or
+/// one already finished, may not be finished again; otherwise propagates
+/// serialization or `receive` failures.
+// @relation(lens.parity, scope=function)
+pub fn finish(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    id: &str,
+    finish: FinishAgentSession,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
+    let mut session = session_at(refs, objects, id)?;
+    if session.meta.status != Status::Running {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} is not running; only a running session may be finished"
+        )));
+    }
+    session.meta.status = match finish.outcome {
+        FinishOutcome::Done => Status::Done,
+        FinishOutcome::Failed(detail) => Status::Failed(FailureReason { detail }),
+    };
+    session.meta.finished = Some(identity.actor.time.seconds);
+    if finish.result_branch.is_some() {
+        session.meta.result_branch = finish.result_branch;
+    }
+    session.thread.extend(finish.thread);
+
+    let ref_name = ents_model::namespace::agent_session_ref(id)?;
+    Ok(propose_entity(
+        refs,
+        objects,
+        events,
+        ref_name,
+        &session,
+        identity,
+        &format!("Finish agent session {id}"),
         mode,
     )?)
 }
