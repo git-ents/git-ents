@@ -657,6 +657,37 @@ pub(crate) fn scope_class(scope: &str) -> String {
     format!("scope-c{}", hash.checked_rem(6).unwrap_or(0))
 }
 
+/// A `.status-<class>` chip: `label` as its text, `class` as its CSS suffix.
+pub(crate) fn status_chip_labeled(label: &str, class: &str) -> Markup {
+    html! { span class={ "status status-" (class) } { (label) } }
+}
+
+/// The `.status-<word>` chip for a closed pass/fail/error [`ents_model::Status`].
+pub(crate) fn status_chip(status: ents_model::Status) -> Markup {
+    let word = match status {
+        ents_model::Status::Pass => "pass",
+        ents_model::Status::Fail => "fail",
+        ents_model::Status::Error => "error",
+    };
+    status_chip_labeled(word, word)
+}
+
+/// A `.verdict-<word>` chip for a review's own [`ents_forge::review::Verdict`].
+pub(crate) fn verdict_chip(verdict: ents_forge::review::Verdict) -> Markup {
+    html! { span class={ "verdict verdict-" (verdict) } { (verdict) } }
+}
+
+/// A sidebar `.tree-head`: `name` plus a "+ New" link into `new_href`,
+/// ghost-styled while `viewing_one` (a child page is open).
+pub(crate) fn tree_head(name: &str, new_href: &str, viewing_one: bool) -> Markup {
+    html! {
+        div.tree-head {
+            span { (name) }
+            a.btn.btn-sm.btn-ghost[viewing_one] href=(new_href) { "+ New" }
+        }
+    }
+}
+
 /// The acting session's member id -- the composite review key's
 /// `<member>` segment -- resolved the same way
 /// [`account::resolve_member_by_key`] does, falling back to a short hash of

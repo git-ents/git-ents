@@ -94,10 +94,7 @@ where
 /// page, `.active` naming the viewed session's id.
 fn agents_sidebar(rows: &[(String, AgentSession)], active: Option<&str>) -> Markup {
     html! {
-        div.tree-head {
-            span { "Agents" }
-            a.btn.btn-sm.btn-ghost[active.is_some()] href="/agents" { "+ New" }
-        }
+        (super::tree_head("Agents", "/agents", active.is_some()))
         @if rows.is_empty() {
             span.tree-note { "No agent sessions yet." }
         }
@@ -265,9 +262,9 @@ fn session_state(session: &AgentSession) -> &'static str {
 }
 
 /// The state badge [`agents_sidebar`] and [`show`] both render: a
-/// checkmark/cross `.status` chip for the terminal `done`/`failed` states
-/// (matching `crate::pages::commits::checks_section`'s identical result
-/// taxonomy -- a session's own finish literally records a
+/// checkmark/cross [`super::status_chip_labeled`] for the terminal
+/// `done`/`failed` states (matching `crate::pages::commits::checks_section`'s
+/// identical result taxonomy -- a session's own finish literally records a
 /// [`ents_model::Status::Pass`]/`Fail`), or a neutral `.chip.state-in-progress`
 /// pill labeled with [`session_state`]'s own word for every state still in
 /// flight -- the four non-terminal states share one color, since the
@@ -275,8 +272,8 @@ fn session_state(session: &AgentSession) -> &'static str {
 fn state_badge(session: &AgentSession) -> Markup {
     let label = session_state(session);
     match label {
-        "done" => html! { span.status.status-pass { "done" } },
-        "failed" => html! { span.status.status-fail { "failed" } },
+        "done" => super::status_chip_labeled("done", "pass"),
+        "failed" => super::status_chip_labeled("failed", "fail"),
         _ => html! {
             span.chip.chip-pill.state-in-progress {
                 span.dot {}

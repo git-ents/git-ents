@@ -181,15 +181,15 @@ where
         })?;
     let body = match effect {
         Ok(effect) => {
-            let (label, status_class) = match effect.trigger.parse::<Query>() {
-                Ok(_) => ("parses".to_owned(), "status-pass"),
-                Err(error) => (format!("does not parse: {error}"), "status-fail"),
+            let (label, class) = match effect.trigger.parse::<Query>() {
+                Ok(_) => ("parses".to_owned(), "pass"),
+                Err(error) => (format!("does not parse: {error}"), "fail"),
             };
             html! {
                 (crate::render::view(&effect))
                 p {
                     "trigger query: "
-                    span class={ "status " (status_class) } { (label) }
+                    (super::status_chip_labeled(&label, class))
                 }
             }
         }

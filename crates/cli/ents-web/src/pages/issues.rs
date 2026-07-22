@@ -84,10 +84,7 @@ where
 /// linking to its own page, `.active` naming the viewed issue's id.
 fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) -> Markup {
     html! {
-        div.tree-head {
-            span { "Issues" }
-            a.btn.btn-sm.btn-ghost[active.is_some()] href="/issues" { "+ New" }
-        }
+        (super::tree_head("Issues", "/issues", active.is_some()))
         @if rows.is_empty() {
             span.tree-note { "No issues yet." }
         }

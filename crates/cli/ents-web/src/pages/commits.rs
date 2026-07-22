@@ -380,18 +380,6 @@ struct CheckRow {
     seconds: Option<i64>,
 }
 
-/// A [`ents_model::Status`]'s display word, doubling as its
-/// `.status-<word>` chip class -- the closed pass/fail/error taxonomy
-/// (`model.result-taxonomy`), spelled out here rather than through
-/// `Debug`.
-fn status_label(status: ents_model::Status) -> &'static str {
-    match status {
-        ents_model::Status::Pass => "pass",
-        ents_model::Status::Fail => "fail",
-        ents_model::Status::Error => "error",
-    }
-}
-
 /// The "Checks" card on `GET /commit/{oid}`: every recorded result
 /// (`model.result-identity`) whose stored `target` field names this
 /// commit -- the canonical `refs/meta/results/<effect>/<short-oid>`
@@ -451,9 +439,7 @@ fn checks_section<O: Find + Write>(state: &AppState<O>, commit_id: ObjectId) -> 
             div.card-header { "Checks" }
             @for row in &rows {
                 div.card-row {
-                    span class={ "status status-" (status_label(row.status)) } {
-                        (status_label(row.status))
-                    }
+                    (super::status_chip(row.status))
                     " "
                     a href={ "/effects/" (row.effect) } { (row.effect) }
                     @if let Some(member) = &row.self_run {
@@ -504,7 +490,7 @@ fn reviews_section<O: Find + Write>(
         @for ((target, member), review) in &reviews {
             div.card {
                 div.comment-meta {
-                    span class={ "verdict verdict-" (review.verdict) } { (review.verdict) }
+                    (super::verdict_chip(review.verdict))
                     (super::avatar(member.as_str()))
                     span.author { (member) }
                     @let reviewer = ents_model::namespace::review_ref(target, member)

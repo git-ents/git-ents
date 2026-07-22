@@ -94,7 +94,7 @@ where
             html! {
                 div.card {
                     div.comment-meta {
-                        span class={ "verdict verdict-" (review.verdict) } { (review.verdict) }
+                        (super::verdict_chip(review.verdict))
                         (super::avatar(member.as_str()))
                         span.author { (member) }
                         span.spacer {}
@@ -158,7 +158,7 @@ fn reviews_sidebar(
                 href={ "/reviews/" (target) "/" (member) }
             {
                 span.side-title {
-                    span class={ "verdict verdict-" (review.verdict) } { (review.verdict) }
+                    (super::verdict_chip(review.verdict))
                     " " (member.as_str())
                 }
                 span.side-meta {
@@ -219,7 +219,7 @@ where
                 div.card {
                     dl.entity-view {
                         dt { "verdict" }
-                        dd { span class={ "verdict verdict-" (review.verdict) } { (review.verdict) } }
+                        dd { (super::verdict_chip(review.verdict)) }
                         dt { "state" }
                         dd { (state_badge(review.state)) }
                         dt { "target" }
