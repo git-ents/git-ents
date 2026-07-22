@@ -12,6 +12,7 @@ pub mod account;
 pub mod agent;
 pub mod bootstrap;
 pub mod comment;
+pub mod config;
 pub mod effect;
 pub mod inbox;
 pub mod issue;

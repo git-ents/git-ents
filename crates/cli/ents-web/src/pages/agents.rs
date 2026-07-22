@@ -61,6 +61,7 @@ where
         .map(|entry| (entry.refname, entry.error))
         .collect();
     let default_base = default_base_ref(&state);
+    let default_model = resolved_default_model(&state);
     Ok(super::layout_split(
         &super::RepoHeader::from_state(&state),
         &super::identity_label(&state),
@@ -79,7 +80,7 @@ where
                 }
                 div.card {
                     div.card-header { "Start an Agent Session" }
-                    (new_form(&session, &default_base))
+                    (new_form(&session, &default_base, &default_model))
                 }
             }
         },
@@ -696,18 +697,19 @@ pub struct OpenReviewForm {
 /// The start-a-session form (`POST /agents`, `docs/agent-sessions-plan.adoc`'s
 /// Phase 3, "mobile-critical"): a prompt textarea, a base-branch text input
 /// pre-filled with `default_base` ([`default_base_ref`]), a model text
-/// input pre-filled with [`DEFAULT_MODEL`], and a closed two-option review
-/// policy picker defaulting to `manual` (mirrors
-/// `crate::pages::commits::start_review_form`'s identical closed-verdict
-/// picker) -- deliberately no toolchain or retry field: the plan's own
-/// words are "complexity lives in the session doc, not the form."
-fn new_form(session: &Session, default_base: &str) -> Markup {
+/// input pre-filled with `default_model` ([`resolved_default_model`]), and
+/// a closed two-option review policy picker defaulting to `manual`
+/// (mirrors `crate::pages::commits::start_review_form`'s identical
+/// closed-verdict picker) -- deliberately no toolchain or retry field: the
+/// plan's own words are "complexity lives in the session doc, not the
+/// form."
+fn new_form(session: &Session, default_base: &str, default_model: &str) -> Markup {
     html! {
         form method="post" action="/agents" {
             (super::csrf_input(session))
             label { "prompt" textarea name="prompt" {} }
             label { "base branch" input type="text" name="base_ref" value=(default_base); }
-            label { "model" input type="text" name="model" value=(DEFAULT_MODEL); }
+            label { "model" input type="text" name="model" value=(default_model); }
             div {
                 p.muted { "review policy" }
                 div.picker {
@@ -737,10 +739,25 @@ fn new_form(session: &Session, default_base: &str) -> Markup {
     }
 }
 
-/// The model id [`new_form`] pre-fills and [`NewForm::model`] defaults to
-/// when a submission omits the field entirely -- the same default id this
-/// codebase's own fixtures and `git-ents::agent_worker` tests already use.
+/// The model id [`resolved_default_model`] falls back to when
+/// `refs/meta/config` names no `agent_default_model` (or does not exist
+/// yet) -- the same default id this codebase's own fixtures and
+/// `git-ents::agent_worker` tests already use.
 const DEFAULT_MODEL: &str = "claude-sonnet-5";
+
+/// The model id [`new_form`] pre-fills and [`NewForm::model`] falls back to
+/// when a submission omits the field entirely: `refs/meta/config`'s
+/// `agent_default_model` (`ents_gate::agent_default_model`) when a signed
+/// config write has set one, else [`DEFAULT_MODEL`] -- a forge-wide
+/// default lets an operator change what every new session starts at
+/// without touching this crate's own compiled-in fallback, which stays as
+/// the floor for a repository that has never configured one.
+fn resolved_default_model<O: Find>(state: &AppState<O>) -> String {
+    ents_gate::agent_default_model(state.refs.as_ref(), &*state.objects())
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_MODEL.to_owned())
+}
 
 /// The base ref [`new_form`] pre-fills: `refs/heads/<branch>` for the
 /// served repository's own current `HEAD` branch
@@ -782,21 +799,17 @@ pub struct NewForm {
     /// [`default_base_ref`]).
     #[serde(default = "default_base_ref_field")]
     base_ref: String,
-    /// The model id the run executes against; defaults to
-    /// [`DEFAULT_MODEL`].
-    #[serde(default = "default_model_field")]
-    model: String,
+    /// The model id the run executes against; `None` when a submission
+    /// omits the field entirely, resolved by [`resolved_default_model`]
+    /// (see [`create`]).
+    #[serde(default)]
+    model: Option<String>,
     /// The session's initially resolved review policy: `auto` or `manual`;
     /// defaults to `manual` (see [`default_review_policy`]).
     #[serde(default = "default_review_policy")]
     review_policy: String,
     /// The per-session CSRF token (`roots.web-session`).
     csrf: String,
-}
-
-/// [`NewForm::model`]'s serde default -- see [`DEFAULT_MODEL`].
-fn default_model_field() -> String {
-    DEFAULT_MODEL.to_owned()
 }
 
 /// `POST /agents`: start an agent session owned by the current signing
@@ -824,10 +837,11 @@ where
     super::require_csrf(&session, &form.csrf)?;
     let member = session_owner(&state);
     let identity = state.identity.as_ref();
+    let model = form.model.unwrap_or_else(|| resolved_default_model(&state));
     let new = NewAgentSession {
         member,
         prompt: form.prompt,
-        model: form.model,
+        model,
         toolchains: Vec::new(),
         base_ref: form.base_ref,
         review_policy: form
