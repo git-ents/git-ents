@@ -722,6 +722,12 @@ fn new_form(session: &Session, default_base: &str) -> Markup {
                         "auto"
                     }
                 }
+                p.opt-help.muted {
+                    strong { "Manual" }
+                    " — no review opens on its own; you start one yourself when you want it. "
+                    strong { "Auto" }
+                    " — a review of the result opens automatically once the run finishes."
+                }
             }
             div.composer-buttons {
                 a.composer-cancel href="/agents" { "Cancel" }
