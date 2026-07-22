@@ -224,6 +224,13 @@ where
                         Some(body) => div.doc-body { (body) },
                         None => p.muted { "No plan has been drafted yet." },
                     }
+                    @if matches!(agent_session.meta.status, SessionStatus::Planning | SessionStatus::Ready) {
+                        p {
+                            a.btn.btn-sm href={ "/agents/" (id) "/chat" } {
+                                "Open planning chat"
+                            }
+                        }
+                    }
                     @if agent_session.awaiting_confirmation() {
                         (confirm_form(&session, &id))
                     }

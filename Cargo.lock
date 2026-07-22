@@ -1461,6 +1461,7 @@ dependencies = [
  "facet",
  "facet-git-tree",
  "facet-reflect",
+ "futures-util",
  "getrandom 0.4.3",
  "gix",
  "gix-hash",

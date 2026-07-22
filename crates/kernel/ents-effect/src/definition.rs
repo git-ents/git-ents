@@ -100,6 +100,50 @@ pub fn agent_exec(toolchains: Vec<String>, run: impl Into<String>) -> Effect {
     }
 }
 
+/// The canonical `agent-plan` effect's own name
+/// (`docs/agent-sessions-plan.adoc`'s Phase 4, "headless plan drafting is a
+/// second effect (`agent-plan`)") — the final segment of
+/// `refs/meta/effects/agent-plan`.
+pub const AGENT_PLAN_NAME: &str = "agent-plan";
+
+/// `agent-plan`'s trigger: identical to [`AGENT_EXEC_TRIGGER`] — every
+/// author-written `refs/meta/agent-sessions/*` tip. Both effects share one
+/// query grammar; the plan's own words are "the runner decides by
+/// inspecting the tip" — what tells `agent-plan` and `agent-exec` apart is
+/// never the trigger, only each effect's own dispatch predicate
+/// (`ents_forge::agent::dispatch_plan` here, `ents_forge::agent::dispatch`
+/// for `agent-exec`) and its own results namespace
+/// (`refs/meta/results/agent-plan/*`, distinct from `agent-exec`'s).
+pub const AGENT_PLAN_TRIGGER: &str = AGENT_EXEC_TRIGGER;
+
+/// The canonical `agent-plan` [`Effect`] definition
+/// (`docs/agent-sessions-plan.adoc`'s Phase 4): headless plan drafting,
+/// firing on every commit entering the agent-sessions namespace exactly
+/// like `agent-exec` — the runner's own dispatch predicate is what makes it
+/// a cheap no-op except when a session is `planning`, carries a prompt,
+/// and has no plan leaf yet. `toolchains` and `run` are a deployment's own
+/// choice, exactly as [`agent_exec`]'s own doc explains for its two fixed
+/// fields.
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::definition::{agent_plan, validate};
+///
+/// let effect = agent_plan(vec!["agent-runtime".to_owned()], "git-ents agent-plan draft");
+/// assert_eq!(effect.name, "agent-plan");
+/// validate(&effect).expect("the canonical trigger validates");
+/// ```
+#[must_use]
+pub fn agent_plan(toolchains: Vec<String>, run: impl Into<String>) -> Effect {
+    Effect {
+        name: AGENT_PLAN_NAME.to_owned(),
+        trigger: AGENT_PLAN_TRIGGER.to_owned(),
+        toolchains,
+        run: run.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, reason = "unit test")]
@@ -180,5 +224,34 @@ mod tests {
              query.meta's forbidden effect-written namespaces (refs/meta/results/*, \
              refs/meta/index/*)"
         );
+    }
+
+    // ---- The canonical `agent-plan` definition
+    // (`docs/agent-sessions-plan.adoc`'s Phase 4) ----
+
+    #[rstest]
+    // @relation(query.grammar, scope=function, role=Verifies)
+    fn agent_plan_trigger_parses_against_the_real_query_grammar() {
+        AGENT_PLAN_TRIGGER
+            .parse::<ents_query::Query>()
+            .expect("the canonical agent-plan trigger parses");
+    }
+
+    #[rstest]
+    // @relation(effect.validation, query.meta, scope=function, role=Verifies)
+    fn agent_plan_definition_validates() {
+        let effect = agent_plan(
+            vec!["agent-runtime".to_owned()],
+            "git-ents agent-plan draft",
+        );
+        assert_eq!(effect.name, AGENT_PLAN_NAME);
+        validate(&effect).expect("the canonical agent-plan definition validates");
+    }
+
+    #[rstest]
+    // @relation(scope=function, role=Verifies)
+    fn agent_plan_and_agent_exec_share_a_trigger_but_not_a_name() {
+        assert_eq!(AGENT_PLAN_TRIGGER, AGENT_EXEC_TRIGGER);
+        assert_ne!(AGENT_PLAN_NAME, AGENT_EXEC_NAME);
     }
 }

@@ -110,6 +110,15 @@ where
         )
         .route("/agents/{id}", get(pages::agents::show::<O>))
         .route("/agents/{id}/confirm", post(pages::agents::confirm::<O>))
+        .route(
+            "/agents/{id}/chat",
+            get(pages::agent_chat::show::<O>).post(pages::agent_chat::send::<O>),
+        )
+        .route(
+            "/agents/{id}/plan",
+            post(pages::agent_chat::commit_plan::<O>),
+        )
+        .route("/agents/{id}/reopen", post(pages::agent_chat::reopen::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))

@@ -207,6 +207,108 @@ pub fn revise_plan(
     )?)
 }
 
+/// The web planning-chat page's explicit un-queue action
+/// (`docs/agent-sessions-plan.adoc`'s resolved-by-default item 1, and
+/// Phase 4's "Iteration" bullet: "from `ready`, reopening chat or
+/// requesting a redraft returns to `planning`"): return a `Ready` session
+/// to `Planning`, dropping any confirm it carries — the same drop
+/// [`revise_plan`] performs as a side effect of a plan-text change, offered
+/// here on its own for a member who wants to resume the planning
+/// conversation before having redrafted anything.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
+/// if the session is not `Ready` — still `Planning` has nothing to reopen,
+/// and `Running`, `Done`, or `Failed` are past the point of no return;
+/// otherwise propagates serialization or `receive` failures.
+// @relation(lens.parity, scope=function)
+pub fn reopen(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    id: &str,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
+    let mut session = session_at(refs, objects, id)?;
+    if session.meta.status != Status::Ready {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} is not ready; only a ready session may be reopened for planning"
+        )));
+    }
+    session.meta.status = Status::Planning;
+    session.confirm = None;
+
+    let ref_name = ents_model::namespace::agent_session_ref(id)?;
+    Ok(propose_entity(
+        refs,
+        objects,
+        events,
+        ref_name,
+        &session,
+        identity,
+        &format!("Reopen agent session {id} for planning"),
+        mode,
+    )?)
+}
+
+/// The web planning-chat page's message endpoint: append `blobs` — one
+/// opaque chat turn each, exactly like the prompt turn [`new`] seeds — to
+/// `id`'s `thread`, touching neither `plan`, `confirm`, nor
+/// `meta.status`.
+///
+/// A session past the point where planning conversation may still mutate
+/// it refuses outright rather than silently un-queueing it
+/// (`docs/agent-sessions-plan.adoc`'s Phase 4 acceptance: "after confirm,
+/// no endpoint accepts messages or revisions without the explicit
+/// un-queue" — [`reopen`] and [`revise_plan`] are that explicit un-queue;
+/// this function is deliberately not one).
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
+/// if the session is [`AgentSession::queued`], `Running`, `Done`, or
+/// `Failed` — only `Planning`, or `Ready` while still
+/// [`AgentSession::awaiting_confirmation`], accepts a new turn; otherwise
+/// propagates serialization or `receive` failures.
+// @relation(lens.parity, scope=function)
+pub fn append_thread(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    id: &str,
+    blobs: Vec<Vec<u8>>,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
+    let mut session = session_at(refs, objects, id)?;
+    let chattable = match session.meta.status {
+        Status::Planning => true,
+        Status::Ready => session.awaiting_confirmation(),
+        Status::Running | Status::Done | Status::Failed(_) => false,
+    };
+    if !chattable {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} is queued, running, or terminal; a chat message may not mutate \
+             it without an explicit un-queue"
+        )));
+    }
+    session.thread.extend(blobs);
+
+    let ref_name = ents_model::namespace::agent_session_ref(id)?;
+    Ok(propose_entity(
+        refs,
+        objects,
+        events,
+        ref_name,
+        &session,
+        identity,
+        &format!("Append chat turn(s) to agent session {id}"),
+        mode,
+    )?)
+}
+
 /// `git ents agent confirm`: record a [`Confirm`] binding `id`'s current
 /// plan hash, resolving the review policy to `review_policy` when given, or
 /// to [`SessionMeta::review_policy`] otherwise.
@@ -214,9 +316,11 @@ pub fn revise_plan(
 /// # Errors
 ///
 /// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
-/// if the session is not `Ready`, or has no plan to confirm (a confirm can
-/// never bind an absent plan leaf); otherwise propagates serialization or
-/// `receive` failures.
+/// if the session is not `Ready`, or has no plan to confirm, or its plan is
+/// empty or all-whitespace (`docs/agent-sessions-plan.adoc`'s Phase 4
+/// acceptance, "no confirm can bind an empty or absent plan leaf" — a
+/// confirm can never bind an absent, or effectively absent, plan leaf);
+/// otherwise propagates serialization or `receive` failures.
 // @relation(lens.parity, scope=function)
 pub fn confirm(
     refs: &dyn RefStore,
@@ -231,6 +335,16 @@ pub fn confirm(
     if session.meta.status != Status::Ready {
         return Err(Error::InvalidArgument(format!(
             "agent session {id} is not ready to confirm"
+        )));
+    }
+    let plan_is_bindable = session
+        .plan
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty());
+    if !plan_is_bindable {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} has no plan to confirm; a confirm may not bind an empty or \
+             absent plan leaf"
         )));
     }
     let Some(hash) = session.plan_hash() else {
@@ -442,6 +556,87 @@ pub fn finish_transition(
         &session,
         identity,
         &format!("Finish agent session {id}"),
+    )?)
+}
+
+/// The `agent-plan` effect's own commit (`docs/agent-sessions-plan.adoc`'s
+/// Phase 4, "headless plan drafting ... commits the plan leaf and
+/// transitions to `ready`"): like [`revise_plan`], but atomically appending
+/// the drafting run's own transcript to `thread` in the same commit, and
+/// requiring the session still be exactly `Planning` — the runner's own
+/// dispatch precondition ([`super::dispatch_plan`]) — rather than
+/// [`revise_plan`]'s looser `Planning`-or-`Ready`: a session a human has
+/// already moved to `Ready` by hand raced ahead of this draft, and this
+/// function refuses rather than clobbering it.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] if `id` has no session ref; [`Error::InvalidArgument`]
+/// if the session is not `Planning`; otherwise propagates serialization or
+/// `receive` failures.
+// @relation(lens.parity, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one field per draft input plus the ordinary refs/objects/events/identity/mode \
+              quintet every mutation command in this module takes"
+)]
+pub fn draft_plan(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    id: &str,
+    plan: String,
+    transcript: Vec<Vec<u8>>,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<Outcome> {
+    let (transition, tip) = draft_plan_transition(refs, objects, id, plan, transcript, identity)?;
+    let proposal = ents_receive::Proposal {
+        transitions: vec![transition],
+        objects: vec![tip],
+        auth: None,
+    };
+    Ok(ents_receive::receive(
+        refs, objects, events, &proposal, mode,
+    )?)
+}
+
+/// Build (but do not send) the [`draft_plan`] transition — the seam
+/// `git-ents`'s `agent-plan` effect handler uses to land the session's
+/// draft alongside its own results record in one atomic
+/// [`ents_receive::Proposal`], exactly as [`finish_transition`] does for
+/// `agent-exec`'s finalize.
+///
+/// # Errors
+///
+/// See [`draft_plan`] — identical.
+pub fn draft_plan_transition(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    id: &str,
+    plan: String,
+    transcript: Vec<Vec<u8>>,
+    identity: &Identity<'_>,
+) -> Result<(ents_receive::RefTransition, ObjectId)> {
+    let mut session = session_at(refs, objects, id)?;
+    if session.meta.status != Status::Planning {
+        return Err(Error::InvalidArgument(format!(
+            "agent session {id} is not planning; only a planning session may be auto-drafted"
+        )));
+    }
+    session.plan = Some(plan);
+    session.confirm = None;
+    session.meta.status = Status::Ready;
+    session.thread.extend(transcript);
+
+    let ref_name = ents_model::namespace::agent_session_ref(id)?;
+    Ok(ents_receive::entity_transition(
+        refs,
+        objects,
+        &ref_name,
+        &session,
+        identity,
+        &format!("Draft plan for agent session {id}"),
     )?)
 }
 

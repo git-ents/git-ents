@@ -298,6 +298,31 @@ fn confirm_refuses_a_session_with_no_plan() {
     assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
 }
 
+/// `confirm` refuses a session whose plan is empty, or all-whitespace —
+/// `docs/agent-sessions-plan.adoc`'s Phase 4 acceptance: "no confirm can
+/// bind an empty or absent plan leaf."
+// @relation(scope=function, role=Verifies)
+#[rstest]
+#[case::empty("")]
+#[case::whitespace("   \n\t")]
+fn confirm_refuses_a_session_with_an_empty_plan(#[case] empty_plan: &str) {
+    let fixture = Fixture::new();
+    let id = fixture.new_session();
+    fixture.revise_plan(&id, empty_plan);
+
+    let error = agent::confirm(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        None,
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
 /// `revise_plan` refuses a session once it is past the point of no return
 /// (`Running`, `Done`, or `Failed`) — seeded directly onto the ref, since no
 /// Phase 1 command reaches those statuses yet (Phase 2's effect worker
@@ -555,4 +580,206 @@ fn finish_failed_records_the_failure_reason() {
             detail: "sandbox died".to_owned()
         })
     );
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 (`docs/agent-sessions-plan.adoc`): `reopen`, `append_thread`,
+// `draft_plan`.
+// ---------------------------------------------------------------------
+
+/// `reopen` returns a queued session to `planning`, dropping the confirm —
+/// the plan's resolved-by-default "un-queue" item, offered as its own
+/// action rather than only as `revise_plan`'s side effect.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn reopen_returns_a_queued_session_to_planning_and_drops_the_confirm() {
+    let fixture = Fixture::new();
+    let id = fixture.queued_session();
+
+    let outcome = agent::reopen(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect("reopens");
+    assert_eq!(outcome.result, TxResult::Applied);
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.status, Status::Planning);
+    assert!(session.confirm.is_none());
+    assert!(
+        session.plan.is_some(),
+        "reopening keeps the plan text around for the resumed conversation's context"
+    );
+}
+
+/// `reopen` refuses a session that is not `Ready`: still `planning` has
+/// nothing to reopen, and `running`/terminal are past the point of no
+/// return.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn reopen_refuses_a_session_that_is_not_ready() {
+    let fixture = Fixture::new();
+    let planning = fixture.new_session();
+    let error = agent::reopen(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &planning,
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused: still planning");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+
+    let queued = fixture.queued_session();
+    fixture.claim(&queued).expect("claims");
+    let error = agent::reopen(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &queued,
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused: running, past the point of no return");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
+/// `append_thread` appends a chat turn while `planning`, touching nothing
+/// else.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn append_thread_appends_a_turn_while_planning() {
+    let fixture = Fixture::new();
+    let id = fixture.new_session();
+    let before = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    let turns_before = before.thread.len();
+
+    let outcome = agent::append_thread(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        vec![b"user: what should the plan look like?".to_vec()],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect("appends");
+    assert_eq!(outcome.result, TxResult::Applied);
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.status, Status::Planning);
+    assert_eq!(session.thread.len(), turns_before.saturating_add(1));
+}
+
+/// `append_thread` also accepts a turn while `ready`-and-awaiting
+/// confirmation, but refuses once the session is queued, running, or
+/// terminal — `docs/agent-sessions-plan.adoc`'s Phase 4 acceptance: "after
+/// confirm, no endpoint accepts messages or revisions without the explicit
+/// un-queue."
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn append_thread_refuses_a_queued_running_or_terminal_session() {
+    let fixture = Fixture::new();
+
+    let awaiting = fixture.new_session();
+    fixture.revise_plan(&awaiting, "do the thing");
+    agent::append_thread(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &awaiting,
+        vec![b"one more thought".to_vec()],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect("awaiting confirmation still accepts a chat turn");
+
+    let queued = fixture.queued_session();
+    let error = agent::append_thread(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &queued,
+        vec![b"a message that must not land".to_vec()],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused: queued");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+
+    fixture.claim(&queued).expect("claims");
+    let error = agent::append_thread(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &queued,
+        vec![b"a message that must not land".to_vec()],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused: running");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
+}
+
+/// `draft_plan` commits a plan and transcript in one commit, transitioning
+/// `planning` to `ready` — the `agent-plan` effect's own commit.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn draft_plan_commits_the_plan_and_transcript_and_transitions_to_ready() {
+    let fixture = Fixture::new();
+    let id = fixture.new_session();
+
+    let outcome = agent::draft_plan(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        "1. read the failing test\n2. fix it\n3. re-run".to_owned(),
+        vec![b"drafting transcript".to_vec()],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect("drafts");
+    assert_eq!(outcome.result, TxResult::Applied);
+
+    let session = agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+    assert_eq!(session.meta.status, Status::Ready);
+    assert!(session.awaiting_confirmation());
+    assert_eq!(
+        session.plan.as_deref(),
+        Some("1. read the failing test\n2. fix it\n3. re-run")
+    );
+    assert_eq!(
+        session.thread.last().map(Vec::as_slice),
+        Some(b"drafting transcript".as_slice())
+    );
+}
+
+/// `draft_plan` refuses a session that is not `planning` — a human already
+/// moved it to `ready` (or further) by hand, and this function must not
+/// clobber that race rather than silently overwrite it.
+// @relation(scope=function, role=Verifies)
+#[rstest]
+fn draft_plan_refuses_a_session_that_is_not_planning() {
+    let fixture = Fixture::new();
+    let id = fixture.new_session();
+    fixture.revise_plan(&id, "a human already drafted this");
+
+    let error = agent::draft_plan(
+        &fixture.refs,
+        &fixture.objects,
+        &NullEventSink,
+        &id,
+        "a race draft".to_owned(),
+        vec![],
+        &fixture.identity(),
+        Mode::Advisory,
+    )
+    .expect_err("refused: already ready");
+    assert!(matches!(error, ents_forge::Error::InvalidArgument(_)));
 }

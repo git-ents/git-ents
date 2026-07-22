@@ -15,10 +15,11 @@ mod entity;
 
 pub use cli::AgentAction;
 pub use command::{
-    ClaimAgentSession, FinishAgentSession, FinishOutcome, NewAgentSession, claim, confirm, finish,
-    finish_transition, list, list_all, new, revise_plan, show,
+    ClaimAgentSession, FinishAgentSession, FinishOutcome, NewAgentSession, append_thread, claim,
+    confirm, draft_plan, draft_plan_transition, finish, finish_transition, list, list_all, new,
+    reopen, revise_plan, show,
 };
-pub use dispatch::{Dispatch, dispatch};
+pub use dispatch::{Dispatch, PlanDispatch, dispatch, dispatch_plan};
 pub use entity::{
     AgentSession, Confirm, FailureReason, ReviewPolicy, SessionMeta, Status, ToolchainPin,
 };

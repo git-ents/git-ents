@@ -3764,3 +3764,254 @@ async fn result_record_ref_is_derived_from_the_chains_own_confirmed_commit() {
     assert!(after.contains(&result_ref_display));
     assert!(!after.contains("not yet recorded"));
 }
+
+// ---------------------------------------------------------------------
+// `crate::pages::agent_chat` (`docs/agent-sessions-plan.adoc`'s Phase 4:
+// the laptop planning-chat page).
+// ---------------------------------------------------------------------
+
+/// `POST path` with a signed-in session's cookie and a form-encoded body,
+/// returning the response -- the chat-page tests' own thin wrapper around
+/// the same request shape [`agent_create_is_rejected_without_a_valid_csrf_token`]
+/// builds inline, factored out here since every test below needs at least
+/// one.
+async fn post_form(
+    router: &axum::Router,
+    path: &str,
+    cookie: &str,
+    body: String,
+) -> axum::http::Response<Body> {
+    router
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call")
+}
+
+/// A freshly started (`planning`) session's detail page links to its own
+/// planning-chat page, which itself renders the composer and the seeded
+/// prompt (the one place a thread blob is deliberately rendered -- see
+/// `crate::pages::agent_chat`'s own doc: it is the very page that wrote
+/// it, for the member who wrote it).
+#[tokio::test]
+// @relation(lens.parity, scope=function, role=Verifies)
+async fn agent_detail_links_to_chat_and_chat_renders_the_composer_and_prompt() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(30),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "reproduce the flaky test").await;
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains(&format!("/agents/{id}/chat")));
+
+    let chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(chat.contains("data-agent-chat"));
+    assert!(chat.contains("reproduce the flaky test"));
+    assert!(!chat.contains("Reopen for planning"));
+}
+
+/// `POST /agents/{id}/chat` appends the member's message and the injected
+/// `Planner`'s reply (`ents_web::planner::UnconfiguredPlanner`, the
+/// default every composition root installs) in one commit, both of which
+/// then render on a reload of the chat page.
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn agent_chat_send_appends_the_turn_pair_and_renders_the_stub_planners_reply() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(31),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=what+should+the+plan+look+like%3F&csrf={csrf}"),
+    )
+    .await;
+    assert!(response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(
+        session.thread.len(),
+        3,
+        "prompt + user turn + assistant turn"
+    );
+
+    let chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(chat.contains("what should the plan look like?"));
+    assert!(chat.to_lowercase().contains("not configured"));
+}
+
+/// `roots.web-session`: `POST /agents/{id}/chat` is a state-changing route,
+/// refused without a valid CSRF token exactly like every other mutation in
+/// this crate.
+#[tokio::test]
+// @relation(roots.web-session, scope=function, role=Verifies)
+async fn agent_chat_send_is_rejected_without_a_valid_csrf_token() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(32),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, _csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        "message=sneaky&csrf=wrong".to_owned(),
+    )
+    .await;
+    assert!(!response.status().is_success() && !response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(
+        session.thread.len(),
+        1,
+        "the bad-csrf message must not land"
+    );
+}
+
+/// `docs/agent-sessions-plan.adoc`'s Phase 4 acceptance: once a session is
+/// confirmed and queued, `POST /agents/{id}/chat` refuses rather than
+/// silently un-queueing it; `POST /agents/{id}/reopen` is the explicit
+/// un-queue that returns it to `planning`, after which chatting works
+/// again.
+#[tokio::test]
+// @relation(scope=function, role=Verifies)
+async fn agent_chat_refuses_a_queued_session_until_explicitly_reopened() {
+    let seed = 33u8;
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(seed),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let key = Keypair::from_seed(seed);
+    let identity = Identity {
+        actor: fixture_actor("filer"),
+        author: None,
+        sign: &|payload| key.sign(payload),
+    };
+    ents_forge::agent::revise_plan(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        "do the thing".to_owned(),
+        &identity,
+        state.mode,
+    )
+    .expect("revises");
+    ents_forge::agent::confirm(
+        state.refs.as_ref(),
+        &*state.objects(),
+        state.events.as_ref(),
+        &id,
+        None,
+        &identity,
+        state.mode,
+    )
+    .expect("confirms");
+    assert!(
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id)
+            .expect("shows")
+            .queued()
+    );
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let refused = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=let%27s+change+something&csrf={csrf}"),
+    )
+    .await;
+    assert!(
+        !refused.status().is_success() && !refused.status().is_redirection(),
+        "a queued session must refuse a chat message rather than silently un-queue"
+    );
+
+    let queued_chat = get_body(&router, &format!("/agents/{id}/chat")).await;
+    assert!(queued_chat.contains("Reopen for planning"));
+
+    let reopened = post_form(
+        &router,
+        &format!("/agents/{id}/reopen"),
+        &cookie,
+        format!("csrf={csrf}"),
+    )
+    .await;
+    assert!(reopened.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(session.meta.status, ents_forge::agent::Status::Planning);
+    assert!(session.confirm.is_none());
+
+    let sent = post_form(
+        &router,
+        &format!("/agents/{id}/chat"),
+        &cookie,
+        format!("message=let%27s+change+something&csrf={csrf}"),
+    )
+    .await;
+    assert!(
+        sent.status().is_redirection(),
+        "chatting works again once the session is reopened"
+    );
+}
+
+/// `POST /agents/{id}/plan` commits the plan editor's text via
+/// `ents_forge::agent::revise_plan`, transitioning the session to
+/// `ready`/awaiting-confirmation -- the same commit path
+/// `docs/agent-sessions-plan.adoc`'s Phase 4 names for both this chat page
+/// and the headless `agent-plan` effect.
+#[tokio::test]
+// @relation(lens.parity, roots.web-signing, roots.web-session, scope=function, role=Verifies)
+async fn agent_plan_commit_transitions_to_ready_awaiting_confirmation() {
+    let state = build_state(FixtureIdentity {
+        name: "filer",
+        key: Keypair::from_seed(34),
+    });
+    let router = ents_web::router(state.clone());
+    let id = seed_agent_via_web(&router, &state, "prompt").await;
+
+    let (cookie, csrf) =
+        session_cookie_and_csrf(&router, &state, &format!("/agents/{id}/chat")).await;
+    let response = post_form(
+        &router,
+        &format!("/agents/{id}/plan"),
+        &cookie,
+        format!("plan=1.+read+the+test%0A2.+fix+it&csrf={csrf}"),
+    )
+    .await;
+    assert!(response.status().is_redirection());
+
+    let session =
+        ents_forge::agent::show(state.refs.as_ref(), &*state.objects(), &id).expect("shows");
+    assert_eq!(session.meta.status, ents_forge::agent::Status::Ready);
+    assert!(session.awaiting_confirmation());
+
+    let detail = get_body(&router, &format!("/agents/{id}")).await;
+    assert!(detail.contains("Confirm plan"));
+}

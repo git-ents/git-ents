@@ -261,6 +261,25 @@ pub fn post_receive(
                 &|payload| signer.sign(payload),
                 Mode::Mandatory,
             )?;
+        } else if effect_name == crate::plan_worker::AGENT_PLAN_NAME {
+            // The `agent-plan` effect (`docs/agent-sessions-plan.adoc`'s
+            // Phase 4) needs the same bespoke handling `agent-exec` does,
+            // for the same reason: a plain pass/fail result on a single
+            // ref cannot express "draft a plan and land it atomically with
+            // this effect's own result."
+            crate::plan_worker::run_agent_plan(
+                &root.refs,
+                &root.objects,
+                &root.events,
+                executor,
+                scratch,
+                &toolchains,
+                &effect.run,
+                oid,
+                &author,
+                &|payload| signer.sign(payload),
+                Mode::Mandatory,
+            )?;
         } else {
             run_one(
                 &root.refs,

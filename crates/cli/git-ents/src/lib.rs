@@ -81,6 +81,7 @@ pub mod exe;
 pub mod hook;
 pub mod mutate;
 pub mod package;
+pub mod plan_worker;
 pub mod root;
 pub mod sign;
 

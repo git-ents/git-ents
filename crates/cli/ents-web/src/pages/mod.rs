@@ -24,6 +24,7 @@
 //! `.wb-bar`'s own `.palette` search form rather than any rail item.
 
 pub mod account;
+pub mod agent_chat;
 pub mod agents;
 pub mod comments;
 pub mod commits;
