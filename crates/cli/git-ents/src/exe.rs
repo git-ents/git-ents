@@ -8,8 +8,8 @@
 )]
 
 use crate::cli::{
-    AccountAction, AgentAction, Cli, CommentAction, EffectAction, HookAction, InboxAction,
-    IssueAction, MembersAction, RedactAction, ReviewAction, ToolchainAction, Top,
+    AccountAction, AgentAction, Cli, CommentAction, ConfigAction, EffectAction, HookAction,
+    InboxAction, IssueAction, MembersAction, RedactAction, ReviewAction, ToolchainAction, Top,
 };
 use crate::commands;
 use crate::error::Result;
@@ -69,6 +69,7 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         }
         Top::Members { action } => run_members(action, out),
         Top::Account { action } => run_account(action, out),
+        Top::Config { action } => run_config(action, out),
         Top::Effect { action } => run_effect(action, out),
         Top::Toolchain { action } => run_toolchain(action, out),
         Top::Comment { action } => run_comment(action, out),
@@ -167,6 +168,34 @@ fn run_account(action: AccountAction, out: &mut impl std::io::Write) -> Result<(
         AccountAction::Create { member, login, key } => {
             commands::account::create(&root, member, login, key)?;
             let _ = writeln!(out, "account created");
+        }
+    }
+    Ok(())
+}
+
+fn run_config(action: ConfigAction, out: &mut impl std::io::Write) -> Result<()> {
+    let root = LocalRoot::discover(".")?;
+    match action {
+        ConfigAction::Show => {
+            let config = commands::config::show(&root)?;
+            let _ = writeln!(
+                out,
+                "agent_provider: {}",
+                config.agent_provider.as_deref().unwrap_or("(unset)")
+            );
+            let _ = writeln!(
+                out,
+                "agent_default_model: {}",
+                config.agent_default_model.as_deref().unwrap_or("(unset)")
+            );
+        }
+        ConfigAction::Set {
+            agent_provider,
+            agent_default_model,
+            key,
+        } => {
+            commands::config::set(&root, agent_provider, agent_default_model, key)?;
+            let _ = writeln!(out, "config updated");
         }
     }
     Ok(())
@@ -470,6 +499,10 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
             };
             let target = commands::review::new(&root, new, key)?;
             let _ = writeln!(out, "reviewed {}", ents_forge::abbreviate_id(&target));
+        }
+        ReviewAction::Withdraw { target, key } => {
+            let target = commands::review::withdraw(&root, target, key)?;
+            let _ = writeln!(out, "withdrew {}", ents_forge::abbreviate_id(&target));
         }
         ReviewAction::List { target } => {
             for ((review_target, member), review) in commands::review::list(&root, target)? {

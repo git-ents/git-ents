@@ -74,7 +74,15 @@ where
             "/reviews/{target}/{member}/comment",
             post(pages::commits::review_comment::<O>),
         )
+        .route(
+            "/reviews/{target}/{member}/withdraw",
+            post(pages::reviews::withdraw::<O>),
+        )
         .route("/reviews", get(pages::reviews::list::<O>))
+        .route(
+            "/reviews/{target}/{member}",
+            get(pages::reviews::show::<O>),
+        )
         .route("/files", get(pages::files::root::<O>))
         .route("/files/{*path}", get(pages::files::show::<O>))
         .route("/meta", get(pages::meta::show::<O>))

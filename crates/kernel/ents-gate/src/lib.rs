@@ -155,7 +155,7 @@ mod signature;
 mod verdict;
 mod verify;
 
-pub use config::Config;
+pub use config::{Config, agent_default_model, agent_provider};
 pub use error::{Error, Result};
 pub use verdict::{Admission, AdmissionKind, Refusal, Requirement, Verdict};
 pub use verify::{Update, verify};

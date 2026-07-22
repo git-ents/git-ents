@@ -33,7 +33,9 @@ pub enum AgentAction {
         /// The ref the run executes against as its starting point.
         #[facet(args::named, default = "HEAD")]
         base: String,
-        /// The session's initially resolved review policy: auto or manual.
+        /// The session's initially resolved review policy. `manual` (default):
+        /// no review opens on its own; you start one yourself. `auto`: a review
+        /// of the result opens automatically once the run finishes.
         #[facet(args::named, default = "manual")]
         review_policy: String,
         /// The genesis oid of a prior session this one retries.

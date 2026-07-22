@@ -50,6 +50,40 @@ pub fn new(root: &LocalRoot, new: NewReview, key: Option<std::path::PathBuf>) ->
     Ok(target)
 }
 
+/// `git ents review withdraw`: retract the signer's own review of `target`,
+/// resolving the reviewer's member id exactly as [`new`] does — the
+/// withdrawing member is always the signing identity's own resolved
+/// member, never one named on the command line, so this can never be
+/// pointed at someone else's review (`gate.owner-mutation` refuses it even
+/// if it were).
+///
+/// # Errors
+///
+/// [`crate::error::Error::Forge`] (wrapping [`ents_forge::Error::NotFound`])
+/// if this member has no existing review reaching `target`; otherwise as
+/// [`new`].
+pub fn withdraw(root: &LocalRoot, target: String, key: Option<std::path::PathBuf>) -> Result<String> {
+    let signer = signer(root, key)?;
+    let member = reviewer_member_id(root, &signer)?;
+    let identity = Identity {
+        actor: actor(&signer),
+        author: None,
+        sign: &|payload| signer.sign(payload),
+    };
+    let (target, outcome) = review::withdraw(
+        &root.refs,
+        &root.objects,
+        &root.events,
+        &root.path,
+        &target,
+        &member,
+        &identity,
+        root.mode(),
+    )?;
+    outcome_to_result(outcome, None)?;
+    Ok(target)
+}
+
 /// The member id owning the signer's key — the composite review key's
 /// `<member>` segment — via the same key-to-member scan
 /// [`super::members::find_by_key`] already performs for `git ents members

@@ -259,6 +259,85 @@ pub fn list(
     Ok(out)
 }
 
+/// `git ents review withdraw`: retract `member`'s own review of `target`,
+/// leaving the prior verdict in history rather than erasing it
+/// (`model.review`). Resolves `target` (a revision) exactly as [`new`]
+/// does, then reuses [`find_review_to_advance`] to locate `member`'s
+/// *existing* review whose recorded target ([`Review::target`]) is
+/// `target` itself or one of its ancestors — the same fast-forward lookup
+/// `new` performs before a re-review, so a withdrawal reaches the review
+/// even if it has since advanced past the commit named here. That review's
+/// [`Review::withdrawn`] copy — same `target`, `verdict`, and `body`, only
+/// `state` flipped — is written back onto the *same* two refs via
+/// [`propose_entity_with_pin`], the identical advance/ref-writing path
+/// `new` uses: no parallel write path exists for withdrawal
+/// (`model.review-pin`, `receive.multi-ref-atomicity`).
+///
+/// Ownership is enforced entirely by `ents-gate`'s existing checks on the
+/// `refs/meta/reviews/<target>/<member>` namespace — `identity_binding`'s
+/// `Namespace::Review` arm (a review must be signed by the exact `member`
+/// its own refname names) and `owner_mutation`'s `Namespace::Review` arm
+/// (only that same signer may advance it) — so this function does not
+/// re-check who `member` is; it only ever builds and writes
+/// `reviews/<target>/<member>`, `member`'s own ref, and lets the gate
+/// refuse anything else the same way it already refuses a mismatched
+/// re-review (`gate.identity-binding`, `gate.owner-mutation`).
+///
+/// Withdrawing an already-withdrawn review is not an error: the found
+/// review's `withdrawn()` copy of a `Withdrawn` review is itself
+/// `Withdrawn`, so this simply re-writes the same state — a harmless
+/// no-op-ish advance, not a special case this function detects.
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] if `target` does not resolve to a commit;
+/// [`Error::NotFound`] if `member` has no existing review reaching
+/// `target` — there is nothing to withdraw; otherwise propagates
+/// serialization or `receive` failures.
+// @relation(model.review, model.review-pin, meta-ref.identity-binding, receive.multi-ref-atomicity, lens.parity, scope=function)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one field per mutation shape, mirroring new's identically-justified shape"
+)]
+pub fn withdraw(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    events: &dyn ents_receive::EventSink,
+    repo_path: &std::path::Path,
+    target: &str,
+    member: &MemberId,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<(String, Outcome)> {
+    let repo = gix::open(repo_path)?;
+    let reviewed = resolve_in(&repo, target)?;
+
+    let target_hex = find_review_to_advance(refs, objects, &repo, member, reviewed)?.ok_or_else(
+        || Error::NotFound {
+            what: format!("review of {reviewed} by {member}"),
+        },
+    )?;
+    let existing = review_at(refs, objects, &target_hex, member)?;
+    let withdrawn = existing.withdrawn();
+    let retained = existing.target();
+
+    let outcome = propose_entity_with_pin(
+        refs,
+        objects,
+        events,
+        ents_model::namespace::review_ref(&target_hex, member)?,
+        &withdrawn,
+        ents_model::namespace::review_pin_ref(&target_hex, member)?,
+        retained,
+        identity,
+        &format!("Withdraw review {retained}"),
+        &format!("Pin review {target_hex}/{member}"),
+        mode,
+    )?;
+
+    Ok((target_hex, outcome))
+}
+
 /// `git ents review show`: `target`/`member`'s review, plus its discussion
 /// thread — every [`Comment`] naming `reviews/<target>/<member>` as its
 /// context (or a reply into one), reusing [`crate::comment::thread`] rather

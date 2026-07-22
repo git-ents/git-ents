@@ -4191,3 +4191,267 @@ async fn agent_plan_commit_transitions_to_ready_awaiting_confirmation() {
     let detail = get_body(&router, &format!("/agents/{id}")).await;
     assert!(detail.contains("Confirm plan"));
 }
+
+/// `GET /reviews` (`crate::pages::reviews`): a withdrawn review stays in
+/// `refs/meta/reviews/*`'s own history (`model.review`, append-only) but
+/// must not render in this aggregate listing, while an ordinary active
+/// review of the same target still does -- the filter this page's own
+/// `list` applies on `ents_forge::review::ReviewState::Withdrawn`.
+#[tokio::test]
+async fn reviews_list_hides_a_withdrawn_review_but_keeps_an_active_one() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let target = "0123456789abcdef0123456789abcdef01234567";
+    let reviewed = gix_hash::ObjectId::from_hex(target.as_bytes()).expect("valid hex");
+
+    let active_ref =
+        ents_model::namespace::review_ref(target, &MemberId::new("alice")).expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        active_ref,
+        &ents_forge::review::Review::new(
+            reviewed,
+            ents_forge::review::Verdict::Approve,
+            "looks good",
+        ),
+        None,
+        100,
+    );
+
+    let withdrawn_ref =
+        ents_model::namespace::review_ref(target, &MemberId::new("bob")).expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        withdrawn_ref,
+        &ents_forge::review::Review::new(
+            reviewed,
+            ents_forge::review::Verdict::RequestChanges,
+            "please fix this",
+        )
+        .withdrawn(),
+        None,
+        100,
+    );
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let body = get_body(&router, "/reviews").await;
+    assert!(body.contains("alice"), "active review still lists: {body}");
+    assert!(!body.contains("bob"), "withdrawn review must not render: {body}");
+}
+
+/// `GET /reviews/{target}/{member}` (`crate::pages::reviews::show`): a
+/// review started through the commit page's own form (`POST
+/// /commit/{oid}/review`) gets its own detail page -- the verdict chip, an
+/// `active` state badge, the rendered body, and (since the viewing
+/// identity is the review's own author) a withdraw control -- and the
+/// Reviews split's own sidebar (`reviews_sidebar`) links to it, newest
+/// first, beside `GET /reviews`'s own aggregate listing.
+#[tokio::test]
+// @relation(model.review, lens.parity, scope=function, role=Verifies)
+async fn review_detail_page_renders_for_its_own_author_with_a_withdraw_control() {
+    let dir = seed_repo(&[("src/main.rs", "fn main() {}\n")]);
+    let oid = head_oid(dir.path());
+    let state = build_state_at(
+        FixtureIdentity {
+            name: "reviewer",
+            key: Keypair::from_seed(1),
+        },
+        dir.path().to_owned(),
+    );
+    let router = ents_web::router(state.clone());
+
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, &format!("/commit/{oid}")).await;
+    let started = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/commit/{oid}/review"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from(format!(
+                    "verdict=approve&body=looks+good+to+me&csrf={csrf}"
+                )))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(started.status().is_redirection(), "{:?}", started.status());
+
+    let commit_page = get_body(&router, &format!("/commit/{oid}")).await;
+    let review_id = commit_page
+        .split_once("/reviews/")
+        .and_then(|(_, rest)| rest.split_once("/comment"))
+        .map(|(id, _)| id)
+        .expect("a review comment form links in")
+        .to_owned();
+
+    // The sidebar/list both link to the review's own detail page.
+    let list = get_body(&router, "/reviews").await;
+    assert!(
+        list.contains(&format!("href=\"/reviews/{review_id}\"")),
+        "the sidebar links the active review's own detail page: {list}"
+    );
+
+    let detail = get_body(&router, &format!("/reviews/{review_id}")).await;
+    assert!(
+        detail.contains("class=\"verdict verdict-approve\""),
+        "the verdict chip renders: {detail}"
+    );
+    assert!(
+        detail.contains("looks good to me"),
+        "the review body renders as its own doc-body: {detail}"
+    );
+    assert!(
+        detail.contains(">active<"),
+        "the state badge names the review active: {detail}"
+    );
+    assert!(
+        detail.contains(&format!("action=\"/reviews/{review_id}/withdraw\"")),
+        "the review's own author sees a withdraw control: {detail}"
+    );
+
+    // Withdrawing redirects back to the same detail page, which still
+    // renders -- but now with the withdrawn indicator instead of the
+    // button -- while the sidebar and the aggregate list both drop it.
+    let (cookie, csrf) = session_cookie_and_csrf(&router, &state, &detail_path(&review_id)).await;
+    let withdrawn = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/reviews/{review_id}/withdraw"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from(format!("csrf={csrf}")))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        withdrawn.status().is_redirection(),
+        "{:?}",
+        withdrawn.status()
+    );
+
+    let detail_after = get_body(&router, &format!("/reviews/{review_id}")).await;
+    assert!(
+        detail_after.contains("withdrawn"),
+        "the withdrawn review's own page states so plainly: {detail_after}"
+    );
+    assert!(
+        !detail_after.contains(&format!("action=\"/reviews/{review_id}/withdraw\"")),
+        "a withdrawn review no longer offers the withdraw control: {detail_after}"
+    );
+
+    let list_after = get_body(&router, "/reviews").await;
+    assert!(
+        !list_after.contains(&format!("href=\"/reviews/{review_id}\"")),
+        "the withdrawn review drops out of the aggregate list: {list_after}"
+    );
+}
+
+/// `format!("/reviews/{{review_id}}")`, spelled once so
+/// [`review_detail_page_renders_for_its_own_author_with_a_withdraw_control`]
+/// can reuse the same detail path both to fetch a fresh CSRF token and to
+/// `POST` the withdraw form against it.
+fn detail_path(review_id: &str) -> String {
+    format!("/reviews/{review_id}")
+}
+
+/// `crate::pages::reviews::show`'s withdraw control only ever renders for
+/// the review's *own* author -- a second identity viewing the same
+/// still-active review sees the metadata card and the thread, but no
+/// withdraw form at all, exactly as `commits::reviews_section` never lets
+/// one member's page render a button that would fail
+/// `ents_forge::review::withdraw`'s own author check.
+#[tokio::test]
+async fn review_detail_page_hides_the_withdraw_control_from_a_non_author() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let target = "0123456789abcdef0123456789abcdef01234567";
+    let reviewed = gix_hash::ObjectId::from_hex(target.as_bytes()).expect("valid hex");
+
+    let review_ref =
+        ents_model::namespace::review_ref(target, &MemberId::new("carol")).expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        review_ref,
+        &ents_forge::review::Review::new(
+            reviewed,
+            ents_forge::review::Verdict::Approve,
+            "review body from carol",
+        ),
+        None,
+        100,
+    );
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "onlooker",
+            key: Keypair::from_seed(2),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let detail = get_body(&router, &format!("/reviews/{target}/carol")).await;
+    assert!(
+        detail.contains("review body from carol"),
+        "the review still renders for a non-author viewer: {detail}"
+    );
+    assert!(
+        !detail.contains("/withdraw\""),
+        "a non-author viewer sees no withdraw control: {detail}"
+    );
+}
+
+/// `POST /reviews/{target}/{member}/withdraw` is a state-changing route
+/// gated the same way every other mutation in this crate is
+/// (`roots.web-session`): no CSRF field at all is rejected outright,
+/// regardless of whether the named review even exists.
+#[tokio::test]
+async fn review_withdraw_is_rejected_without_a_valid_csrf_token() {
+    let state = build_state(FixtureIdentity {
+        name: "local-user",
+        key: Keypair::from_seed(1),
+    });
+    let router = ents_web::router(Arc::clone(&state));
+
+    let no_csrf = router
+        .clone()
+        .oneshot(
+            Request::post("/reviews/0123456789abcdef0123456789abcdef01234567/carol/withdraw")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert!(
+        !no_csrf.status().is_success() && !no_csrf.status().is_redirection(),
+        "a POST with no csrf field must not withdraw a review"
+    );
+
+    let (cookie, _csrf) = session_cookie_and_csrf(&router, &state, "/reviews").await;
+    let wrong = router
+        .oneshot(
+            Request::post("/reviews/0123456789abcdef0123456789abcdef01234567/carol/withdraw")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("csrf=not-the-token"))
+                .expect("request"),
+        )
+        .await
+        .expect("in-process call");
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+}
