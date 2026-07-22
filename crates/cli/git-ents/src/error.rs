@@ -77,6 +77,19 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// A `git push` run on the operator's behalf failed: the remote's
+    /// gate refused the enrollment, or the transport itself failed.
+    #[error("push of {refspec} to {remote} failed:\n{stderr}")]
+    Push {
+        /// The refspec being pushed.
+        refspec: String,
+        /// The remote pushed to.
+        remote: String,
+        /// git's own stderr, which carries the gate's refusal
+        /// (`gate.verdict-reason`) when there is one.
+        stderr: String,
+    },
+
     /// A malformed command-line argument that passed `figue`'s own parsing
     /// but fails a semantic check this crate makes (an invalid line range,
     /// an unparsable oid, ...).

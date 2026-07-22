@@ -57,8 +57,10 @@ where
         html! {
             (crate::render::unreadable_disclosure(&failures))
             (table)
-            h2 { "Define an Effect" }
-            (add_form(&session))
+            div.card {
+                div.card-header { "Define an effect" }
+                (add_form(&session))
+            }
         },
     ))
 }
@@ -69,14 +71,14 @@ fn add_form(session: &Session) -> maud::Markup {
     html! {
         form method="post" action="/effects" {
             (super::csrf_input(session))
-            label { "name" input type="text" name="name"; }
+            label { "Name" input type="text" name="name"; }
             label {
-                "trigger"
+                "Trigger"
                 input type="text" name="trigger" placeholder="query.grammar trigger";
             }
-            label { "run" input type="text" name="run" placeholder="command to run"; }
+            label { "Run" input type="text" name="run" placeholder="command to run"; }
             label {
-                "toolchains"
+                "Toolchains"
                 input type="text" name="toolchains" placeholder="rust, node";
             }
             button type="submit" { "Define Effect" }

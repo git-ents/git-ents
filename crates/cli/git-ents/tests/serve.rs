@@ -93,7 +93,7 @@ async fn serve_identity_chip_shows_the_signers_enrolled_member_username() {
     )
     .expect("utf8 html");
     assert!(
-        body.contains(r#"class="id-chip" href="/account">jdc</a>"#),
+        body.contains(r#"class="id-chip" href="/account""#) && body.contains("<span>jdc</span>"),
         "the id-chip must show the enrolled member's own username: {body}"
     );
 }

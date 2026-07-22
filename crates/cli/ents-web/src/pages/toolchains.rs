@@ -70,8 +70,10 @@ where
         html! {
             (crate::render::unreadable_disclosure(&failures))
             (listing)
-            h2 { "Import a Toolchain" }
-            (import_form(&session))
+            div.card {
+                div.card-header { "Import a toolchain" }
+                (import_form(&session))
+            }
         },
     ))
 }
@@ -82,9 +84,9 @@ fn import_form(session: &Session) -> maud::Markup {
     html! {
         form method="post" action="/toolchains" {
             (super::csrf_input(session))
-            label { "name" input type="text" name="name"; }
+            label { "Name" input type="text" name="name"; }
             label {
-                "recipe"
+                "Recipe"
                 textarea name="recipe"
                     placeholder="embedded <tree-oid>\nor:\ndownloaded\n<url> <sha256> <strip> [dest]" {}
             }

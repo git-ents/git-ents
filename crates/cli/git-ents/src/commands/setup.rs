@@ -1,6 +1,8 @@
 //! `git ents setup`: resolve or generate a signing key, record it as this
-//! repository's `user.signingkey` with `gpg.format=ssh`, and set
-//! `receive.denyCurrentBranch=updateInstead` (`roots.worktree-update`).
+//! repository's `user.signingkey` with `gpg.format=ssh`, set
+//! `receive.denyCurrentBranch=updateInstead` (`roots.worktree-update`),
+//! and ([`configure_global_signing_defaults`]) default every commit, tag,
+//! and (when asked) push, in any repository, to sign itself.
 //!
 //! `receive.denyCurrentBranch=updateInstead` is the integration-test
 //! harness edge case `roots.worktree-update` names: it lets an external
@@ -20,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore as _};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 
 use crate::error::{Error, Result};
@@ -53,9 +55,10 @@ pub fn run(root: &LocalRoot, key: Option<PathBuf>) -> Result<PathBuf> {
 
 /// Run `git ents setup --hosted` against the bare repository at `path`:
 /// resolve or generate a signing key for the hosted worker (recorded as
-/// `path`'s own `user.signingkey`/`gpg.format=ssh`, same as [`run`]), and
+/// `path`'s own `user.signingkey`/`gpg.format=ssh`, same as [`run`]),
 /// install this binary's `hook pre-receive`/`hook post-receive` as
-/// `path`'s own git hooks (`roots.single-node-hosted`).
+/// `path`'s own git hooks (`roots.single-node-hosted`), and require every
+/// push to carry a verifiable signed-push certificate (below).
 ///
 /// `receive.denyCurrentBranch=updateInstead` is deliberately not set here:
 /// it is the local-root, checked-out-worktree edge case
@@ -77,8 +80,56 @@ pub fn run_hosted(path: &Path, key: Option<PathBuf>) -> Result<PathBuf> {
     ] {
         set_local_config(path, key, value)?;
     }
+    write_pubkey(&resolved)?;
     install_hooks(path)?;
+    configure_signed_push(path)?;
     Ok(resolved)
+}
+
+/// Make `receive-pack` advertise and require the `push-cert` capability:
+/// without `receive.certNonceSeed` set, stock git never advertises it at
+/// all, so `git push --signed` fails with "the receiving end does not
+/// support --signed push" regardless of what `hook pre_receive` goes on
+/// to verify. The seed itself only needs to stay stable across the two
+/// requests one push makes (the capability advertisement and the push
+/// itself) — not across pushes — but is generated once and reused on
+/// every later boot anyway, so an in-flight push spanning a restart still
+/// verifies. `certNonceSlop` tolerates the two requests landing in
+/// different seconds.
+fn configure_signed_push(path: &Path) -> Result<()> {
+    let seed = match get_local_config(path, "receive.certNonceSeed")? {
+        Some(existing) => existing,
+        None => generate_nonce_seed(),
+    };
+    for (key, value) in [
+        ("receive.certNonceSeed", seed.as_str()),
+        ("receive.certNonceSlop", "60"),
+    ] {
+        set_local_config(path, key, value)?;
+    }
+    Ok(())
+}
+
+/// 32 random bytes, hex-encoded — plenty of entropy for a nonce-signing
+/// secret that never leaves this repository's local config.
+fn generate_nonce_seed() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Write the key's public half to `<key>.pub` — the front proxy publishes
+/// it at a well-known path so `git ents bootstrap` can discover the server
+/// identity to vouch for (`roots.web-signing`) without the operator
+/// copying it out of the logs. Runs every boot, so a volume whose key
+/// predates this file gains it on the next deploy.
+fn write_pubkey(key: &Path) -> Result<()> {
+    let pubkey = Signer::load(key)?.public_openssh();
+    let pub_path = PathBuf::from(format!("{}.pub", key.display()));
+    std::fs::write(&pub_path, format!("{pubkey}\n")).map_err(|source| Error::Io {
+        path: pub_path,
+        source,
+    })
 }
 
 /// Resolve `key` (or `path`'s `user.signingkey`, or a default
@@ -154,6 +205,59 @@ fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Sign every commit, tag, and (when the remote asks) push by default —
+/// written to the operator's *global* (`~/.gitconfig`) config, not any
+/// one repository's, so `git ents setup` needs running only once per
+/// machine for every later `git commit`/`git push`, anywhere, to sign
+/// itself without `-S`/`--signed`. `push.gpgsign=if-asked` in particular
+/// is what makes a plain `git push` safe against both a hosted root
+/// (which now advertises `push-cert`, so this signs) and a remote that
+/// does not (GitHub among them, which never has — this silently pushes
+/// unsigned there instead of failing outright).
+///
+/// Deliberately not called from [`run`] itself: `run`'s callers configure
+/// one *repository* (this crate's own integration tests among them), and
+/// must never mutate the real machine's global git config as a side
+/// effect of that; only the actual `git ents setup` CLI invocation calls
+/// this.
+///
+/// # Errors
+///
+/// Propagates a `git config --global` failure.
+pub fn configure_global_signing_defaults() -> Result<()> {
+    for (key, value) in [
+        ("commit.gpgsign", "true"),
+        ("tag.gpgsign", "true"),
+        ("push.gpgsign", "if-asked"),
+    ] {
+        set_global_config(key, value)?;
+    }
+    Ok(())
+}
+
+/// Set `key` to `value` in the operator's global (`~/.gitconfig`) config
+/// via `git config --global` — unlike [`set_local_config`], not scoped to
+/// any one repository.
+fn set_global_config(key: &str, value: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["config", "--global", key, value])
+        .output()
+        .map_err(|source| Error::Io {
+            path: PathBuf::from("~/.gitconfig"),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(Error::Io {
+            path: PathBuf::from("~/.gitconfig"),
+            source: std::io::Error::other(format!(
+                "git config --global {key} {value} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )),
+        });
+    }
+    Ok(())
+}
+
 /// Set `key` to `value` in `repo_path`'s own local config via `git config`.
 fn set_local_config(repo_path: &Path, key: &str, value: &str) -> Result<()> {
     let output = Command::new("git")
@@ -175,6 +279,27 @@ fn set_local_config(repo_path: &Path, key: &str, value: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Read `key` from `repo_path`'s own local config, or `None` if it is
+/// unset — used to make [`configure_signed_push`] idempotent across boots
+/// rather than mint a fresh nonce seed (and so a fresh push-cert
+/// namespace) every deploy.
+fn get_local_config(repo_path: &Path, key: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["config", "--local", "--get", key])
+        .output()
+        .map_err(|source| Error::Io {
+            path: repo_path.to_owned(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 /// Generate a fresh, unencrypted ed25519 key at `path` (creating parent

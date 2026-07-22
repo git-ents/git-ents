@@ -1,5 +1,2 @@
 .DS_Store
 target/
-# Materialized from refs/meta/releases/<sha> just before `docker build`;
-# never a normal tracked file.
-docker/bin/

@@ -154,6 +154,10 @@ body {
 h1, h2, h3, h4, h5, h6 { font-family: var(--sans); font-weight: 600; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-2); text-decoration: underline; }
+/* Every bare `<code>` (a short oid, a CLI command name, ...) reads as a
+ * small code chip by default; contexts that already carry their own
+ * monospace flow (`.blob-code`, `.doc-body`) reset it back below. */
+code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
 ::selection { background: var(--accent-soft); }
 a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
@@ -252,7 +256,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 
 /* ===================== CONTENT / SPLIT ===================== */
 .content { max-width: 1120px; width: 100%; margin: 0 auto; padding: 30px 34px 60px; flex: 1; }
-.readable { max-width: 760px; }
+.readable { max-width: 760px; margin-inline: auto; }
 /* Master-detail (`crate::pages::layout_split`): a sticky scrollable
  * sidebar beside a `min-height:0` detail pane. */
 .split { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: calc(100vh - 56px); }
@@ -306,10 +310,30 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 /* ===================== PAGE HEADER ===================== */
-.page-header { margin-bottom: 22px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+/* Bare `h2` and `p.muted` in page flow are the section-heading and
+ * lead-in idiom (mock: 14px/600 with 26px above; muted lead-ins breathe
+ * instead of sitting flush on the card below). */
+.content h2, .pane h2 { margin: 26px 0 12px; font-size: 14px; font-weight: 600; }
+.content h2:first-child, .pane h2:first-child { margin-top: 0; }
+p.muted { margin-bottom: 16px; font-size: 13px; text-wrap: pretty; }
+.page-header {
+  margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
 .page-title { font-size: 22px; font-weight: 600; letter-spacing: -.3px; line-height: 1.25; }
+/* A page-title that is itself a repository path (a tree/blob view -- the
+ * `.crumbs` trail right under it names the exact same path) -- monospace so
+ * it reads as the path it is, not prose competing with the crumb trail for
+ * the same information. */
+.page-title.path { font-family: var(--mono); font-size: 18px; word-break: break-all; }
 .page-sub { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
 .page-header .mono { font-family: var(--mono); color: var(--ink-2); }
+/* A `.crumbs` trail directly under a `.page-header` reads as its subtitle --
+ * hug it to the title instead of the header's own bottom border/margin, and
+ * move that border/gap to below the crumbs, in front of the page's content,
+ * so the title and its path trail read as one grouped header. */
+.page-header:has(+ .crumbs) { margin-bottom: 6px; padding-bottom: 0; border-bottom: none; }
+.page-header + .crumbs { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 
 /* ========================= CARDS ========================= */
 .card {
@@ -322,6 +346,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
   font-size: 13px; font-weight: 600; color: var(--ink);
 }
 .card-header .btn-ghost { margin-left: auto; }
+/* A form as a card's body gets the mock composer's inner padding, its
+ * action row right-aligned as the mock's composer footer. */
+.card > form { padding: 18px 20px; margin-bottom: 0; }
+.card > form .composer-buttons { justify-content: flex-end; }
+.tree-head .btn { height: 24px; }
+/* Stacked card rows (meta index): name over blurb, sans, left-aligned. */
+.card-row.stack { flex-direction: column; align-items: flex-start; gap: 2px; padding: 13px 16px; font-family: var(--sans); }
+.card-row.stack a { flex: none; font-size: 13.5px; font-weight: 600; color: var(--accent); text-transform: capitalize; }
+.card-row.stack span { font-size: 12.5px; color: var(--ink-3); }
 .card-row {
   display: flex; align-items: center; gap: 10px; padding: 9px 16px;
   font-family: var(--mono); font-size: 12.5px;
@@ -352,6 +385,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 .history .card-row a:hover { text-decoration: underline; }
 .desk-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sans); font-size: 13px; color: var(--ink); }
 .desk-when { flex: none; font-size: 12px; color: var(--ink-3); }
+/* Commit-row trailing author/when: sans, quiet, never wrapping (mock). */
+.row-author { flex: none; font-family: var(--sans); font-size: 12px; color: var(--ink-3); }
+.row-when { flex: none; font-family: var(--sans); font-size: 12px; color: var(--ink-4); white-space: nowrap; }
 @media (max-width: 1100px) { .desk { grid-template-columns: minmax(0, 1fr); } }
 
 /* ===================== BUTTONS ===================== */
@@ -359,6 +395,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
   display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 16px;
   font-size: 13px; font-weight: 500; color: #fff; background: var(--accent);
   border: none; border-radius: var(--radius-inner); cursor: pointer;
+  white-space: nowrap; flex: none;
 }
 .btn:hover { background: var(--accent-2); text-decoration: none; color: #fff; }
 .btn-sm { height: 24px; padding: 0 10px; font-size: 11.5px; border-radius: var(--radius-chip); }
@@ -486,7 +523,7 @@ ul:not(.string-list):not(.doc-body ul) li { padding: 5px 0; }
   text-align: center; padding: 40px 24px; border: 1px dashed var(--line);
   border-radius: var(--radius-card); background: var(--surface);
 }
-.blankslate h2 { font-size: 13.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.blankslate h2 { font-size: 13.5px; font-weight: 600; color: var(--ink-2); margin: 0 0 4px; }
 .blankslate p { color: var(--ink-3); font-size: 12.5px; }
 .blankslate code { font-family: var(--mono); background: var(--surface-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
 .card .blankslate { border: none; }
@@ -529,7 +566,7 @@ form button:hover { background: var(--accent-2); }
  * buttons where the current option fills with its own chip color. */
 .picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .picker button, .picker .opt {
-  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px;
+  display: inline-flex; flex-direction: row; align-items: center; gap: 6px; height: 32px; padding: 0 13px;
   border-radius: var(--radius-inner); cursor: pointer; font-size: 12.5px; font-weight: 500;
   color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line);
 }
@@ -544,6 +581,21 @@ form button:hover { background: var(--accent-2); }
 }
 .label-chip.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); font-weight: 600; }
 
+/* ===================== DISCLOSURES ===================== *
+ * An edit affordance folded shut (issue edit, login-mapping edit): a
+ * bordered card-let whose summary is the whole closed state. */
+.disclosure {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  overflow: hidden; margin-bottom: 12px;
+}
+.disclosure > summary {
+  padding: 11px 16px; cursor: pointer; list-style: none; user-select: none; -webkit-user-select: none;
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+}
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary:hover { color: var(--accent); }
+.disclosure form { padding: 4px 16px 16px; margin-bottom: 0; }
+
 /* ===================== CRUMBS ===================== */
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 16px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); word-break: break-all; }
 .crumbs a { color: var(--ink-3); }
@@ -556,6 +608,7 @@ form button:hover { background: var(--accent-2); }
  * `crate::pages::files`: a blob header bar over the line-per-row source
  * table. */
 .blob-header {
+  position: relative;
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 11px 15px;
   background: var(--surface); border: 1px solid var(--line); border-bottom: none;
   border-radius: var(--radius-inner) var(--radius-inner) 0 0;
@@ -566,6 +619,11 @@ form button:hover { background: var(--accent-2); }
 .blob-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--ink-3); }
 .blob-actions a { color: var(--ink-2); }
 .blob-actions a:hover { color: var(--accent); }
+/* A "comment on this file/commit" trigger's popup (`assets/ents.js`):
+ * floats below its trigger's own header row instead of pushing the
+ * header/content box's own seamless border pairing apart. */
+.standalone-composer { position: absolute; top: calc(100% + 8px); right: 14px; z-index: 20; width: min(480px, calc(100vw - 60px)); }
+.standalone-composer .composer-form { margin: 0; max-width: none; }
 .blob {
   overflow-x: auto; background: var(--surface); border: 1px solid var(--line);
   border-radius: 0 0 var(--radius-inner) var(--radius-inner); margin-bottom: 18px; padding: 8px 0 10px;
@@ -581,7 +639,7 @@ form button:hover { background: var(--accent-2); }
 .blob-nums a:hover { color: var(--accent); }
 .blob-nums a:target { color: var(--accent); font-weight: 600; }
 .blob td.blob-code { padding: 0 16px 0 4px; white-space: pre; color: var(--ink); vertical-align: top; }
-.blob-code code { font-family: inherit; }
+.blob-code code { font-family: inherit; font-size: inherit; background: none; border: none; padding: 0; border-radius: 0; }
 .blob tr.blob-comment-row td { padding: 0; background: var(--surface); }
 .blob tr.blob-comment-row .card { margin: 5px 26px 7px 52px; }
 .binary { padding: 40px; text-align: center; font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); }
@@ -602,7 +660,7 @@ form button:hover { background: var(--accent-2); }
 /* Inline comment composer (`assets/ents.js` clones `composer-template`). */
 .blob tr.blob-composer td { padding: 0; background: var(--surface); }
 .composer-form {
-  margin: 5px 26px 8px 52px; background: var(--surface); border: 1px solid var(--accent);
+  margin: 5px 26px 8px 52px; max-width: 640px; background: var(--surface); border: 1px solid var(--accent);
   border-radius: 9px; padding: 12px 13px; box-shadow: 0 4px 14px rgba(74, 63, 196, .1);
 }
 .composer-form textarea { min-height: 74px; }
@@ -616,9 +674,14 @@ form button:hover { background: var(--accent-2); }
 .composer-cancel:hover { color: var(--accent); border-color: var(--accent-line); }
 
 /* ===================== COMMITS ===================== */
+.commit { padding: 16px 18px 18px; }
 .commit-subject { font-size: 19px; font-weight: 600; letter-spacing: -.2px; margin-bottom: 8px; }
-.commit-msg { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; color: var(--ink-2); margin-bottom: 8px; }
-.commit-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--ink-3); font-size: 12px; font-family: var(--mono); margin-top: 6px; }
+/* The commit message body renders through `crate::asciidoc::to_html`, the
+ * same pipeline an issue body or a `.adoc` blob does -- `.doc-body`'s own
+ * element rules (headings, lists, code spans) apply, scaled down to this
+ * compact metadata context instead of a full document card's. */
+.commit-msg.doc-body { padding: 0; max-width: none; font-size: 13px; margin-bottom: 8px; }
+.commit-meta { position: relative; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--ink-3); font-size: 12px; font-family: var(--mono); margin-top: 6px; }
 .commit-meta a { color: var(--ink-3); }
 .commit-meta a:hover { color: var(--accent); }
 

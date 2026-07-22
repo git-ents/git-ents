@@ -10,7 +10,7 @@
 # upgrade path if either process starts crash-looping.
 set -eu
 
-repo=/data/repo.git
+repo=/data/git-ents/git-ents.git
 key=/data/hosted_signing_key
 public_host="${PUBLIC_HOST:-git.ents.cloud}"
 
@@ -34,6 +34,16 @@ spawn-fcgi -s /run/fcgiwrap.sock -M 766 -- /usr/sbin/fcgiwrap
 # and the ssh path an operator needs to *do* the enrolling — down in a
 # crash loop. The web surface stays fail-closed (nothing listens on 4880
 # until enrollment succeeds); the enroll command prints every attempt.
+#
+# Fresh-volume runbook: enrollment is deliberately NOT automated here.
+# Auto-enrolling would spend the self-admitting first push
+# (`gate.bootstrap`) on the server's own key, making the machine the
+# trust root instead of the operator. From a local clone, one command —
+# it enrolls the operator (signed by `user.signingkey`), then vouches
+# for the server key, discovered from nginx's /.ents/server-key (its
+# private half never leaves this volume):
+#   git ents bootstrap <you>
+# The retry below then admits the web UI within one 15s cycle.
 (
     until git-ents serve --hosted --key "$key" --public-host "$public_host" \
         --port 4880 "$repo"; do

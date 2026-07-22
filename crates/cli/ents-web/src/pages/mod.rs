@@ -15,11 +15,16 @@
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
 //! share one `meta` rail item and `META_SECTIONS` rail rather than each
 //! carrying its own top-level entry (see `Tab`'s own doc); [`meta`] is that
-//! group's `GET /meta` landing page. [`commits`], [`issues`], and
-//! [`agents`] are rail items of their own -- `Tab::Commits` (Review),
-//! `Tab::Issues` (Issues), and `Tab::Agents` (Agents,
+//! group's `GET /meta` landing page. [`commits`], [`reviews`], [`issues`],
+//! and [`agents`] are rail items of their own -- `Tab::Commits`,
+//! `Tab::Reviews`, `Tab::Issues`, and `Tab::Agents` (Agents,
 //! `docs/agent-sessions-plan.adoc`'s Phase 3) in [`layout`]'s icon rail,
-//! alongside the dashboard, code, threads, and meta items. [`search`]
+//! alongside the dashboard, code, threads, and meta items. `reviews::list`
+//! (`GET /reviews`) is a read-only aggregate across every commit's own
+//! reviews (`commits::reviews_section` renders the same
+//! [`ents_forge::review`] entities scoped to one commit; this module has no
+//! writes of its own -- every mutation still posts through `commits`'s own
+//! routes). [`search`]
 //! renders with no rail item active at all; it is reached from the
 //! `.wb-bar`'s own `.palette` search form rather than any rail item.
 
@@ -37,6 +42,7 @@ pub mod login;
 pub mod members;
 pub mod meta;
 pub mod redactions;
+pub mod reviews;
 pub mod search;
 pub mod toolchains;
 
@@ -114,21 +120,28 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// (the pre-redo `Tab` enum, carried through the workbench restructure:
 /// the horizontal tab strip became the vertical icon rail, but the
 /// "handler names its own section" contract is unchanged). The rail reads,
-/// top to bottom: Dashboard (`Overview`), Code (`Files`), Review
-/// (`Commits`), Issues, Agents (`docs/agent-sessions-plan.adoc`'s Phase 3),
-/// Threads (`Comments`); then, past the
-/// spacer, Repo & governance (`Meta`) and Account. `Meta` covers five page
-/// families ([`super::members`], [`super::effects`], [`super::toolchains`],
+/// top to bottom: Dashboard (`Overview`), Code (`Files`), Commits, Reviews,
+/// Issues, Agents (`docs/agent-sessions-plan.adoc`'s Phase 3), Threads
+/// (`Comments`); then, past the spacer, Repo & governance
+/// (`Meta`) and Account. Commits and Reviews are two rail items, not one,
+/// even though every review still lives on its own commit's page
+/// (`super::commits::reviews_section`) -- browsing history and judging a
+/// specific commit are different reasons to be on this rail, so they get
+/// their own icons (`super::reviews` is the read-only aggregate list; no
+/// mutation route lives there). `Meta` covers five page families
+/// ([`super::members`], [`super::effects`], [`super::toolchains`],
 /// [`super::redactions`], [`super::inbox`]) behind one rail item and the
 /// [`META_SECTIONS`] rail (see [`layout_meta`]) rather than an item each --
-/// nine equal entries did not scale as page families grew. `None`
-/// highlights nothing at all, for a page that is not part of any rail
-/// item's own section ([`super::search`]'s results page).
+/// unrelated to the Commits/Reviews split above: those five are one page
+/// family each with no reason to be found separately, unlike Commits and
+/// Reviews. `None` highlights nothing at all, for a page that is not part
+/// of any rail item's own section ([`super::search`]'s results page).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Overview,
     Files,
     Commits,
+    Reviews,
     Issues,
     Agents,
     Comments,
@@ -299,7 +312,8 @@ pub(crate) fn layout_shell(
                         span.nav-mark { "ge" }
                         (rail_link(active, Tab::Overview, "/", "Dashboard", "i-home"))
                         (rail_link(active, Tab::Files, "/files", "Code", "i-files"))
-                        (rail_link(active, Tab::Commits, "/commits", "Review", "i-commit"))
+                        (rail_link(active, Tab::Commits, "/commits", "Commits", "i-commit"))
+                        (rail_link(active, Tab::Reviews, "/reviews", "Reviews", "i-review"))
                         (rail_link(active, Tab::Issues, "/issues", "Issues", "i-issue"))
                         (rail_link(active, Tab::Agents, "/agents", "Agents", "i-agent"))
                         (rail_link(active, Tab::Comments, "/comments", "Threads", "i-comment"))
@@ -372,11 +386,18 @@ pub(crate) fn layout_meta(
 /// page's own `.page-header` title and `pane` body) on the right. Every
 /// selection in the sidebar is a real URL and the sidebar always renders,
 /// so the split stays SSR-friendly (`docs/web-workbench-plan.adoc`).
+///
+/// `path_title` marks `title` itself as a repository-relative path
+/// (`super::files`'s tree/blob views, the only pages whose title is a path
+/// rather than a name) so the title renders in `.page-title.path`'s
+/// monospace, matching the `.crumbs` trail underneath it instead of
+/// clashing with it in the ordinary heading font.
 pub(crate) fn layout_split(
     repo: &RepoHeader,
     identity: &str,
     active: Tab,
     title: &str,
+    path_title: bool,
     sidebar: Markup,
     pane: Markup,
 ) -> Markup {
@@ -389,7 +410,7 @@ pub(crate) fn layout_split(
             div.split {
                 nav.tree { (sidebar) }
                 main.pane {
-                    div.page-header { h1.page-title { (title) } }
+                    div.page-header { h1.page-title.path[path_title] { (title) } }
                     (pane)
                 }
             }

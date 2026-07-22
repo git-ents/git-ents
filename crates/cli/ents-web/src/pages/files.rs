@@ -143,6 +143,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             "Files",
+            false,
             tree_sidebar(&head_tree, "", ""),
             html! {
                 (dir_listing(path, entries))
@@ -170,6 +171,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            true,
             tree_sidebar(&head_tree, path, path),
             html! {
                 (crumbs(path))
@@ -198,6 +200,7 @@ where
             &super::identity_label(state),
             super::Tab::Files,
             path,
+            true,
             tree_sidebar(&head_tree, parent, path),
             html! {
                 (crumbs(path))
@@ -343,7 +346,6 @@ fn dir_listing(dir: &str, mut entries: Vec<(String, bool, Option<u64>)>) -> Mark
     });
     html! {
         div.card {
-            div.card-header { "files" }
             @if entries.is_empty() {
                 div.card-row.muted { "Empty directory." }
             }
@@ -521,11 +523,18 @@ fn blob_view(
             editor: editor.clone(),
         })
     };
+    // Every view kind carries the whole-file composer template -- a
+    // doc-rendered or binary view has no per-line gutter to open one with
+    // a specific line range, but "comment on this file" (empty `lines`,
+    // [`composer_template`]'s own default) is exactly as meaningful there
+    // as on a raw-source view.
+    let composer = composer_template(path, head_oid, session);
     if is_binary(bytes) {
         return Ok((
             html! {
                 (no_line_count_header())
                 div.binary { "Binary file (" (bytes.len()) " bytes) not shown." }
+                (composer)
             },
             super::comments::comments_section(comments),
         ));
@@ -535,6 +544,7 @@ fn blob_view(
             html! {
                 (no_line_count_header())
                 div.binary { "Binary file (" (bytes.len()) " bytes) not shown." }
+                (composer)
             },
             super::comments::comments_section(comments),
         ));
@@ -544,6 +554,7 @@ fn blob_view(
             html! {
                 (no_line_count_header())
                 div.card { div.doc-body { (crate::markdown::to_html(text)) } }
+                (composer)
             },
             super::comments::comments_section(comments),
         ));
@@ -553,6 +564,7 @@ fn blob_view(
             html! {
                 (no_line_count_header())
                 div.card { div.doc-body { (crate::asciidoc::to_html(text)?) } }
+                (composer)
             },
             super::comments::comments_section(comments),
         ));
@@ -569,7 +581,6 @@ fn blob_view(
         comments: comment_count,
         editor,
     });
-    let composer = composer_template(path, head_oid, session);
     let below: Vec<(usize, &super::comments::FileComment)> = comments
         .iter()
         .enumerate()
@@ -656,7 +667,7 @@ fn blob_header(meta: &BlobHeaderMeta<'_>) -> Markup {
                         (meta.comments) @if meta.comments == 1 { " comment" } @else { " comments" }
                     }
                 }
-                a href={ "/comments?file=" (meta.path) } { "comment on this file" }
+                a.composer-trigger data-composer="composer-template" href={ "/comments?file=" (meta.path) } { "comment on this file" }
             }
         }
     }
@@ -756,8 +767,14 @@ fn source_view(
     }
 
     html! {
+        // `header` is a sibling before `.blob`, never nested inside it --
+        // `.blob-header`'s own border and top-only radius are meant to sit
+        // flush atop `.blob`'s bottom-only radius as one continuous box
+        // (`ents.css`'s own note), which only holds when the two are
+        // siblings, not when the header sits inset inside `.blob`'s own
+        // padded, fully-bordered box.
+        (header)
         div.blob data-path=(path) data-rev=(head_oid) {
-            (header)
             table {
                 tbody {
                     @for (index, code) in code_lines.into_iter().enumerate() {
@@ -1202,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn blob_view_carries_the_composer_hooks_only_on_a_raw_source_view() {
+    fn blob_view_carries_the_composer_hooks_on_every_view_kind() {
         let (body, _below) = blob_view(
             "src/main.rs",
             "main.rs",
@@ -1235,8 +1252,9 @@ mod tests {
         )
         .expect("markdown renders");
         assert!(
-            !doc_body.into_string().contains("composer-template"),
-            "a doc-rendered view has no source line to anchor a composer to"
+            doc_body.into_string().contains("id=\"composer-template\""),
+            "a doc-rendered view has no per-line gutter, but \"comment on \
+             this file\" (empty `lines`) is exactly as meaningful there"
         );
     }
 

@@ -61,6 +61,35 @@ pub enum Top {
         #[facet(args::positional, default)]
         path: Option<PathBuf>,
     },
+    /// Bootstrap a fresh hosted root from a clone of it: enroll yourself
+    /// as the self-admitting first member (`gate.bootstrap`), then vouch
+    /// for the server's own key (`roots.web-signing`) so its fail-closed
+    /// web UI can boot, pushing both enrollments to the remote. Run from
+    /// your clone, never on the server — enrolling server-side would
+    /// make the machine the trust root instead of the operator.
+    Bootstrap {
+        /// Your username to enroll (`refs/meta/member/<username>`).
+        #[facet(args::positional)]
+        username: String,
+        /// The server's public key to vouch for; defaults to fetching
+        /// `/.ents/server-key` from the remote's host — the hosted
+        /// root's front proxy publishes the key's public half there
+        /// while the web UI awaits this enrollment. Required when the
+        /// remote is not http(s).
+        #[facet(args::named)]
+        server_pubkey: Option<String>,
+        /// The username the server key is enrolled under; defaults to
+        /// `forge`.
+        #[facet(args::named)]
+        server_name: Option<String>,
+        /// The remote to push both enrollments to; defaults to `origin`.
+        #[facet(args::named)]
+        remote: Option<String>,
+        /// Key to sign both enrollments with; defaults to
+        /// `user.signingkey`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
     /// Manage the repository members at `refs/meta/member/<username>`.
     Members {
         /// The member action to run.

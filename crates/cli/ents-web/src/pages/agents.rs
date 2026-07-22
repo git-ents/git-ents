@@ -66,6 +66,7 @@ where
         &super::identity_label(&state),
         super::Tab::Agents,
         "Agents",
+        false,
         agents_sidebar(&rows, None),
         html! {
             div.readable {
@@ -182,6 +183,7 @@ where
         &super::identity_label(&state),
         super::Tab::Agents,
         &title,
+        false,
         agents_sidebar(&rows, Some(&id)),
         html! {
             (super::child_crumbs("agents", "/agents", ents_forge::abbreviate_id(&id)))

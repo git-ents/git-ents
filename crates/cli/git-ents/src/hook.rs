@@ -85,15 +85,17 @@
 )]
 
 use std::io::{BufRead, Read, Write};
+use std::path::Path;
 
 use ents_effect::run::run_one;
-use ents_model::Effect;
+use ents_model::{Effect, MemberState};
 use ents_query::Query;
 use ents_receive::Mode;
 use gix::refs::FullName;
 use gix_hash::ObjectId;
 use gix_object::{CommitRef, Find, Kind};
 use gix_ref_store::RefStoreRead;
+use ssh_key::{PublicKey, SshSig};
 
 use crate::error::{Error, Result};
 use crate::root::HostedRoot;
@@ -144,16 +146,24 @@ pub fn parse_stdin_transitions(input: impl BufRead) -> Result<Vec<StdinTransitio
 }
 
 /// Run as git's own `pre-receive` hook (see this module's own doc for the
-/// design). Reads transitions from `input`, evaluates the gate against
-/// each, and refuses the whole push (returns `Err`) if any fails under the
-/// mandatory gate. Rejection reasons are written to `report`.
+/// design). Reads transitions from `input`, requires a verified
+/// signed-push certificate once any member is enrolled
+/// ([`verify_push_certificate`]), evaluates the gate against each
+/// transition, and refuses the whole push (returns `Err`) if any check
+/// fails under the mandatory gate. Rejection reasons are written to
+/// `report`.
 ///
 /// # Errors
 ///
-/// [`Error::Refused`] if any transition's verdict fails; propagates a
-/// parse or gate-evaluation failure otherwise.
+/// [`Error::Refused`] if the push certificate is missing, stale, or
+/// unverifiable, or if any transition's verdict fails; propagates a parse
+/// or gate-evaluation failure otherwise.
 pub fn pre_receive(root: &HostedRoot, input: impl BufRead, mut report: impl Write) -> Result<()> {
     let transitions = parse_stdin_transitions(input)?;
+    if let Err(error) = verify_push_certificate(root) {
+        let _ = writeln!(report, "refused: {error}");
+        return Err(error);
+    }
     let mut failures = Vec::new();
     for transition in &transitions {
         let verdict = ents_gate::verify(
@@ -174,6 +184,97 @@ pub fn pre_receive(root: &HostedRoot, input: impl BufRead, mut report: impl Writ
     } else {
         Err(Error::Refused(failures.join("; ")))
     }
+}
+
+/// Require the push git is about to apply to carry a valid signed-push
+/// certificate from an enrolled, active member, once any member is
+/// enrolled — the transport-authentication counterpart of
+/// `gate.bootstrap`'s own open window: before any member exists (a fresh
+/// hosted root), every push, including the one that enrolls the first
+/// member, is allowed unsigned, so bootstrapping is possible at all.
+///
+/// A push certificate carries no meta-ref semantics and is never
+/// consulted by `ents_gate::verify` (`gate.signature-artifact`); this is
+/// the one place in the hosted root that reads one, and only to answer
+/// "did an authorized member make this connection", not to decide
+/// anything the gate itself decides from repository state.
+fn verify_push_certificate(root: &HostedRoot) -> Result<()> {
+    let active: Vec<_> = crate::commands::members::list(&root.refs, &root.objects)?
+        .into_iter()
+        .map(|(_, member)| member)
+        .filter(|member| member.state == MemberState::Active)
+        .collect();
+    if active.is_empty() {
+        return Ok(());
+    }
+    let cert_oid = std::env::var("GIT_PUSH_CERT")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Error::Refused(
+                "this repository requires a signed push: rerun with `git push --signed`"
+                    .to_owned(),
+            )
+        })?;
+    if std::env::var("GIT_PUSH_CERT_NONCE_STATUS").ok().as_deref() != Some("OK") {
+        return Err(Error::Refused(
+            "push certificate nonce was missing or stale".to_owned(),
+        ));
+    }
+    let certificate = cat_blob(&root.path, &cert_oid)?;
+    if active
+        .iter()
+        .any(|member| certificate_verifies(&member.key, &certificate))
+    {
+        Ok(())
+    } else {
+        Err(Error::Refused(
+            "push is not signed by an authorized key".to_owned(),
+        ))
+    }
+}
+
+/// Whether `certificate` (git's raw push-cert text, as recorded in the
+/// blob `GIT_PUSH_CERT` names) carries a valid SSH signature over its own
+/// signed payload, verified against `key` (an OpenSSH public key line) —
+/// the transport-authentication counterpart of `ents_gate::signature`'s
+/// identical commit-signature check, including its "git" SSHSIG
+/// namespace (the same one git signs push certificates under).
+fn certificate_verifies(key: &str, certificate: &str) -> bool {
+    const MARKER: &str = "-----BEGIN SSH SIGNATURE-----";
+    const NAMESPACE: &str = "git";
+    let Some(split) = certificate.find(MARKER) else {
+        return false;
+    };
+    let (payload, signature) = certificate.split_at(split);
+    let Ok(key) = PublicKey::from_openssh(key) else {
+        return false;
+    };
+    let Ok(sig) = SshSig::from_pem(signature) else {
+        return false;
+    };
+    key.verify(NAMESPACE, payload.as_bytes(), &sig).is_ok()
+}
+
+/// Read blob `oid` from `repo_path` as text: `GIT_PUSH_CERT` names the
+/// object holding the raw certificate, not the certificate bytes
+/// directly.
+fn cat_blob(repo_path: &Path, oid: &str) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["cat-file", "blob", oid])
+        .output()
+        .map_err(|source| Error::Io {
+            path: repo_path.to_owned(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(Error::Refused(format!(
+            "could not read push certificate blob {oid}"
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Run as git's own `post-receive` hook: reconcile outstanding effect

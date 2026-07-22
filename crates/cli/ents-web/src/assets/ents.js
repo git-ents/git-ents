@@ -333,3 +333,45 @@
       });
   });
 })();
+
+/*
+ * Standalone comment triggers -- "comment on this file"
+ * (`crate::pages::files::blob_header`) and "comment on this commit"
+ * (`crate::pages::commits::commit_comment_template`) -- toggle a
+ * server-rendered `<template>` as a floating popup right under their own
+ * header/meta row, instead of navigating to a full add-comment page.
+ * Each trigger's `href` stays a real no-JS fallback.
+ */
+(function () {
+  "use strict";
+
+  document.querySelectorAll("a.composer-trigger[data-composer]").forEach(function (trigger) {
+    var template = document.getElementById(trigger.getAttribute("data-composer"));
+    var host = trigger.closest(".blob-header, .commit-meta");
+    if (!template || !host) {
+      return;
+    }
+    trigger.addEventListener("click", function (event) {
+      event.preventDefault();
+      var existing = host.querySelector(".standalone-composer");
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      var wrapper = document.createElement("div");
+      wrapper.className = "standalone-composer";
+      wrapper.appendChild(template.content.cloneNode(true));
+      var cancel = wrapper.querySelector(".composer-cancel");
+      if (cancel) {
+        cancel.addEventListener("click", function () {
+          wrapper.remove();
+        });
+      }
+      host.appendChild(wrapper);
+      var textarea = wrapper.querySelector("textarea");
+      if (textarea) {
+        textarea.focus();
+      }
+    });
+  });
+})();
