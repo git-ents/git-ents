@@ -73,7 +73,6 @@ axum = "0.8"
 cargo_metadata = "0.23"
 figue = "5.0.0-rc.5"
 facet = { version = "0.50.0-rc.0", features = ["reflect"] }
-facet-pretty = "0.50.0-rc.5"
 getrandom = "0.4"
 facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree" }
 form_urlencoded = "1"

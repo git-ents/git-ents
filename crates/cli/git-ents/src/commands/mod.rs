@@ -24,7 +24,6 @@ pub mod serve;
 pub mod setup;
 pub mod toolchain;
 
-use std::io::Write;
 use std::path::PathBuf;
 
 use gix_hash::ObjectId;
@@ -104,20 +103,5 @@ fn short_fingerprint(signer: &Signer) -> String {
         "member".to_owned()
     } else {
         hex
-    }
-}
-
-/// Print `verdicts` (`gate.verdict-reason`) for a command that succeeded
-/// under the advisory gate but still wants to surface a non-passing
-/// verdict to the user, mirroring `sync.local-advisory`: a failing verdict
-/// here is information, never a block.
-pub fn render_verdicts(
-    out: &mut impl Write,
-    verdicts: &[(gix::refs::FullName, ents_gate::Verdict)],
-) {
-    for (name, verdict) in verdicts {
-        if let ents_gate::Verdict::Fail(refusal) = verdict {
-            let _ = writeln!(out, "warning: {name}: {refusal}", name = name.as_bstr());
-        }
     }
 }

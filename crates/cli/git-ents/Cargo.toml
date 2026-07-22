@@ -23,7 +23,6 @@ ents-sync = { workspace = true }
 ents-web = { workspace = true }
 facet = { workspace = true }
 facet-git-tree = { workspace = true }
-facet-pretty = { workspace = true }
 figue = { workspace = true }
 gix = { workspace = true }
 gix-hash = { workspace = true }

@@ -1909,7 +1909,6 @@ dependencies = [
  "ents-web",
  "facet",
  "facet-git-tree",
- "facet-pretty",
  "figue",
  "gix",
  "gix-hash",
