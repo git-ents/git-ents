@@ -35,6 +35,21 @@ pub enum ReviewAction {
         #[facet(args::named)]
         key: Option<PathBuf>,
     },
+    /// Withdraw this member's own review: writes a new `Withdrawn`-state
+    /// entity onto the *same* two refs the original review occupies,
+    /// preserving its verdict and body — append-only, so the prior verdict
+    /// stays in the ref's history. Refuses when this member has no
+    /// existing review reaching `target`.
+    Withdraw {
+        /// Revision identifying the review to withdraw: resolved exactly
+        /// as `new`'s own target and re-review advance are, so a
+        /// descendant of the reviewed commit still finds it.
+        #[facet(args::named, default = "HEAD")]
+        target: String,
+        /// Key to sign with; defaults to `user.signingkey`.
+        #[facet(args::named)]
+        key: Option<PathBuf>,
+    },
     /// List the reviews recorded in this repository.
     List {
         /// Keep only reviews of this revision.

@@ -485,13 +485,16 @@ fn reviews_section<O: Find + Write>(
     commit_id: ObjectId,
     oid: &str,
 ) -> Markup {
-    let reviews = ents_forge::review::list(
+    let mut reviews = ents_forge::review::list(
         state.refs.as_ref(),
         &*state.objects(),
         &state.path,
         Some(&commit_id.to_string()),
     )
     .unwrap_or_default();
+    // Withdrawn reviews stay in history (`model.review`, append-only) but
+    // drop out of this section, same as `crate::pages::reviews`'s own list.
+    reviews.retain(|(_, review)| review.state != ents_forge::review::ReviewState::Withdrawn);
     let return_to = format!("/commit/{oid}");
     html! {
         h2 { "Reviews" }

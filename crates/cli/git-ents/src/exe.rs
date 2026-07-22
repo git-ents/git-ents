@@ -500,6 +500,10 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
             let target = commands::review::new(&root, new, key)?;
             let _ = writeln!(out, "reviewed {}", ents_forge::abbreviate_id(&target));
         }
+        ReviewAction::Withdraw { target, key } => {
+            let target = commands::review::withdraw(&root, target, key)?;
+            let _ = writeln!(out, "withdrew {}", ents_forge::abbreviate_id(&target));
+        }
         ReviewAction::List { target } => {
             for ((review_target, member), review) in commands::review::list(&root, target)? {
                 let _ = writeln!(

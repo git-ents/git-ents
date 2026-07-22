@@ -4191,3 +4191,61 @@ async fn agent_plan_commit_transitions_to_ready_awaiting_confirmation() {
     let detail = get_body(&router, &format!("/agents/{id}")).await;
     assert!(detail.contains("Confirm plan"));
 }
+
+/// `GET /reviews` (`crate::pages::reviews`): a withdrawn review stays in
+/// `refs/meta/reviews/*`'s own history (`model.review`, append-only) but
+/// must not render in this aggregate listing, while an ordinary active
+/// review of the same target still does -- the filter this page's own
+/// `list` applies on `ents_forge::review::ReviewState::Withdrawn`.
+#[tokio::test]
+async fn reviews_list_hides_a_withdrawn_review_but_keeps_an_active_one() {
+    let refs = MemRefStore::default();
+    let objects = ObjectStore::default();
+    let target = "0123456789abcdef0123456789abcdef01234567";
+    let reviewed = gix_hash::ObjectId::from_hex(target.as_bytes()).expect("valid hex");
+
+    let active_ref =
+        ents_model::namespace::review_ref(target, &MemberId::new("alice")).expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        active_ref,
+        &ents_forge::review::Review::new(
+            reviewed,
+            ents_forge::review::Verdict::Approve,
+            "looks good",
+        ),
+        None,
+        100,
+    );
+
+    let withdrawn_ref =
+        ents_model::namespace::review_ref(target, &MemberId::new("bob")).expect("valid");
+    write_meta_entity(
+        &refs,
+        &objects,
+        withdrawn_ref,
+        &ents_forge::review::Review::new(
+            reviewed,
+            ents_forge::review::Verdict::RequestChanges,
+            "please fix this",
+        )
+        .withdrawn(),
+        None,
+        100,
+    );
+
+    let state = build_state_with(
+        FixtureIdentity {
+            name: "local-user",
+            key: Keypair::from_seed(1),
+        },
+        refs,
+        objects,
+    );
+    let router = ents_web::router(state);
+
+    let body = get_body(&router, "/reviews").await;
+    assert!(body.contains("alice"), "active review still lists: {body}");
+    assert!(!body.contains("bob"), "withdrawn review must not render: {body}");
+}

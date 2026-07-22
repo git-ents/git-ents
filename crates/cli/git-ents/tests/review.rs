@@ -20,7 +20,7 @@ use std::process::Command;
 
 use ents_forge::comment::NewComment;
 use ents_forge::review::NewReview;
-use ents_forge::review::Verdict;
+use ents_forge::review::{ReviewState, Verdict};
 use git_ents::commands::{comment, members, review};
 use git_ents::root::LocalRoot;
 use gix_object::{CommitRef, Find, Write as _};
@@ -243,4 +243,93 @@ fn re_reviewing_a_descendant_advances_the_same_ref_fast_forward() {
         1,
         "re-review advances in place, not a second row"
     );
+}
+
+/// `model.review`: `git ents review withdraw` writes a new `Withdrawn`
+/// entity onto the reviewer's own existing ref, preserving the verdict and
+/// body untouched — append-only, so the prior `Active` commit stays in the
+/// ref's history rather than being replaced by a different shape.
+// @relation(model.review, model.review-pin, roots.local, scope=function, role=Verifies)
+#[test]
+fn withdraw_preserves_verdict_and_body_and_flips_only_state() {
+    let fixture = common::Fixture::new(1);
+    let reviewed = commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let new = NewReview {
+        target: "HEAD".to_owned(),
+        verdict: Verdict::RequestChanges,
+        body: "please fix this".to_owned(),
+    };
+    let target = review::new(&root, new, Some(fixture.key_path.clone())).expect("reviews");
+
+    let withdrawn_target =
+        review::withdraw(&root, reviewed.to_string(), Some(fixture.key_path.clone()))
+            .expect("withdraws");
+    assert_eq!(withdrawn_target, target, "withdraw advances the same ref");
+
+    let (review, _thread) = review::show(&root, &target, "reviewer").expect("shows");
+    assert_eq!(review.state, ReviewState::Withdrawn);
+    assert_eq!(review.verdict, Verdict::RequestChanges);
+    assert_eq!(review.body, "please fix this");
+    assert_eq!(review.target(), reviewed);
+
+    // The chain is the audit trail: the review still enumerates from
+    // `list` (only the web listings hide a withdrawn row), and there is
+    // still exactly one review row, not a second one.
+    let all = review::list(&root, None).expect("lists");
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].1.state, ReviewState::Withdrawn);
+}
+
+/// `model.review`: withdrawing when this member has never reviewed
+/// `target` (or an ancestor of it) is a clear refusal — there is nothing to
+/// withdraw.
+// @relation(model.review, roots.local, scope=function, role=Verifies)
+#[test]
+fn withdraw_refuses_when_no_review_exists() {
+    let fixture = common::Fixture::new(1);
+    commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let err = review::withdraw(&root, "HEAD".to_owned(), Some(fixture.key_path.clone()))
+        .expect_err("nothing to withdraw");
+    assert!(
+        matches!(err, git_ents::error::Error::Forge(_)),
+        "expected Error::Forge, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("not found"),
+        "expected a NotFound refusal, got {err}"
+    );
+}
+
+/// `model.review`: withdrawing an already-withdrawn review is a
+/// no-op-ish re-write, not an error — the same ref simply advances again
+/// with the same `Withdrawn` state.
+// @relation(model.review, roots.local, scope=function, role=Verifies)
+#[test]
+fn withdrawing_an_already_withdrawn_review_is_not_an_error() {
+    let fixture = common::Fixture::new(1);
+    commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let new = NewReview {
+        target: "HEAD".to_owned(),
+        verdict: Verdict::Approve,
+        body: "looks good".to_owned(),
+    };
+    let target = review::new(&root, new, Some(fixture.key_path.clone())).expect("reviews");
+
+    review::withdraw(&root, "HEAD".to_owned(), Some(fixture.key_path.clone()))
+        .expect("withdraws");
+    review::withdraw(&root, "HEAD".to_owned(), Some(fixture.key_path.clone()))
+        .expect("withdrawing again is not an error");
+
+    let (review, _thread) = review::show(&root, &target, "reviewer").expect("shows");
+    assert_eq!(review.state, ReviewState::Withdrawn);
+    assert_eq!(review.verdict, Verdict::Approve);
 }

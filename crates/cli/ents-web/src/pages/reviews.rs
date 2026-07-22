@@ -34,6 +34,11 @@ where
 {
     let mut rows = ents_forge::review::list(state.refs.as_ref(), &*state.objects(), &state.path, None)
         .unwrap_or_default();
+    // Withdrawn reviews stay in `refs/meta/reviews/*`'s own history
+    // (append-only, `model.review`) but drop out of this aggregate listing
+    // — a later item's review detail page is where a withdrawn verdict
+    // still surfaces.
+    rows.retain(|(_, review)| review.state != ents_forge::review::ReviewState::Withdrawn);
     let repo = gix::open(&state.path).ok();
 
     let mut with_time: Vec<(i64, Markup)> = rows

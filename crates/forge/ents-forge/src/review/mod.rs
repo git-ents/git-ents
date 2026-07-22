@@ -9,5 +9,5 @@ mod command;
 mod entity;
 
 pub use cli::ReviewAction;
-pub use command::{NewReview, list, new, show};
-pub use entity::{Review, Verdict};
+pub use command::{NewReview, list, new, show, withdraw};
+pub use entity::{Review, ReviewState, Verdict};
