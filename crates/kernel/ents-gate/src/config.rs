@@ -23,14 +23,11 @@ use crate::object::expect_commit;
 ///
 /// `model.sdoc` defines no Config entity yet, so this struct is the
 /// first (and currently only) definition of the config tree's shape; it
-/// lives here rather than in `ents-model` because these were, until now,
-/// the only fields any crate reads. `agent_provider`/`agent_default_model`
-/// (below) are the first fields this crate itself has no use for — they
-/// exist purely for other crates (`ents-web`'s new-session form) to read
-/// — but they stay here rather than moving to `ents-model` today: that
-/// move is still deferred until configuration grows enough non-gate
-/// fields to justify the storage migration (`meta-ref.migration`) in one
-/// pass, rather than one field at a time.
+/// lives here rather than in `ents-model` because these are the only
+/// fields any crate reads today. When configuration grows non-gate fields
+/// (description, role rules, ...), the entity moves to `ents-model` and
+/// that change is a storage migration like any other struct change
+/// (`meta-ref.migration`).
 ///
 /// `epoch` is `None` on a config written before verification was turned
 /// on. Once it is `Some`, the gate applies the tip invariant to every
@@ -64,21 +61,6 @@ pub struct Config {
     /// narrowing lands. Empty by default: no worker is designated until a
     /// signed config write adds one.
     pub workers: Vec<MemberId>,
-    /// The agent runtime's provider name (e.g. `"anthropic"`), forge-wide;
-    /// `None` until a signed config write sets one. Non-secret by
-    /// construction — the credential that authenticates to the provider
-    /// never lives here or anywhere in `refs/meta/*`, only in the
-    /// deployment-time seam (`git-ents`'s `credentials.rs`,
-    /// `GIT_ENTS_CREDENTIALS_FILE`). The agent runtime that would consume
-    /// this is not built yet; storing and reading it is this field's
-    /// entire job for now.
-    pub agent_provider: Option<String>,
-    /// The agent runtime's default model id (e.g. `"claude-sonnet-5"`),
-    /// forge-wide; `None` until a signed config write sets one. Read as a
-    /// fallback ahead of any hardcoded default a caller carries — today,
-    /// `ents-web`'s new-agent-session form falls back to it before its own
-    /// compiled-in constant.
-    pub agent_default_model: Option<String>,
 }
 
 /// The config recorded by the tree of the commit at `oid`, or an
@@ -136,22 +118,4 @@ pub(crate) fn designated_workers(
     objects: &dyn Find,
 ) -> Result<Vec<MemberId>> {
     Ok(current_config(refs, objects)?.workers)
-}
-
-/// The forge-wide agent provider name currently in force, read from
-/// `refs/meta/config`'s tip; `None` when the config ref does not exist or
-/// names no provider. Public (unlike [`designated_workers`], which only
-/// this crate's gate consults) because the only consumer today, an agent
-/// runtime, does not live in this crate.
-pub fn agent_provider(refs: &dyn RefStoreRead, objects: &dyn Find) -> Result<Option<String>> {
-    Ok(current_config(refs, objects)?.agent_provider)
-}
-
-/// The forge-wide default agent model id currently in force, read from
-/// `refs/meta/config`'s tip; `None` when the config ref does not exist or
-/// names no default — callers fall back to their own compiled-in default
-/// (`ents-web`'s new-agent-session form, today) rather than treating
-/// `None` as an error.
-pub fn agent_default_model(refs: &dyn RefStoreRead, objects: &dyn Find) -> Result<Option<String>> {
-    Ok(current_config(refs, objects)?.agent_default_model)
 }

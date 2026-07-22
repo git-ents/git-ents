@@ -102,17 +102,6 @@ pub enum Top {
         #[facet(args::subcommand)]
         action: AccountAction,
     },
-    /// Manage this repository's forge-wide configuration at
-    /// `refs/meta/config`: today, non-secret agent-runtime defaults (a
-    /// provider name, a default model id) alongside the gate's own
-    /// `epoch`/`workers` fields. The API token is never here; it lives in
-    /// the deployment-time credential seam
-    /// (`GIT_ENTS_CREDENTIALS_FILE`), never in a signed, replicated tree.
-    Config {
-        /// The config action to run.
-        #[facet(args::subcommand)]
-        action: ConfigAction,
-    },
     /// Manage the configured effects at `refs/meta/effects/<name>` and run
     /// them locally.
     Effect {
@@ -322,32 +311,6 @@ pub enum AccountAction {
         /// The login identity the member authenticates as.
         #[facet(args::named)]
         login: String,
-        /// Key to sign with; defaults to `user.signingkey`.
-        #[facet(args::named)]
-        key: Option<PathBuf>,
-    },
-}
-
-/// `git ents config` actions.
-#[derive(Facet)]
-#[repr(u8)]
-pub enum ConfigAction {
-    /// Show this repository's current forge-wide configuration.
-    Show,
-    /// Narrow the agent-runtime defaults. Each flag is independent: omit
-    /// one to leave whatever it currently holds untouched rather than
-    /// clearing it.
-    Set {
-        /// The agent runtime's provider name (e.g. `anthropic`);
-        /// non-secret -- the API token itself is never a flag here, only
-        /// `git-ents`'s own `GIT_ENTS_CREDENTIALS_FILE` seam.
-        #[facet(args::named)]
-        agent_provider: Option<String>,
-        /// The agent runtime's default model id (e.g.
-        /// `claude-sonnet-5`), used whenever a session start omits its
-        /// own `--model`.
-        #[facet(args::named)]
-        agent_default_model: Option<String>,
         /// Key to sign with; defaults to `user.signingkey`.
         #[facet(args::named)]
         key: Option<PathBuf>,

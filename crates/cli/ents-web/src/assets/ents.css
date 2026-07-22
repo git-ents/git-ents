@@ -572,7 +572,6 @@ form button:hover { background: var(--accent-2); }
 }
 .picker .opt .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-4); }
 .picker .opt.active { font-weight: 600; }
-.opt-help { font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
 
 /* Label picker chips (`labelPicker`): pick existing or type-and-create. */
 .label-chip {

@@ -856,7 +856,6 @@ fn designate_worker(f: &Forge, worker_id: &str, seconds: i64) {
         &Config {
             epoch: Some(200),
             workers: vec![MemberId::new(worker_id)],
-            ..Config::default()
         },
         Some(&f.admin),
         seconds,
