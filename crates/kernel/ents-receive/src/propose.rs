@@ -138,7 +138,17 @@ pub fn propose_entity<T: for<'facet> facet::Facet<'facet>>(
 /// `propose_entity_with_pin` share: serialize `entity`, wrap it in a signed
 /// commit whose only parent is `name`'s current tip, and return that
 /// transition alongside the tip oid the [`Proposal`] must carry.
-fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
+///
+/// Public so a caller assembling a larger, bespoke atomic multi-ref
+/// proposal (`receive.multi-ref-atomicity`) than [`propose_entity_with_pin`]
+/// covers — for instance `ents-forge`'s agent-session `finish` alongside a
+/// result record and a result branch, `docs/agent-sessions-plan.adoc`'s
+/// Phase 2 finalize — can build one of its transitions with the identical
+/// signing plumbing every entity mutation uses, then bundle it into its own
+/// [`Proposal`] and call [`crate::receive`] exactly once. This does not
+/// widen `receive`'s own contract: the transition still only becomes
+/// durable through that one call.
+pub fn entity_transition<T: for<'facet> facet::Facet<'facet>>(
     refs: &dyn RefStore,
     objects: &(impl Find + Write),
     name: &FullName,

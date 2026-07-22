@@ -9,6 +9,7 @@
 )]
 
 pub mod account;
+pub mod agent;
 pub mod comment;
 pub mod effect;
 pub mod inbox;

@@ -16,7 +16,7 @@ mod entity;
 pub use cli::AgentAction;
 pub use command::{
     ClaimAgentSession, FinishAgentSession, FinishOutcome, NewAgentSession, claim, confirm, finish,
-    list, list_all, new, revise_plan, show,
+    finish_transition, list, list_all, new, revise_plan, show,
 };
 pub use dispatch::{Dispatch, dispatch};
 pub use entity::{

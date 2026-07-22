@@ -8,8 +8,8 @@
 )]
 
 use crate::cli::{
-    AccountAction, Cli, CommentAction, EffectAction, HookAction, InboxAction, IssueAction,
-    MembersAction, RedactAction, ReviewAction, ToolchainAction, Top,
+    AccountAction, AgentAction, Cli, CommentAction, EffectAction, HookAction, InboxAction,
+    IssueAction, MembersAction, RedactAction, ReviewAction, ToolchainAction, Top,
 };
 use crate::commands;
 use crate::error::Result;
@@ -50,6 +50,7 @@ pub fn run(cli: Cli, out: &mut impl std::io::Write) -> Result<()> {
         Top::Toolchain { action } => run_toolchain(action, out),
         Top::Comment { action } => run_comment(action, out),
         Top::Issue { action } => run_issue(action, out),
+        Top::Agent { action } => run_agent(action, out),
         Top::Review { action } => run_review(action, out),
         Top::Inbox { action } => run_inbox(action, out),
         Top::Redact { action } => run_redact(action, out),
@@ -356,6 +357,75 @@ fn run_issue(action: IssueAction, out: &mut impl std::io::Write) -> Result<()> {
         } => {
             commands::issue::edit(&root, &id, state, label, assignee, key)?;
             let _ = writeln!(out, "edited {id}");
+        }
+    }
+    Ok(())
+}
+
+fn run_agent(action: AgentAction, out: &mut impl std::io::Write) -> Result<()> {
+    let root = LocalRoot::discover(".")?;
+    match action {
+        AgentAction::New {
+            prompt,
+            model,
+            toolchain,
+            base,
+            review_policy,
+            retry_of,
+            key,
+        } => {
+            let id = commands::agent::new(
+                &root,
+                prompt,
+                model,
+                toolchain,
+                base,
+                review_policy,
+                retry_of,
+                key,
+            )?;
+            let _ = writeln!(out, "started {id}");
+        }
+        AgentAction::Plan { id, text, key } => {
+            commands::agent::plan(&root, &id, text, key)?;
+            let _ = writeln!(out, "drafted plan for {id}");
+        }
+        AgentAction::Confirm {
+            id,
+            review_policy,
+            key,
+        } => {
+            commands::agent::confirm(&root, &id, review_policy, key)?;
+            let _ = writeln!(out, "confirmed {id}");
+        }
+        AgentAction::List => {
+            for (id, session) in commands::agent::list(&root)? {
+                let _ = writeln!(
+                    out,
+                    "{}\t{:?}\t{}",
+                    ents_forge::abbreviate_id(&id),
+                    session.meta.status,
+                    session.meta.member
+                );
+            }
+        }
+        AgentAction::Show { id } => {
+            let session = commands::agent::show(&root, &id)?;
+            let _ = writeln!(out, "member: {}", session.meta.member);
+            let _ = writeln!(out, "status: {:?}", session.meta.status);
+            let _ = writeln!(out, "base: {}", session.meta.base_ref);
+            let _ = writeln!(out, "queued: {}", session.queued());
+            let _ = writeln!(
+                out,
+                "awaiting confirmation: {}",
+                session.awaiting_confirmation()
+            );
+            if let Some(plan) = &session.plan {
+                let _ = writeln!(out, "plan: {plan}");
+            }
+            if let Some(branch) = &session.meta.result_branch {
+                let _ = writeln!(out, "result branch: {branch}");
+            }
         }
     }
     Ok(())

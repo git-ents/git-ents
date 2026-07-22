@@ -384,6 +384,40 @@ pub fn finish(
     identity: &Identity<'_>,
     mode: Mode,
 ) -> Result<Outcome> {
+    let (transition, tip) = finish_transition(refs, objects, id, finish, identity)?;
+    let proposal = ents_receive::Proposal {
+        transitions: vec![transition],
+        objects: vec![tip],
+        auth: None,
+    };
+    Ok(ents_receive::receive(
+        refs, objects, events, &proposal, mode,
+    )?)
+}
+
+/// Build (but do not send) the [`finish`] transition: the same validation
+/// and tree-building `finish` itself does, returning the
+/// [`ents_receive::RefTransition`] and the new tip's oid instead of
+/// proposing it alone.
+///
+/// This is the seam a composition root uses to land the session's finish
+/// alongside the run's result record and its result branch in one atomic
+/// [`ents_receive::Proposal`] (`receive.multi-ref-atomicity`,
+/// `docs/agent-sessions-plan.adoc`'s Phase 2 finalize: "one atomic
+/// multi-ref receive proposal") — [`finish`] itself is this function plus
+/// wrapping the single transition in its own one-transition proposal, for
+/// a caller that only ever needs the session ref to move alone.
+///
+/// # Errors
+///
+/// See [`finish`] — identical.
+pub fn finish_transition(
+    refs: &dyn RefStore,
+    objects: &(impl Find + Write),
+    id: &str,
+    finish: FinishAgentSession,
+    identity: &Identity<'_>,
+) -> Result<(ents_receive::RefTransition, ObjectId)> {
     let mut session = session_at(refs, objects, id)?;
     if session.meta.status != Status::Running {
         return Err(Error::InvalidArgument(format!(
@@ -401,15 +435,13 @@ pub fn finish(
     session.thread.extend(finish.thread);
 
     let ref_name = ents_model::namespace::agent_session_ref(id)?;
-    Ok(propose_entity(
+    Ok(ents_receive::entity_transition(
         refs,
         objects,
-        events,
-        ref_name,
+        &ref_name,
         &session,
         identity,
         &format!("Finish agent session {id}"),
-        mode,
     )?)
 }
 

@@ -73,6 +73,7 @@
 //! assert!(root.refs.get(name.as_ref()).expect("reads").is_some());
 //! ```
 
+pub mod agent_worker;
 pub mod cli;
 pub mod commands;
 pub mod error;

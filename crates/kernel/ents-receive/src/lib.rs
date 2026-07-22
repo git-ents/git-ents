@@ -100,8 +100,8 @@ pub use error::{Error, Result};
 pub use outcome::{Mode, Outcome, TxResult};
 pub use proposal::{Proposal, RefTransition, TransportAuth};
 pub use propose::{
-    Identity, propose_delete, propose_entity, propose_entity_with_pin, propose_genesis,
-    propose_genesis_retaining, propose_pin,
+    Identity, entity_transition, propose_delete, propose_entity, propose_entity_with_pin,
+    propose_genesis, propose_genesis_retaining, propose_pin,
 };
 pub use receive::receive;
 pub use reconcile::reconcile;

@@ -23,8 +23,8 @@ use std::path::Path;
 
 use gix_hash::ObjectId;
 use gix_object::bstr::ByteSlice as _;
-use gix_object::tree::EntryKind;
-use gix_object::{Find, Kind, TreeRef};
+use gix_object::tree::{Entry, EntryKind, EntryMode};
+use gix_object::{Find, Kind, Tree, TreeRef, Write};
 
 use crate::error::{Error, Result};
 
@@ -153,6 +153,139 @@ pub fn checkout(objects: &impl Find, tree: ObjectId, dest: &Path) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// The reverse of [`checkout`]: recursively read `src`'s current on-disk
+/// state and write it as a git tree, preserving the executable bit and
+/// symlink targets `checkout` itself would restore. A directory walk can
+/// never discover a gitlink (there is no way for a plain host directory to
+/// carry one), so unlike `checkout` this has no submodule case to refuse.
+///
+/// This is `docs/agent-sessions-plan.adoc`'s Phase 2 finalize's other
+/// half from `checkout`: after [`crate::Executor::run`] completes, a
+/// composition root reads the checked-out workdir's now-current state back
+/// through this function to build the sandbox's output tree — the tree the
+/// result branch's commit carries. Every effect backend built so far in
+/// this crate (`UnsandboxedExecutor` today; a future `SpriteExecutor` that
+/// syncs its sandbox's filesystem back onto `workdir` before returning)
+/// leaves its command's file-level effects on `workdir` itself, so this
+/// reads the same host directory [`SandboxInputs::workdir`] named, not a
+/// second, backend-specific location.
+///
+/// # Errors
+///
+/// [`Error::NotUtf8`] for a non-UTF-8 entry name or symlink target;
+/// [`Error::Io`] for a host filesystem failure reading `src` or one of its
+/// entries; [`Error::ObjectWrite`] if writing a blob or tree object fails.
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::materialize::write_tree;
+/// use ents_testutil::ObjectStore;
+///
+/// let dir = tempfile::tempdir().expect("tempdir");
+/// std::fs::write(dir.path().join("README"), b"hello\n").expect("write");
+/// std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+/// std::fs::write(dir.path().join("sub/leaf.txt"), b"leaf\n").expect("write");
+///
+/// let objects = ObjectStore::default();
+/// let tree = write_tree(&objects, dir.path()).expect("writes");
+///
+/// let checked_out = tempfile::tempdir().expect("tempdir");
+/// ents_effect::materialize::checkout(&objects, tree, checked_out.path()).expect("checkout");
+/// assert_eq!(
+///     std::fs::read_to_string(checked_out.path().join("README")).expect("read"),
+///     "hello\n"
+/// );
+/// assert_eq!(
+///     std::fs::read_to_string(checked_out.path().join("sub").join("leaf.txt")).expect("read"),
+///     "leaf\n"
+/// );
+/// ```
+// @relation(effect.execution, scope=function)
+pub fn write_tree(objects: &(impl Find + Write), src: &Path) -> Result<ObjectId> {
+    let read_dir = std::fs::read_dir(src).map_err(|source| Error::Io {
+        path: src.to_owned(),
+        source,
+    })?;
+
+    let mut entries = Vec::new();
+    for dir_entry in read_dir {
+        let dir_entry = dir_entry.map_err(|source| Error::Io {
+            path: src.to_owned(),
+            source,
+        })?;
+        let path = dir_entry.path();
+        let name = dir_entry
+            .file_name()
+            .into_string()
+            .map_err(|_not_utf8| Error::NotUtf8(path.clone()))?;
+        let file_type = dir_entry.file_type().map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+
+        let (mode, oid) = if file_type.is_dir() {
+            (
+                EntryMode::from(EntryKind::Tree),
+                write_tree(objects, &path)?,
+            )
+        } else if file_type.is_symlink() {
+            let target = std::fs::read_link(&path).map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+            let target = target
+                .to_str()
+                .ok_or_else(|| Error::NotUtf8(path.clone()))?;
+            let oid = objects.write_buf(Kind::Blob, target.as_bytes())?;
+            (EntryMode::from(EntryKind::Link), oid)
+        } else {
+            let bytes = std::fs::read(&path).map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+            let kind = if is_executable(&path)? {
+                EntryKind::BlobExecutable
+            } else {
+                EntryKind::Blob
+            };
+            (
+                EntryMode::from(kind),
+                objects.write_buf(Kind::Blob, &bytes)?,
+            )
+        };
+        entries.push(Entry {
+            mode,
+            filename: name.into(),
+            oid,
+        });
+    }
+    // `gix_object::Tree::write_to` debug-asserts its entries are sorted by
+    // its own `Ord` (git's tree-entry order, a directory compared as if it
+    // carried a trailing `/`) — a plain directory walk has no such
+    // ordering, so this sorts before handing the tree to `objects.write`.
+    entries.sort();
+    Ok(objects.write(&Tree { entries })?)
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = std::fs::metadata(path)
+        .map_err(|source| Error::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        .permissions()
+        .mode();
+    Ok(mode & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> Result<bool> {
+    Ok(false)
 }
 
 fn make_dir(path: &Path) -> Result<()> {
@@ -437,5 +570,85 @@ mod tests {
             std::fs::read_to_string(dir.path().join("z-file")).expect("read"),
             "content\n"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // write_tree: checkout's reverse.
+    // -----------------------------------------------------------------
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn write_tree_round_trips_plain_files_and_subdirectories_through_checkout() {
+        let objects = ObjectStore::default();
+        let src = tempfile::tempdir().expect("tempdir");
+        std::fs::write(src.path().join("README"), b"hello\n").expect("write");
+        std::fs::create_dir(src.path().join("sub")).expect("mkdir");
+        std::fs::write(src.path().join("sub/leaf.txt"), b"leaf\n").expect("write");
+
+        let tree = write_tree(&objects, src.path()).expect("writes");
+
+        let dest = tempfile::tempdir().expect("tempdir");
+        checkout(&objects, tree, dest.path()).expect("checkout");
+        assert_eq!(
+            std::fs::read_to_string(dest.path().join("README")).expect("read"),
+            "hello\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.path().join("sub").join("leaf.txt")).expect("read"),
+            "leaf\n"
+        );
+    }
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn write_tree_preserves_the_executable_bit() {
+        let objects = ObjectStore::default();
+        let src = tempfile::tempdir().expect("tempdir");
+        let script = src.path().join("run.sh");
+        std::fs::write(&script, b"#!/bin/sh\necho hi\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).expect("chmod");
+        }
+
+        let tree = write_tree(&objects, src.path()).expect("writes");
+        let dest = tempfile::tempdir().expect("tempdir");
+        checkout(&objects, tree, dest.path()).expect("checkout");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dest.path().join("run.sh"))
+                .expect("stat")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o111,
+                0o111,
+                "the executable bit must survive the round trip"
+            );
+        }
+    }
+
+    #[test]
+    // @relation(effect.execution, scope=function, role=Verifies)
+    fn write_tree_entries_are_sorted_for_serialization() {
+        // A directory walk yields entries in whatever order the host
+        // filesystem happens to return them, never guaranteed to already be
+        // git's own tree-entry order; `write_tree` must sort them itself so
+        // `Tree::write_to`'s debug assertion never trips.
+        let objects = ObjectStore::default();
+        let src = tempfile::tempdir().expect("tempdir");
+        for name in ["z-file", "a-file", "m-dir"] {
+            if name == "m-dir" {
+                std::fs::create_dir(src.path().join(name)).expect("mkdir");
+            } else {
+                std::fs::write(src.path().join(name), b"x").expect("write");
+            }
+        }
+        write_tree(&objects, src.path()).expect("writes without tripping the sort assertion");
     }
 }
