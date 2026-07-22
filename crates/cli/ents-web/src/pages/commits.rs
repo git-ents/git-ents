@@ -601,12 +601,6 @@ where
     Ok(Redirect::to(&target))
 }
 
-/// The start-a-review form (`POST /commit/{oid}/review`): a verdict and
-/// a body. The verdict is a closed `.picker` (README's `VerdictPicker`) of
-/// radio inputs over [`ents_forge::review::Verdict`]'s three variants --
-/// `model.review` makes it a hard enum, unlike issue and comment states --
-/// defaulting to `approve`, the same default a bare `select`'s first option
-/// would submit.
 /// The commit-level comment composer's own hidden `<template>`
 /// (`crate::pages::files::composer_template`'s counterpart for a commit,
 /// which has no file of its own to anchor a path-based comment to): posts
@@ -696,45 +690,52 @@ where
     Ok(Redirect::to(&target))
 }
 
+/// The start-a-review form (`POST /commit/{oid}/review`), its fields
+/// [`ents_forge::review::ReviewAction::New`]'s own
+/// ([`crate::form::action_form`]): `target` is the page's commit, so no
+/// control renders for it, and the verdict is a closed `.picker`
+/// (README's `VerdictPicker`) of radio inputs over
+/// [`ents_forge::review::Verdict`]'s three variants -- `model.review`
+/// makes it a hard enum, unlike issue and comment states -- defaulting to
+/// `approve`, the same default a bare `select`'s first option would
+/// submit. The body stays the derived compose-field textarea.
 fn start_review_form(session: &Session, oid: &str) -> Markup {
     html! {
         h3 { "Start a review" }
-        form method="post" action=(format!("/commit/{oid}/review")) {
-            (super::csrf_input(session))
-            p.muted { "verdict" }
-            div.picker {
-                label.opt {
-                    input type="radio" name="verdict" value="approve" checked;
-                    span.dot {}
-                    "approve"
-                }
-                label.opt {
-                    input type="radio" name="verdict" value="request-changes";
-                    span.dot {}
-                    "request-changes"
-                }
-                label.opt {
-                    input type="radio" name="verdict" value="comment";
-                    span.dot {}
-                    "comment"
-                }
-            }
-            label { "Body" textarea name="body" {} }
-            button type="submit" { "Start a Review" }
-        }
+        (crate::form::action_form::<ents_forge::review::ReviewAction>(
+            "New",
+            session,
+            &crate::form::Spec {
+                action: &format!("/commit/{oid}/review"),
+                submit: "Start a Review",
+                cancel: None,
+                values: &[],
+                overrides: &[
+                    ("target", html! {}),
+                    ("verdict", html! {
+                        p.muted { "verdict" }
+                        div.picker {
+                            label.opt {
+                                input type="radio" name="verdict" value="approve" checked;
+                                span.dot {}
+                                "approve"
+                            }
+                            label.opt {
+                                input type="radio" name="verdict" value="request-changes";
+                                span.dot {}
+                                "request-changes"
+                            }
+                            label.opt {
+                                input type="radio" name="verdict" value="comment";
+                                span.dot {}
+                                "comment"
+                            }
+                        }
+                    }),
+                ],
+            },
+        ))
     }
-}
-
-/// The form fields `POST /commit/{oid}/review` accepts.
-#[derive(Debug, Deserialize)]
-pub struct ReviewForm {
-    /// The review's verdict.
-    verdict: String,
-    /// The review's body text.
-    #[serde(default)]
-    body: String,
-    /// The per-session CSRF token (`roots.web-session`).
-    csrf: String,
 }
 
 /// `POST /commit/{oid}/review`: review the commit at `oid`
@@ -742,32 +743,48 @@ pub struct ReviewForm {
 /// and its retention pin (`model.review`, `model.review-pin`) -- the web is
 /// another caller of that one library func, never a second review or
 /// pin-writing path. Signed (`roots.web-signing`) on behalf of the current
-/// session (`roots.web-session`).
+/// session (`roots.web-session`). The posted fields are
+/// [`ents_forge::review::ReviewAction::New`]'s own
+/// ([`crate::form::parse_action`]), the path's `oid` standing in for the
+/// CLI's `--target`.
 ///
 /// # Errors
 ///
-/// [`Error::BadCsrf`] if `form.csrf` does not match; otherwise propagates
-/// [`ents_forge::review::new`]'s own failures (including an unresolvable
-/// target commit).
+/// [`Error::BadCsrf`] if the posted token does not match; otherwise
+/// propagates [`ents_forge::review::new`]'s own failures (including an
+/// unresolvable target commit).
 // @relation(model.review, model.review-pin, roots.web-signing, roots.web-session, scope=function)
 pub async fn review<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
     Path(oid): Path<String>,
-    Form(form): Form<ReviewForm>,
+    Form(mut pairs): Form<Vec<(String, String)>>,
 ) -> Result<impl IntoResponse>
 where
     O: Find + Write + Send + 'static,
 {
-    super::require_csrf(&session, &form.csrf)?;
+    super::require_csrf(&session, crate::form::posted_csrf(&pairs))?;
+    pairs.retain(|(name, _)| name != "target");
+    pairs.push(("target".to_owned(), oid.clone()));
+    let ents_forge::review::ReviewAction::New {
+        target,
+        verdict,
+        body,
+        key: _,
+    } = crate::form::parse_action("New", &pairs)?
+    else {
+        return Err(Error::InvalidArgument(
+            "not a form-backed review action".to_owned(),
+        ));
+    };
     let member = super::reviewer_member_id(&state);
     let identity = state.identity.as_ref();
     let new = ents_forge::review::NewReview {
-        target: oid.clone(),
-        verdict: form.verdict.parse().map_err(|_unknown| {
-            Error::InvalidArgument(format!("unknown verdict: {}", form.verdict))
-        })?,
-        body: form.body,
+        target,
+        verdict: verdict
+            .parse()
+            .map_err(|_unknown| Error::InvalidArgument(format!("unknown verdict: {verdict}")))?,
+        body: body.unwrap_or_default(),
     };
     let (_target, outcome) = ents_forge::review::new(
         state.refs.as_ref(),

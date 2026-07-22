@@ -175,7 +175,12 @@ fn reviews_sidebar(
 /// composer, and -- only for the review's own author while it is still
 /// [`ReviewState::Active`] -- a withdraw control. Renders even for a
 /// withdrawn review (this module's own doc: a direct link stays live; only
-/// [`list`]/[`reviews_sidebar`] hide a withdrawn row).
+/// [`list`]/[`reviews_sidebar`] hide a withdrawn row). The metadata
+/// `dl.entity-view` stays hand-rolled rather than
+/// [`crate::render::view`]'s generic dump: every row is a domain widget or
+/// derived value (verdict chip, state badge, a link to the target commit,
+/// the reviewer's avatar, a relative time read from the review ref's own
+/// tip commit -- not a field on the entity at all).
 ///
 /// # Errors
 ///

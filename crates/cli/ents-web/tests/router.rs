@@ -2249,8 +2249,10 @@ async fn seed_issue(
     labels: &str,
 ) -> String {
     let (cookie, csrf) = session_cookie_and_csrf(router, state, "/issues").await;
+    // Field names are `IssueAction::New`'s own (`ents_web::form`): the
+    // form's controls and its parse both derive from the action shape.
     let form = format!(
-        "title={}&state={issue_state}&assignees={assignees}&labels={labels}&body=the+full+body&csrf={csrf}",
+        "title={}&state={issue_state}&assignee={assignees}&label={labels}&body=the+full+body&csrf={csrf}",
         title.replace(' ', "+")
     );
     let response = router

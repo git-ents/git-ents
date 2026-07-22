@@ -19,7 +19,7 @@ use std::sync::Arc;
 use axum::Form;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect};
-use ents_forge::issue::{self, EditIssue, NewIssue};
+use ents_forge::issue::{self, EditIssue, IssueAction, NewIssue};
 use ents_model::MemberId;
 use gix_object::{Find, Write};
 use maud::{Markup, html};
@@ -117,7 +117,10 @@ fn issues_sidebar(rows: &[(String, ents_forge::Issue)], active: Option<&str>) ->
 /// for its state/assignees/labels, and its discussion thread -- the
 /// comments naming `issues/<id>` as their context
 /// (`ents_forge::comment::thread`, `model.comment-context`), rendered like
-/// every other conversation in this crate.
+/// every other conversation in this crate. The metadata `dl.entity-view`
+/// stays hand-rolled rather than [`crate::render::view`]'s generic dump:
+/// every row is a domain widget (state chip, assignee avatars, label
+/// chips, an "unassigned"/"none" placeholder), not a field's plain text.
 ///
 /// # Errors
 ///
@@ -225,127 +228,124 @@ where
     ))
 }
 
-/// The form fields `POST /issues` accepts.
-#[derive(Debug, Deserialize)]
-pub struct NewForm {
-    /// The issue's title.
-    title: String,
-    /// The issue's body.
-    #[serde(default)]
-    body: String,
-    /// The issue's initial state; defaults to `open` (`model.issue`: the
-    /// platform has no default of its own, so the frontend chooses one).
-    #[serde(default = "default_state")]
-    state: String,
-    /// Comma- or whitespace-separated assignee usernames.
-    #[serde(default)]
-    assignees: String,
-    /// Comma- or whitespace-separated labels.
-    #[serde(default)]
-    labels: String,
-    /// The per-session CSRF token (`roots.web-session`).
-    csrf: String,
-}
-
-fn default_state() -> String {
-    "open".to_owned()
-}
-
 /// `POST /issues`: open an issue at a freshly generated
 /// `refs/meta/issues/<id>` (`ents_forge::issue::new`), signed
 /// (`roots.web-signing`) on behalf of the current session
-/// (`roots.web-session`).
+/// (`roots.web-session`). The posted fields are
+/// [`IssueAction::New`]'s own ([`crate::form::parse_action`]), so the
+/// form's shape and this handler's parse are one declaration.
 ///
 /// # Errors
 ///
-/// [`crate::Error::BadCsrf`] if `form.csrf` does not match; otherwise
-/// propagates [`ents_forge::issue::new`]'s own failures.
+/// [`crate::Error::BadCsrf`] if the posted token does not match;
+/// otherwise propagates [`ents_forge::issue::new`]'s own failures.
 // @relation(model.issue, roots.web-signing, roots.web-session, scope=function)
 pub async fn create<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
-    Form(form): Form<NewForm>,
+    Form(pairs): Form<Vec<(String, String)>>,
 ) -> Result<impl IntoResponse>
 where
     O: Find + Write + Send + 'static,
 {
-    super::require_csrf(&session, &form.csrf)?;
-    let identity = state.identity.as_ref();
-    let new = NewIssue {
-        title: form.title,
-        body: form.body,
-        state: form.state,
-        assignees: parse_members(&form.assignees),
-        labels: parse_labels(&form.labels),
-    };
-    let (id, outcome) = issue::new(
-        state.refs.as_ref(),
-        &*state.objects(),
-        state.events.as_ref(),
-        new,
-        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
-        state.mode,
-    )?;
-    crate::error::outcome_to_result(outcome)?;
-    Ok(Redirect::to(&format!("/issues/{id}")))
-}
-
-/// The form fields `POST /issues/{id}` accepts. Each field replaces its
-/// counterpart on the issue; an empty `assignees`/`labels` leaves that set
-/// unchanged (matching `git ents issue edit`'s own semantics), while `state`
-/// is always applied.
-#[derive(Debug, Deserialize)]
-pub struct EditForm {
-    /// Replace the issue's state.
-    state: String,
-    /// Comma- or whitespace-separated assignees; empty leaves them.
-    #[serde(default)]
-    assignees: String,
-    /// Comma- or whitespace-separated labels; empty leaves them.
-    #[serde(default)]
-    labels: String,
-    /// The per-session CSRF token (`roots.web-session`).
-    csrf: String,
+    super::require_csrf(&session, crate::form::posted_csrf(&pairs))?;
+    dispatch(&state, &session, crate::form::parse_action("New", &pairs)?)
 }
 
 /// `POST /issues/{id}`: mutate `id`'s state, assignees, and/or labels
-/// (`ents_forge::issue::edit`) as a signed mutation on the issue's own ref.
+/// (`ents_forge::issue::edit`) as a signed mutation on the issue's own
+/// ref. The posted fields are [`IssueAction::Edit`]'s own, the path's
+/// `id` standing in for the CLI's positional argument.
 ///
 /// # Errors
 ///
-/// [`crate::Error::BadCsrf`] if `form.csrf` does not match; otherwise
-/// propagates [`ents_forge::issue::edit`]'s own failures (including
-/// [`ents_forge::Error::NotFound`] when `id` names no issue).
+/// [`crate::Error::BadCsrf`] if the posted token does not match;
+/// otherwise propagates [`ents_forge::issue::edit`]'s own failures
+/// (including [`ents_forge::Error::NotFound`] when `id` names no issue).
 // @relation(model.issue, roots.web-signing, roots.web-session, scope=function)
 pub async fn edit<O>(
     State(state): State<Arc<AppState<O>>>,
     axum::Extension(session): axum::Extension<Session>,
     Path(id): Path<String>,
-    Form(form): Form<EditForm>,
+    Form(mut pairs): Form<Vec<(String, String)>>,
 ) -> Result<impl IntoResponse>
 where
     O: Find + Write + Send + 'static,
 {
-    super::require_csrf(&session, &form.csrf)?;
+    super::require_csrf(&session, crate::form::posted_csrf(&pairs))?;
+    pairs.retain(|(name, _)| name != "id");
+    pairs.push(("id".to_owned(), id));
+    dispatch(&state, &session, crate::form::parse_action("Edit", &pairs)?)
+}
+
+/// The issue dispatch table: each mutating [`IssueAction`] variant mapped
+/// to the same `ents_forge::issue` call `git ents issue`'s own command
+/// module makes, with the same edit semantics (an empty label/assignee
+/// set leaves the field unchanged) -- `lens.parity`, the web as another
+/// caller of the one business-logic path.
+// @relation(model.issue, lens.parity, scope=function)
+fn dispatch<O>(state: &AppState<O>, session: &Session, action: IssueAction) -> Result<Redirect>
+where
+    O: Find + Write + Send + 'static,
+{
     let identity = state.identity.as_ref();
-    let assignees = parse_members(&form.assignees);
-    let labels = parse_labels(&form.labels);
-    let edit = EditIssue {
-        state: Some(form.state),
-        assignees: (!assignees.is_empty()).then_some(assignees),
-        labels: (!labels.is_empty()).then_some(labels),
-    };
-    let outcome = issue::edit(
-        state.refs.as_ref(),
-        &*state.objects(),
-        state.events.as_ref(),
-        &id,
-        edit,
-        &crate::receive_identity!(identity, crate::pages::member_author(&session)),
-        state.mode,
-    )?;
-    crate::error::outcome_to_result(outcome)?;
-    Ok(Redirect::to(&format!("/issues/{id}")))
+    let identity = crate::receive_identity!(identity, crate::pages::member_author(session));
+    match action {
+        IssueAction::New {
+            title,
+            body,
+            state: issue_state,
+            label,
+            assignee,
+            key: _,
+        } => {
+            let new = NewIssue {
+                title: title.unwrap_or_default(),
+                body: body.unwrap_or_default(),
+                state: issue_state,
+                assignees: assignee.into_iter().map(MemberId::new).collect(),
+                labels: label,
+            };
+            let (id, outcome) = issue::new(
+                state.refs.as_ref(),
+                &*state.objects(),
+                state.events.as_ref(),
+                new,
+                &identity,
+                state.mode,
+            )?;
+            crate::error::outcome_to_result(outcome)?;
+            Ok(Redirect::to(&format!("/issues/{id}")))
+        }
+        IssueAction::Edit {
+            id,
+            state: issue_state,
+            label,
+            assignee,
+            key: _,
+        } => {
+            let edit = EditIssue {
+                state: issue_state,
+                labels: (!label.is_empty()).then_some(label),
+                assignees: (!assignee.is_empty())
+                    .then(|| assignee.into_iter().map(MemberId::new).collect()),
+            };
+            let outcome = issue::edit(
+                state.refs.as_ref(),
+                &*state.objects(),
+                state.events.as_ref(),
+                &id,
+                edit,
+                &identity,
+                state.mode,
+            )?;
+            crate::error::outcome_to_result(outcome)?;
+            Ok(Redirect::to(&format!("/issues/{id}")))
+        }
+        _ => Err(crate::Error::InvalidArgument(
+            "not a form-backed issue action".to_owned(),
+        )),
+    }
 }
 
 /// The form fields `POST /issues/{id}/comment` accepts.
@@ -410,45 +410,70 @@ where
 /// a state outside the trio stays reachable through `git ents issue edit`
 /// or a direct edit, same as any other schema-level custom field.
 fn new_form(session: &Session, known_labels: &[String]) -> Markup {
-    html! {
-        form method="post" action="/issues" {
-            (super::csrf_input(session))
-            label { "Title" input type="text" name="title"; }
-            div {
-                label { "State" }
-                (state_picker("open"))
-            }
-            label { "Assignees" input type="text" name="assignees" placeholder="alice, bob" list="members"; }
-            (label_picker(known_labels, &[]))
-            label { "Body" textarea name="body" {} }
-            div.composer-buttons {
-                a.composer-cancel href="/issues" { "Cancel" }
-                button type="submit" { "Open Issue" }
-            }
-        }
-    }
+    crate::form::action_form::<IssueAction>(
+        "New",
+        session,
+        &crate::form::Spec {
+            action: "/issues",
+            submit: "Open Issue",
+            cancel: Some("/issues"),
+            values: &[],
+            overrides: &[
+                (
+                    "title",
+                    html! { label { "Title" input type="text" name="title"; } },
+                ),
+                (
+                    "state",
+                    html! { div { label { "State" } (state_picker("open")) } },
+                ),
+                ("label", label_picker(known_labels, &[])),
+                (
+                    "assignee",
+                    html! {
+                        label {
+                            "Assignees"
+                            input type="text" name="assignee" placeholder="alice, bob" list="members";
+                        }
+                    },
+                ),
+            ],
+        },
+    )
 }
 
-/// The edit-issue form (`POST /issues/{id}`), its fields pre-filled from
-/// the current issue. Its `state` field carries the same
-/// [`state_picker`] as [`new_form`]'s, for the same reason (see
-/// [`new_form`]'s own doc).
+/// The edit-issue form (`POST /issues/{id}`), its fields derived from
+/// [`IssueAction::Edit`]'s own shape (the positional `id` is the route's
+/// path segment, so no control renders for it) and pre-filled from the
+/// current issue. Its `state` field carries the same [`state_picker`] as
+/// [`new_form`]'s, for the same reason (see [`new_form`]'s own doc).
 fn edit_form(session: &Session, issue: &ents_forge::Issue, known_labels: &[String]) -> Markup {
-    html! {
-        form method="post" action="" {
-            (super::csrf_input(session))
-            div {
-                label { "State" }
-                (state_picker(&issue.state))
-            }
-            label {
-                "Assignees"
-                input type="text" name="assignees" value=(join_members(&issue.assignees)) list="members";
-            }
-            (label_picker(known_labels, &issue.labels))
-            button type="submit" { "Save" }
-        }
-    }
+    crate::form::action_form::<IssueAction>(
+        "Edit",
+        session,
+        &crate::form::Spec {
+            action: "",
+            submit: "Save",
+            cancel: None,
+            values: &[],
+            overrides: &[
+                (
+                    "state",
+                    html! { div { label { "State" } (state_picker(&issue.state)) } },
+                ),
+                ("label", label_picker(known_labels, &issue.labels)),
+                (
+                    "assignee",
+                    html! {
+                        label {
+                            "Assignees"
+                            input type="text" name="assignee" value=(join_members(&issue.assignees)) list="members";
+                        }
+                    },
+                ),
+            ],
+        },
+    )
 }
 
 /// The comment-on-this-issue form (`POST /issues/{id}/comment`).
@@ -570,19 +595,16 @@ fn known_labels(rows: &[(String, ents_forge::Issue)]) -> Vec<String> {
 
 /// The labels field both [`new_form`] and [`edit_form`] render: `known`'s
 /// labels previewed as `.label-chip` (`.on` for one already in `current`),
-/// then the actual control -- a single free-text `input[name=labels]`
-/// pre-filled from `current` and completed by a [`label_datalist`] of
-/// `known`'s own names. `model.issue`'s labels stay this one
-/// comma/whitespace-separated string field end to end (`EditForm`/
-/// `NewForm`'s own `labels: String`, `parse_labels`), so unlike
-/// [`state_picker`]'s single-choice radios, real independently-toggleable
-/// checkboxes are not this control's shape here: a checkbox group needs
-/// either a repeating-key field (breaking the scalar `labels` the create/
-/// edit handlers and `tests/router.rs`'s own `seed_issue` already commit
-/// to) or client-side script to merge checkbox state into one text value
-/// (excluded -- this crate works with no JS at all). The datalist gives
-/// "pick existing" a real, working affordance; typing any other word is
-/// "type-and-create".
+/// then the actual control -- a single free-text `input[name=label]`
+/// (spelled as [`IssueAction`]'s own `label` field, which
+/// [`crate::form::parse_action`] splits on commas/whitespace) pre-filled
+/// from `current` and completed by a [`label_datalist`] of `known`'s own
+/// names. Unlike [`state_picker`]'s single-choice radios, real
+/// independently-toggleable checkboxes are not this control's shape here:
+/// a checkbox group needs client-side script to merge checkbox state into
+/// the text value a no-JS post also carries (excluded -- this crate works
+/// with no JS at all). The datalist gives "pick existing" a real, working
+/// affordance; typing any other word is "type-and-create".
 fn label_picker(known: &[String], current: &[String]) -> Markup {
     html! {
         div {
@@ -597,7 +619,7 @@ fn label_picker(known: &[String], current: &[String]) -> Markup {
             }
             input
                 type="text"
-                name="labels"
+                name="label"
                 value=(current.join(", "))
                 placeholder="bug, gate"
                 list="issue-labels";
@@ -629,19 +651,3 @@ fn join_members(members: &[MemberId]) -> String {
         .join(", ")
 }
 
-/// Parse a comma- or whitespace-separated list into members, dropping empty
-/// segments so a trailing comma or extra spacing does not enroll a blank
-/// assignee.
-fn parse_members(text: &str) -> Vec<MemberId> {
-    parse_labels(text).into_iter().map(MemberId::new).collect()
-}
-
-/// Parse a comma- or whitespace-separated list into labels, dropping empty
-/// segments.
-fn parse_labels(text: &str) -> Vec<String> {
-    text.split([',', ' ', '\t', '\n'])
-        .map(str::trim)
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_owned)
-        .collect()
-}

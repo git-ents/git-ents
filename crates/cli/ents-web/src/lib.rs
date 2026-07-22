@@ -111,6 +111,7 @@ pub(crate) mod assets;
 pub mod auth;
 pub(crate) mod editor;
 pub mod error;
+pub mod form;
 pub mod identity;
 pub(crate) mod markdown;
 pub mod pages;

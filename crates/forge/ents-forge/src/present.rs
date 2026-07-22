@@ -156,6 +156,46 @@ pub fn record<T: Facet<'static>>(id: &str, value: &T) -> String {
     out
 }
 
+/// One walked field with its declared presentation roles — for a surface
+/// (the web) that renders its own markup over the same attribute-driven
+/// policy [`view`] and [`columns`] apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentedField {
+    /// The field's declared name, exactly as the struct spells it.
+    pub name: &'static str,
+    /// The field's rendered value, human audience: ids abbreviated.
+    pub value: String,
+    /// Whether the value counts as empty for `ents::skip_empty`.
+    pub empty: bool,
+    /// `ents::head`: a leading list column.
+    pub head: bool,
+    /// `ents::col`: a list column after the head columns.
+    pub col: bool,
+    /// `ents::skip_empty`: omit from a view when empty.
+    pub skip_empty: bool,
+    /// `ents::body`: the message body, rendered last.
+    pub body: bool,
+}
+
+/// Walk `value` for a human audience: every non-`ents::skip` field with
+/// its rendered value and declared roles, in declaration order. A
+/// non-struct `T` yields no fields.
+#[must_use]
+pub fn fields<T: Facet<'static>>(value: &T) -> Vec<PresentedField> {
+    rows(value, Audience::Human)
+        .into_iter()
+        .map(|row| PresentedField {
+            name: row.name,
+            value: row.value,
+            empty: row.empty,
+            head: row.policy.head,
+            col: row.policy.col,
+            skip_empty: row.policy.skip_empty,
+            body: row.policy.body,
+        })
+        .collect()
+}
+
 /// [`record`] over every `(id, entity)` row, records separated by one
 /// blank line — the whole `--porcelain` output for a listing.
 #[must_use]

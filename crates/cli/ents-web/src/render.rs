@@ -2,7 +2,13 @@
 //! analog of the gate executor named in this crate's development-plan
 //! row: one reflection walk over any `#[derive(Facet)]` entity's
 //! [`facet::Shape`], reused for every kernel entity this crate lists or
-//! shows, rather than one hand-written renderer per entity type.
+//! shows, rather than one hand-written renderer per entity type. The walk
+//! itself is [`ents_forge::present`]'s: presentation policy (the `ents`
+//! attributes -- skip, `skip_empty`, id-abbreviation, head/col column
+//! selection) is declared once on the entity's own fields and obeyed here
+//! exactly as the CLI obeys it; this module keeps only what is genuinely
+//! web-shaped -- Markup wrapping, href columns, long-token cell breaking,
+//! and the unreadable-entity degradation cards.
 //!
 //! The binding rule this module exists to uphold: nothing here ever
 //! matches on *which* concrete type it was handed. [`fields`] walks
@@ -23,18 +29,17 @@ use maud::{Markup, html};
 pub type FieldRow = (&'static str, String);
 
 /// Reflect over `value`'s [`facet::Shape`] and return one `(name, value)`
-/// pair per field, in declaration order.
+/// pair per field the entity's own `ents` attributes present in a view:
+/// `ents::skip` fields are omitted, `ents::skip_empty` fields omitted when
+/// empty, id-valued fields abbreviated, and the `ents::body` field ordered
+/// last -- [`ents_forge::present::view`]'s policy, one walk shared with
+/// the CLI's `show` ([`ents_forge::present::fields`]).
 ///
 /// A field's value renders via its own `Display` impl when it has one
-/// (plain text, no `Type::Foo(...)` wrapper -- what a `String`, a
-/// `MemberId` newtype, or an enum like [`ents_model::MemberState`] with its
-/// own canonical `Display` gives), and falls back to `Debug` otherwise
-/// (every entity struct in `ents-model`/`ents-forge`/`ents-kiln` derives
-/// `Debug`, so a field of an enum with no `Display` still renders its
-/// variant name rather than an opaque placeholder). A field this crate
-/// cannot even walk as a struct (called on a non-struct `T`) renders as an
-/// empty list, not a panic -- reflection is a UI convenience, never a
-/// correctness path.
+/// (plain text, no `Type::Foo(...)` wrapper), falling back to `Debug` so
+/// an enum without `Display` still shows its variant name rather than an
+/// opaque placeholder. A non-struct `T` renders as an empty list, not a
+/// panic -- reflection is a UI convenience, never a correctness path.
 ///
 /// # Examples
 ///
@@ -51,37 +56,37 @@ pub type FieldRow = (&'static str, String);
 /// ```
 #[must_use]
 pub fn fields<T: Facet<'static>>(value: &T) -> Vec<FieldRow> {
-    let peek = facet_reflect::Peek::new(value);
-    let Ok(structure) = peek.into_struct() else {
-        return Vec::new();
-    };
-    structure
-        .ty()
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| {
-            let rendered = structure
-                .field(index)
-                .map(render_scalar)
-                .unwrap_or_default();
-            (field.name, rendered)
-        })
+    let walked = ents_forge::present::fields(value);
+    let (body, lines): (Vec<_>, Vec<_>) = walked
+        .into_iter()
+        .filter(|field| !(field.skip_empty && field.empty))
+        .partition(|field| field.body);
+    lines
+        .into_iter()
+        .chain(body)
+        .map(|field| (field.name, field.value))
         .collect()
 }
 
-/// Render one field's [`facet_reflect::Peek`] as plain text: its own
-/// `Display` if it has one, else `Debug`, so an enum still shows a variant
-/// name instead of this crate's opaque `⟨TypeName⟩` placeholder.
-fn render_scalar(peek: facet_reflect::Peek<'_, '_>) -> String {
-    if let Some(s) = peek.as_str() {
-        return s.to_owned();
-    }
-    let displayed = format!("{peek}");
-    if displayed.starts_with('⟨') {
-        format!("{peek:?}")
+/// The `(name, value)` list columns `value`'s own `ents` attributes
+/// select: `ents::head` fields first, then `ents::col` fields, matching
+/// [`ents_forge::present::columns`]'s order -- or, for an entity declaring
+/// no column at all, every walked field, so an unannotated entity still
+/// lists in full rather than as a bare id column.
+fn list_columns<T: Facet<'static>>(value: &T) -> Vec<FieldRow> {
+    let walked = ents_forge::present::fields(value);
+    if walked.iter().any(|field| field.head || field.col) {
+        let heads = walked.iter().filter(|field| field.head);
+        let cols = walked.iter().filter(|field| field.col && !field.head);
+        heads
+            .chain(cols)
+            .map(|field| (field.name, field.value.clone()))
+            .collect()
     } else {
-        displayed
+        walked
+            .into_iter()
+            .map(|field| (field.name, field.value))
+            .collect()
     }
 }
 
@@ -114,7 +119,11 @@ pub fn view<T: Facet<'static>>(value: &T) -> Markup {
 
 /// A table listing `rows`, one row per `(id, entity)` pair, columns taken
 /// from the first entity's own reflected field names -- the generic
-/// "list" page every kernel entity this crate exposes uses.
+/// "list" page every kernel entity this crate exposes uses. Which columns
+/// render is the entity's own `ents` declaration ([`list_columns`]): its
+/// `ents::head` fields lead, its `ents::col` fields follow -- the same
+/// selection and order the CLI's `list` derives -- with the full field
+/// walk as the fallback for an entity declaring no column.
 ///
 /// `id_header` names the leading column holding each entry's key (a
 /// username, an effect name, a redaction id -- whatever names the ref this
@@ -147,7 +156,12 @@ pub fn list_table<T: Facet<'static>>(
 ) -> Markup {
     let field_names: Vec<&'static str> = rows
         .first()
-        .map(|(_, entity)| fields(entity).into_iter().map(|(name, _)| name).collect())
+        .map(|(_, entity)| {
+            list_columns(entity)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        })
         .unwrap_or_default();
     html! {
         div.card {
@@ -164,7 +178,7 @@ pub fn list_table<T: Facet<'static>>(
                     @for (id, entity) in rows {
                         tr {
                             td { a href=(href_for(id)) { (id) } }
-                            @for (_, rendered) in fields(entity) {
+                            @for (_, rendered) in list_columns(entity) {
                                 td.long-token[has_long_token(&rendered)] { (rendered) }
                             }
                         }
@@ -383,6 +397,31 @@ mod tests {
             })
             .into_string()
             .contains("login")
+        );
+    }
+
+    /// The `ents` attributes declared on the entity's own fields govern
+    /// the web exactly as they govern the CLI: `ents::skip` hides the
+    /// refname-bound name, `ents::skip_empty` hides an empty set, and the
+    /// list narrows to the declared `ents::col` columns.
+    #[rstest]
+    // @relation(roots.web-agnostic, scope=function, role=Verifies)
+    fn ents_attributes_govern_the_view_and_the_list_columns() {
+        let effect = Effect {
+            name: "unit".to_owned(),
+            trigger: "rev(refs/heads/main)".to_owned(),
+            toolchains: vec![],
+            run: "true".to_owned(),
+        };
+        let names: Vec<_> = fields(&effect).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, vec!["trigger", "run"]);
+
+        let rows = vec![("unit".to_owned(), effect)];
+        let markup = list_table(&rows, "name", |id| format!("/effects/{id}")).into_string();
+        assert!(markup.contains("trigger") && markup.contains("rev(refs/heads/main)"));
+        assert!(
+            !markup.contains("<th>run</th>"),
+            "only the declared columns render: {markup}"
         );
     }
 

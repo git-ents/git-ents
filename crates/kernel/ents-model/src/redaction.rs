@@ -2,6 +2,7 @@
 //!
 //! Spec coverage: `model.redaction`.
 
+use ents_attrs as ents;
 use facet::Facet;
 use gix_hash::ObjectId;
 
@@ -39,6 +40,7 @@ use gix_hash::ObjectId;
 // @relation(model.redaction, meta-ref.typed-tree, model.extensibility, scope=file)
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Redaction {
+    #[facet(ents::skip)]
     target: [u8; 20],
     /// A human-readable reason for the redaction.
     pub reason: String,
