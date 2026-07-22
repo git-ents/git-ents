@@ -208,20 +208,21 @@ fn canonical_result_ref(name: &str, short: &str) -> ents_effect::Result<gix::ref
     Ok(namespace::result_ref(name, short).expect("well-formed refname segments"))
 }
 
-/// `git ents effect log`: every recorded result for `name`, newest first —
-/// the results ref's own commit log.
+/// `git ents effect log`: every recorded result for `name`, keyed by the
+/// full oid of the judged commit (the identity `model.result-identity`
+/// binds, and what `results(...)` queries match on).
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] if `name` has no results yet.
-pub fn log(root: &LocalRoot, name: &str) -> Result<Vec<(gix_hash::ObjectId, Status)>> {
+/// Propagates a ref-store or object read failure.
+pub fn log(root: &LocalRoot, name: &str) -> Result<Vec<(gix_hash::ObjectId, ResultRecord)>> {
     let prefix = format!("refs/meta/results/{name}/");
     let mut out = Vec::new();
     for entry in root.refs.iter_prefix(&prefix)? {
         let (_, tip) = entry?;
         let tree = super::commit_tree(&root.objects, tip)?;
         if let Ok(record) = facet_git_tree::deserialize::<ResultRecord>(&tree, &root.objects) {
-            out.push((tip, record.status));
+            out.push((record.target(), record));
         }
     }
     Ok(out)

@@ -322,7 +322,16 @@ pub enum AccountAction {
 #[repr(u8)]
 pub enum EffectAction {
     /// List the effects configured in this repository.
-    List,
+    ///
+    /// With --porcelain, emits a stable machine-readable form:
+    /// blank-line-separated records, each starting with a `<name>` line,
+    /// followed by `trigger <query>`, `toolchains <a, b>` (when
+    /// non-empty), and `run <command>` lines.
+    List {
+        /// Emit the stable machine-readable form described above.
+        #[facet(args::named, default)]
+        porcelain: bool,
+    },
     /// Show one effect's definition and, when a commit is given, its
     /// result.
     Show {
@@ -368,11 +377,19 @@ pub enum EffectAction {
         #[facet(args::named)]
         key: Option<PathBuf>,
     },
-    /// Show recorded results for an effect, newest first.
+    /// Show recorded results for an effect, one row per judged commit.
+    ///
+    /// With --porcelain, emits a stable machine-readable form:
+    /// blank-line-separated records of one line each,
+    /// `<commit> <status>` — the full oid of the judged commit and
+    /// pass, fail, or error.
     Log {
         /// The effect's name.
         #[facet(args::positional)]
         name: String,
+        /// Emit the stable machine-readable form described above.
+        #[facet(args::named, default)]
+        porcelain: bool,
     },
 }
 

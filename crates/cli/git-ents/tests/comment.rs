@@ -131,6 +131,63 @@ fn the_comment_loop_runs_through_the_machine_readable_listing() {
     assert_eq!(all[0].comment.state, "resolved");
 }
 
+/// `git ents comment add` with no `--body`, run as the real binary with a
+/// fake `$EDITOR`: the body composes from the scratch file, `#` lines
+/// stripped — the editor fallback the `ents::compose` attribute on
+/// `CommentAction::Add` declares.
+// @relation(model.comment, roots.local, scope=function, role=Verifies)
+#[test]
+fn comment_add_composes_body_from_a_fake_editor() {
+    let fixture = common::Fixture::new(2);
+    commit_file(fixture.path(), "file.txt", "line one\nline two\n");
+    let editor_path = fixture.path().join("fake-editor.sh");
+    common::write_fake_editor(
+        &editor_path,
+        "composed comment body\n# a stray comment line",
+    );
+
+    let output = Command::new(common::bin_path())
+        .current_dir(fixture.path())
+        .args(["comment", "add", "file.txt", "--key"])
+        .arg(&fixture.key_path)
+        .env("GIT_EDITOR", &editor_path)
+        .env("EDITOR", &editor_path)
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "{output:?}");
+
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    let listed = comment::list(&root).expect("lists");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].1.body, "composed comment body");
+}
+
+/// An empty composed comment body aborts with a failing exit status,
+/// mirroring `git commit`'s own empty-message abort.
+// @relation(model.comment, roots.local, scope=function, role=Verifies)
+#[test]
+fn comment_add_aborts_on_an_empty_editor_body() {
+    let fixture = common::Fixture::new(3);
+    commit_file(fixture.path(), "file.txt", "line one\n");
+    let editor_path = fixture.path().join("fake-editor.sh");
+    common::write_fake_editor(&editor_path, "# only a comment, no body");
+
+    let output = Command::new(common::bin_path())
+        .current_dir(fixture.path())
+        .args(["comment", "add", "file.txt", "--key"])
+        .arg(&fixture.key_path)
+        .env("GIT_EDITOR", &editor_path)
+        .env("EDITOR", &editor_path)
+        .output()
+        .expect("runs");
+    assert!(
+        !output.status.success(),
+        "an empty body must abort comment creation: {output:?}"
+    );
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    assert_eq!(comment::list(&root).expect("lists").len(), 0);
+}
+
 /// Two records separate with exactly one blank line, and an unanchored
 /// reply renders `-` for projection and location — the porcelain grammar
 /// an agent parses (`lens.parity`).

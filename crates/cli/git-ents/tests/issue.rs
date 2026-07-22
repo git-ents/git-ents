@@ -16,21 +16,7 @@ use ents_model::MemberId;
 use git_ents::commands::issue;
 use git_ents::root::LocalRoot;
 
-/// Write an executable script at `path` that overwrites its one argument
-/// (the scratch file `git ents issue new` opens) with `contents` — a
-/// stand-in for a real `$EDITOR`, exercising the same
-/// spawn-and-read-back path a real editor would.
-fn write_fake_editor(path: &std::path::Path, contents: &str) {
-    let script = format!("#!/bin/sh\ncat > \"$1\" <<'EOF'\n{contents}\nEOF\n");
-    std::fs::write(path, script).expect("write fake editor");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).expect("chmod");
-    }
-}
+use common::write_fake_editor;
 
 /// `git ents issue new --title ...`: no editor needed, the title and body
 /// round-trip exactly.
@@ -42,8 +28,8 @@ fn issue_new_with_an_explicit_title_skips_the_editor() {
 
     let id = issue::new(
         &root,
-        Some("gate rejects a valid signature".to_owned()),
-        Some("steps to reproduce...".to_owned()),
+        "gate rejects a valid signature".to_owned(),
+        "steps to reproduce...".to_owned(),
         "open".to_owned(),
         vec!["bug".to_owned()],
         vec!["jdc".to_owned()],
@@ -118,6 +104,58 @@ fn issue_new_aborts_on_an_empty_editor_message() {
     );
 }
 
+/// `git ents issue list --porcelain` emits the stable record grammar
+/// (`lens.parity`, `model.issue`): full ids on a space-separated head
+/// line, `title`/`assignees`/`labels` keyed lines (empties omitted), the
+/// body tab-prefixed line by line, records blank-line separated.
+// @relation(lens.parity, model.issue, roots.local, scope=function, role=Verifies)
+#[test]
+fn issue_list_porcelain_emits_full_id_records() {
+    let fixture = common::Fixture::new(5);
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+
+    let first = issue::new(
+        &root,
+        "gate rejects a valid signature".to_owned(),
+        "first body line\n\nthird body line".to_owned(),
+        "open".to_owned(),
+        vec!["bug".to_owned(), "gate".to_owned()],
+        vec!["jdc".to_owned()],
+        Some(fixture.key_path.clone()),
+    )
+    .expect("creates");
+    let second = issue::new(
+        &root,
+        "unlabeled".to_owned(),
+        "short".to_owned(),
+        "triaged".to_owned(),
+        vec![],
+        vec![],
+        Some(fixture.key_path.clone()),
+    )
+    .expect("creates");
+
+    let output = Command::new(common::bin_path())
+        .current_dir(fixture.path())
+        .args(["issue", "list", "--porcelain"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    let first_record = format!(
+        "{first} open\ntitle gate rejects a valid signature\nassignees jdc\nlabels bug, gate\n\tfirst body line\n\t\n\tthird body line\n"
+    );
+    let second_record = format!("{second} triaged\ntitle unlabeled\n\tshort\n");
+    // Listing order follows the refs' own (id-sorted) order.
+    let expected = if first < second {
+        format!("{first_record}\n{second_record}")
+    } else {
+        format!("{second_record}\n{first_record}")
+    };
+    assert_eq!(stdout, expected);
+}
+
 /// `git ents issue edit`: state, assignees, and labels round-trip through
 /// an edit on top of the issue's existing tip.
 // @relation(model.issue, roots.local, scope=function, role=Verifies)
@@ -128,8 +166,8 @@ fn issue_edit_round_trips_state_assignees_and_labels() {
 
     let id = issue::new(
         &root,
-        Some("title".to_owned()),
-        Some("body".to_owned()),
+        "title".to_owned(),
+        "body".to_owned(),
         "open".to_owned(),
         vec![],
         vec![],

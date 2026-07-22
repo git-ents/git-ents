@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use ents_attrs as ents;
 use facet::Facet;
 use figue as args;
 
@@ -28,9 +29,11 @@ pub enum ReviewAction {
         /// values are schema, not a platform feature.
         #[facet(args::named)]
         verdict: String,
-        /// The review's body text.
-        #[facet(args::named)]
-        body: String,
+        /// The review's body text; omit to compose it in
+        /// $GIT_EDITOR/$EDITOR instead (lines starting with '#' are
+        /// stripped, and an empty body aborts the command).
+        #[facet(args::named, ents::compose)]
+        body: Option<String>,
         /// Key to sign with; defaults to `user.signingkey`.
         #[facet(args::named)]
         key: Option<PathBuf>,
@@ -51,10 +54,20 @@ pub enum ReviewAction {
         key: Option<PathBuf>,
     },
     /// List the reviews recorded in this repository.
+    ///
+    /// With --porcelain, emits a stable machine-readable form:
+    /// blank-line-separated records, each starting with the line
+    /// `<target> <member> <reviewed> <verdict> <state>` — target the
+    /// review's full genesis-oid ref segment, reviewed the full oid of the
+    /// most recently reviewed commit — followed by the body with every
+    /// line prefixed by one tab.
     List {
         /// Keep only reviews of this revision.
         #[facet(args::named)]
         target: Option<String>,
+        /// Emit the stable machine-readable form described above.
+        #[facet(args::named, default)]
+        porcelain: bool,
     },
     /// Show one review: its reviewed commit, verdict, body, and discussion
     /// thread (comments naming it as their context).

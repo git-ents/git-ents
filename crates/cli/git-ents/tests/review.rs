@@ -283,6 +283,108 @@ fn withdraw_preserves_verdict_and_body_and_flips_only_state() {
     assert_eq!(all[0].1.state, ReviewState::Withdrawn);
 }
 
+/// `git ents review list --porcelain` emits the stable record grammar
+/// (`lens.parity`, `model.review`): a head line of full target segment,
+/// member, full reviewed oid, verdict, and state, then the body
+/// tab-prefixed — and a withdrawal shows up as the state token.
+// @relation(lens.parity, model.review, roots.local, scope=function, role=Verifies)
+#[test]
+fn review_list_porcelain_emits_full_id_records() {
+    let fixture = common::Fixture::new(6);
+    let reviewed = commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let new = NewReview {
+        target: "HEAD".to_owned(),
+        verdict: Verdict::Approve,
+        body: "looks good\n\nsecond paragraph".to_owned(),
+    };
+    let target = review::new(&root, new, Some(fixture.key_path.clone())).expect("reviews");
+
+    let porcelain = |fixture: &common::Fixture| {
+        let output = Command::new(common::bin_path())
+            .current_dir(fixture.path())
+            .args(["review", "list", "--porcelain"])
+            .output()
+            .expect("runs");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).expect("utf8")
+    };
+
+    let expected = format!(
+        "{target} reviewer {reviewed} approve active\n\tlooks good\n\t\n\tsecond paragraph\n"
+    );
+    assert_eq!(porcelain(&fixture), expected);
+
+    review::withdraw(&root, reviewed.to_string(), Some(fixture.key_path.clone()))
+        .expect("withdraws");
+    let expected = format!(
+        "{target} reviewer {reviewed} approve withdrawn\n\tlooks good\n\t\n\tsecond paragraph\n"
+    );
+    assert_eq!(porcelain(&fixture), expected);
+}
+
+/// `git ents review new` with no `--body`, run as the real binary with a
+/// fake `$EDITOR`: the body composes from the scratch file, `#` lines
+/// stripped — the same editor fallback `issue new` has.
+// @relation(model.review, roots.local, scope=function, role=Verifies)
+#[test]
+fn review_new_composes_body_from_a_fake_editor() {
+    let fixture = common::Fixture::new(7);
+    commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let editor_path = fixture.path().join("fake-editor.sh");
+    common::write_fake_editor(
+        &editor_path,
+        "composed review body\n# a stray comment line",
+    );
+
+    let output = Command::new(common::bin_path())
+        .current_dir(fixture.path())
+        .args(["review", "new", "--verdict", "approve", "--key"])
+        .arg(&fixture.key_path)
+        .env("GIT_EDITOR", &editor_path)
+        .env("EDITOR", &editor_path)
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "{output:?}");
+
+    let all = review::list(&root, None).expect("lists");
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].1.body, "composed review body");
+}
+
+/// An empty composed review body aborts with a failing exit status,
+/// mirroring `git commit`'s own empty-message abort.
+// @relation(model.review, roots.local, scope=function, role=Verifies)
+#[test]
+fn review_new_aborts_on_an_empty_editor_body() {
+    let fixture = common::Fixture::new(8);
+    commit_file(fixture.path(), "file.txt", "line one\n");
+    let root = LocalRoot::open(fixture.path()).expect("opens");
+    members::add(&root, "reviewer", None, Some(fixture.key_path.clone())).expect("enrolls");
+
+    let editor_path = fixture.path().join("fake-editor.sh");
+    common::write_fake_editor(&editor_path, "# only a comment, no body");
+
+    let output = Command::new(common::bin_path())
+        .current_dir(fixture.path())
+        .args(["review", "new", "--verdict", "approve", "--key"])
+        .arg(&fixture.key_path)
+        .env("GIT_EDITOR", &editor_path)
+        .env("EDITOR", &editor_path)
+        .output()
+        .expect("runs");
+    assert!(
+        !output.status.success(),
+        "an empty body must abort review creation: {output:?}"
+    );
+    assert_eq!(review::list(&root, None).expect("lists").len(), 0);
+}
+
 /// `model.review`: withdrawing when this member has never reviewed
 /// `target` (or an ancestor of it) is a clear refusal — there is nothing to
 /// withdraw.

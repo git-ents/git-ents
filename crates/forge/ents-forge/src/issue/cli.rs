@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use ents_attrs as ents;
 use facet::Facet;
 use figue as args;
 
@@ -15,7 +16,17 @@ use figue as args;
 #[repr(u8)]
 pub enum IssueAction {
     /// List the issues recorded in this repository.
-    List,
+    ///
+    /// With --porcelain, emits a stable machine-readable form:
+    /// blank-line-separated records, each starting with the line
+    /// `<id> <state>` (the full id, never abbreviated), followed by a
+    /// `title <title>` line, `assignees <a, b>` and `labels <x, y>` lines
+    /// when non-empty, then the body with every line prefixed by one tab.
+    List {
+        /// Emit the stable machine-readable form described above.
+        #[facet(args::named, default)]
+        porcelain: bool,
+    },
     /// Show one issue.
     Show {
         /// The issue's id.
@@ -29,11 +40,11 @@ pub enum IssueAction {
     New {
         /// The issue's title; omit to compose it (and the body) in an
         /// editor instead.
-        #[facet(args::named)]
+        #[facet(args::named, ents::compose)]
         title: Option<String>,
         /// The issue's body; ignored (and instead composed in the editor)
         /// when --title is omitted.
-        #[facet(args::named)]
+        #[facet(args::named, ents::compose)]
         body: Option<String>,
         /// The issue's initial state.
         #[facet(args::named, default = "open")]

@@ -1240,6 +1240,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ents-attrs"
+version = "0.0.0"
+dependencies = [
+ "facet",
+]
+
+[[package]]
 name = "ents-effect"
 version = "0.0.0"
 dependencies = [
@@ -1264,6 +1271,7 @@ name = "ents-forge"
 version = "0.0.0"
 dependencies = [
  "ents-anchor",
+ "ents-attrs",
  "ents-model",
  "ents-receive",
  "ents-testutil",
@@ -1353,6 +1361,7 @@ name = "ents-model"
 version = "0.0.0"
 dependencies = [
  "ents-anchor",
+ "ents-attrs",
  "facet",
  "facet-git-tree",
  "gix",

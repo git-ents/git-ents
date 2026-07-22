@@ -76,6 +76,7 @@
 pub mod agent_worker;
 pub mod cli;
 pub mod commands;
+pub mod compose;
 pub mod credentials;
 pub mod error;
 pub mod exe;

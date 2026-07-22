@@ -3,6 +3,7 @@
 //!
 //! Spec coverage: `model.review`.
 
+use ents_attrs as ents;
 use facet::Facet;
 use gix_hash::ObjectId;
 
@@ -167,11 +168,14 @@ impl std::fmt::Display for Verdict {
 // @relation(model.review, meta-ref.identity-binding, meta-ref.typed-tree, model.extensibility, scope=file)
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Review {
+    #[facet(ents::head, ents::id)]
     target: [u8; 20],
     /// The review's verdict (`model.review`): a fixed [`Verdict`], not a
     /// string.
+    #[facet(ents::head)]
     pub verdict: Verdict,
     /// The review's body text.
+    #[facet(ents::body)]
     pub body: String,
     /// Whether this review still stands or has been withdrawn
     /// (`model.review`). `#[facet(default)]` so a tree written before this
@@ -179,7 +183,7 @@ pub struct Review {
     /// [`ReviewState::Active`] rather than failing to decode; every
     /// existing `refs/meta/reviews/*` history predates this field and must
     /// keep reading.
-    #[facet(default)]
+    #[facet(default, ents::head)]
     pub state: ReviewState,
 }
 

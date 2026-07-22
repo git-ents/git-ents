@@ -2,6 +2,7 @@
 //!
 //! Spec coverage: `model.effect-definition`.
 
+use ents_attrs as ents;
 use facet::Facet;
 
 /// A declarative effect definition, living at `refs/meta/effects/<name>`
@@ -39,12 +40,15 @@ pub struct Effect {
     /// The effect's own name — the natural key the refname's final segment
     /// binds to (`model.effect-definition`, `meta-ref.identity-binding`):
     /// the gate recomputes `refs/meta/effects/<name>` from this field.
+    #[facet(ents::skip)]
     pub name: String,
     /// The raw `CommitQuery` text denoting the commit set this effect
     /// fires for (`query.grammar`).
+    #[facet(ents::col)]
     pub trigger: String,
     /// The names of the toolchains this effect's run requires, each a
     /// `refs/meta/toolchains/<name>` reference (`model.toolchain`).
+    #[facet(ents::skip_empty)]
     pub toolchains: Vec<String>,
     /// The run command.
     pub run: String,

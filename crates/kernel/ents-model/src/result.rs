@@ -2,6 +2,7 @@
 //!
 //! Spec coverage: `model.result-taxonomy`, `model.result-identity`.
 
+use ents_attrs as ents;
 use facet::Facet;
 use gix_hash::ObjectId;
 
@@ -86,12 +87,15 @@ impl std::fmt::Display for Status {
 pub struct ResultRecord {
     /// The name of the effect this result records — binds the refname's
     /// `<effect>` segment (`model.result-identity`).
+    #[facet(ents::skip)]
     pub effect: String,
     /// The full oid of the commit the run judged, as a raw 20-byte SHA-1
     /// array — binds the refname's `<short-oid>` segment
     /// (`model.result-identity`).
+    #[facet(ents::skip)]
     target: [u8; 20],
     /// The run's outcome.
+    #[facet(ents::head)]
     pub status: Status,
 }
 

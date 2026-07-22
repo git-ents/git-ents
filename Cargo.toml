@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/kernel/ents-anchor",
+    "crates/kernel/ents-attrs",
     "crates/kernel/ents-effect",
     "crates/kernel/ents-gate",
     "crates/kernel/ents-gate-rules",
@@ -30,6 +31,7 @@ missing_docs = "warn"
 
 [workspace.dependencies]
 ents-anchor = { path = "crates/kernel/ents-anchor" }
+ents-attrs = { path = "crates/kernel/ents-attrs" }
 ents-effect = { path = "crates/kernel/ents-effect" }
 ents-forge = { path = "crates/forge/ents-forge" }
 ents-gate = { path = "crates/kernel/ents-gate" }

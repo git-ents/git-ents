@@ -4,6 +4,7 @@
 //! Spec coverage: `model.comment`, `model.comment-state`,
 //! `model.comment-context`, `model.comment-thread`.
 
+use ents_attrs as ents;
 use facet::Facet;
 use facet_git_tree::RawTree;
 use gix_hash::ObjectId;
@@ -56,24 +57,31 @@ use gix_object::Find;
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Comment {
     /// The comment's text.
+    #[facet(ents::col, ents::body)]
     pub body: String,
     /// The comment's state (`model.comment-state`): `open` for a new
     /// comment, `resolved` once resolved — not a fixed enum, because
     /// custom states are schema, not platform features, exactly as for
     /// issues (`model.issue`).
+    #[facet(ents::head)]
     pub state: String,
     /// The anchor identifying the exact content the comment was written
     /// against (`anchor.definition`), opaque to this crate; `None` for a
-    /// comment about a context entity or a parent comment only.
+    /// comment about a context entity or a parent comment only. Never
+    /// rendered generically (`ents::skip`): its projection is a bespoke,
+    /// domain-specific line on every surface.
+    #[facet(ents::skip)]
     pub anchor: Option<RawTree>,
     /// The canonical ref path below `refs/meta/` of the entity this
     /// comment belongs to, such as `issues/<id>` or `reviews/<target>/<member>`
     /// (`model.comment-context`) — an entity's thread is an aggregation
     /// query over comments naming it, never a list the entity stores.
+    #[facet(ents::skip_empty)]
     pub context: Option<String>,
     /// The id of the comment this one replies to (`model.comment-thread`);
     /// a reply inherits its aboutness from its thread root rather than
     /// repeating an anchor or context.
+    #[facet(ents::skip_empty, ents::id)]
     pub parent: Option<String>,
 }
 

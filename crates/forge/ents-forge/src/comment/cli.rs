@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use ents_attrs as ents;
 use facet::Facet;
 use figue as args;
 
@@ -54,9 +55,11 @@ pub enum CommentAction {
         /// omit for a comment about a context or parent only.
         #[facet(args::positional, default)]
         path: Option<String>,
-        /// The comment's body text.
-        #[facet(args::named)]
-        body: String,
+        /// The comment's body text; omit to compose it in
+        /// $GIT_EDITOR/$EDITOR instead (lines starting with '#' are
+        /// stripped, and an empty body aborts the command).
+        #[facet(args::named, ents::compose)]
+        body: Option<String>,
         /// Lines to anchor, as `<start>[:<end>]` (1-based, inclusive);
         /// omit for a whole-file comment.
         #[facet(args::named)]

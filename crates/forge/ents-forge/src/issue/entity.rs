@@ -2,6 +2,7 @@
 //!
 //! Spec coverage: `model.issue`.
 
+use ents_attrs as ents;
 use facet::Facet;
 
 use ents_model::MemberId;
@@ -38,15 +39,20 @@ use ents_model::MemberId;
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Issue {
     /// The issue's title.
+    #[facet(ents::col)]
     pub title: String,
     /// The issue's body.
+    #[facet(ents::body)]
     pub body: String,
     /// The issue's current state. Not a fixed enum: custom states are
     /// schema, not a platform feature (`model.issue`).
+    #[facet(ents::head)]
     pub state: String,
     /// The members assigned to the issue. More than one is ordinary.
+    #[facet(ents::skip_empty)]
     pub assignees: Vec<MemberId>,
     /// Free-form labels.
+    #[facet(ents::skip_empty)]
     pub labels: Vec<String>,
 }
 

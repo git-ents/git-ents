@@ -1,12 +1,9 @@
 //! `git ents issue`: a thin wrapper around `ents_forge::issue`'s business
-//! logic, plus the one CLI-only piece that operation needs: composing a
-//! title and body in `$GIT_EDITOR`/`$EDITOR` when `--title` is omitted
-//! (mirroring `git commit`'s own editor fallback) — a frontend concern,
-//! not an operation `ents_forge::issue` offers (`lens.parity`).
+//! logic — the `$GIT_EDITOR` fallback for an omitted `--title` lives in
+//! [`crate::compose`], driven by the `ents::compose` attributes on
+//! [`ents_forge::issue::IssueAction`], not here (`lens.parity`).
 
-use std::io::Write as _;
 use std::path::PathBuf;
-use std::process::Command;
 
 use ents_forge::Issue;
 use ents_forge::issue::{self, EditIssue, NewIssue};
@@ -14,7 +11,7 @@ use ents_model::MemberId;
 use ents_receive::Identity;
 
 use super::{actor, signer};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::mutate::outcome_to_result;
 use crate::root::LocalRoot;
 
@@ -37,30 +34,20 @@ pub fn show(root: &LocalRoot, id: &str) -> Result<Issue> {
     Ok(issue::show(&root.refs, &root.objects, id)?)
 }
 
-/// `git ents issue new`: create an issue. When `title` is `None`, composes
-/// the title and body interactively (see `compose_in_editor`).
+/// `git ents issue new`: create an issue.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidArgument`] if no title was given and the interactively
-/// composed message is empty (the editor path aborts, mirroring `git
-/// commit`'s own empty-message abort); [`Error::Io`] if the editor cannot
-/// be spawned or the scratch file cannot be read or written; otherwise see
-/// [`crate::mutate::outcome_to_result`].
+/// See [`crate::mutate::outcome_to_result`].
 pub fn new(
     root: &LocalRoot,
-    title: Option<String>,
-    body: Option<String>,
+    title: String,
+    body: String,
     state: String,
     labels: Vec<String>,
     assignees: Vec<String>,
     key: Option<PathBuf>,
 ) -> Result<String> {
-    let (title, body) = match title {
-        Some(title) => (title, body.unwrap_or_default()),
-        None => compose_in_editor()?
-            .ok_or_else(|| Error::InvalidArgument("empty issue message, aborting".into()))?,
-    };
     let signer = signer(root, key)?;
     let identity = Identity {
         actor: actor(&signer),
@@ -124,65 +111,4 @@ pub fn edit(
     )?;
     outcome_to_result(outcome, None)?;
     Ok(())
-}
-
-/// Compose a title (first line) and body (remaining lines) by opening
-/// `$GIT_EDITOR` (or `$EDITOR`, or `vi`) on a scratch file seeded with a
-/// `#`-prefixed instructions footer; lines starting with `#` are stripped
-/// on read-back. Returns `None` (mirroring `git commit`'s own
-/// empty-message abort) when the title line is empty after stripping.
-///
-/// # Errors
-///
-/// [`Error::Io`] if the scratch file cannot be created, written, or read,
-/// or the editor process cannot be spawned or exits with a failure status.
-fn compose_in_editor() -> Result<Option<(String, String)>> {
-    let editor = std::env::var("GIT_EDITOR")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_owned());
-
-    let mut file = tempfile::NamedTempFile::new().map_err(|source| Error::Io {
-        path: std::env::temp_dir(),
-        source,
-    })?;
-    let path = file.path().to_owned();
-    writeln!(
-        file,
-        "\n# First line is the title, the rest is the body.\n\
-         # Lines starting with '#' are stripped; an empty title aborts."
-    )
-    .map_err(|source| Error::Io {
-        path: path.clone(),
-        source,
-    })?;
-    file.flush().map_err(|source| Error::Io {
-        path: path.clone(),
-        source,
-    })?;
-
-    let status = Command::new(&editor)
-        .arg(&path)
-        .status()
-        .map_err(|source| Error::Io {
-            path: path.clone(),
-            source,
-        })?;
-    if !status.success() {
-        return Err(Error::Io {
-            path: path.clone(),
-            source: std::io::Error::other(format!("{editor} exited with {status}")),
-        });
-    }
-
-    let contents = std::fs::read_to_string(&path).map_err(|source| Error::Io {
-        path: path.clone(),
-        source,
-    })?;
-    let mut lines = contents.lines().filter(|line| !line.starts_with('#'));
-    let title = lines.next().unwrap_or("").trim();
-    if title.is_empty() {
-        return Ok(None);
-    }
-    let body = lines.collect::<Vec<_>>().join("\n");
-    Ok(Some((title.to_owned(), body.trim_end().to_owned())))
 }

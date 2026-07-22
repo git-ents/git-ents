@@ -175,15 +175,23 @@ fn run_account(action: AccountAction, out: &mut impl std::io::Write) -> Result<(
 fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
-        EffectAction::List => {
-            for (name, effect) in commands::effect::list(&root)? {
-                let _ = writeln!(out, "{name}\t{}", effect.trigger);
+        EffectAction::List { porcelain } => {
+            let rows = commands::effect::list(&root)?;
+            if porcelain {
+                let _ = write!(out, "{}", ents_forge::present::porcelain(&rows));
+            } else {
+                for (name, effect) in rows {
+                    let _ = writeln!(
+                        out,
+                        "{name}\t{}",
+                        ents_forge::present::columns(&effect).join("\t")
+                    );
+                }
             }
         }
         EffectAction::Show { name, at } => {
             let (effect, status) = commands::effect::show(&root, &name, at)?;
-            let _ = writeln!(out, "trigger: {}", effect.trigger);
-            let _ = writeln!(out, "run: {}", effect.run);
+            let _ = write!(out, "{}", ents_forge::present::view(&effect));
             let _ = writeln!(
                 out,
                 "result: {}",
@@ -206,9 +214,23 @@ fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()>
                 let _ = writeln!(out, "{oid}\t{:?}", outcome.result);
             }
         }
-        EffectAction::Log { name } => {
-            for (oid, status) in commands::effect::log(&root, &name)? {
-                let _ = writeln!(out, "{oid}\t{status}");
+        EffectAction::Log { name, porcelain } => {
+            let rows = commands::effect::log(&root, &name)?;
+            if porcelain {
+                let rows: Vec<_> = rows
+                    .into_iter()
+                    .map(|(oid, record)| (oid.to_string(), record))
+                    .collect();
+                let _ = write!(out, "{}", ents_forge::present::porcelain(&rows));
+            } else {
+                for (oid, record) in rows {
+                    let _ = writeln!(
+                        out,
+                        "{}\t{}",
+                        ents_forge::abbreviate_id(&oid.to_string()),
+                        ents_forge::present::columns(&record).join("\t")
+                    );
+                }
             }
         }
     }
@@ -272,10 +294,9 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                 for row in rows {
                     let _ = writeln!(
                         out,
-                        "{}\t{}\t{}",
+                        "{}\t{}",
                         ents_forge::abbreviate_id(&row.id),
-                        row.comment.state,
-                        row.comment.body
+                        ents_forge::present::columns(&row.comment).join("\t")
                     );
                 }
                 for entry in unreadable {
@@ -294,7 +315,7 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
             key,
         } => {
             let new = ents_forge::comment::NewComment {
-                body,
+                body: crate::compose::body::<CommentAction>("Add", body)?,
                 path,
                 lines,
                 rev,
@@ -319,12 +340,9 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
         }
         CommentAction::Show { id, rev, worktree } => {
             let (comment, projected) = commands::comment::show(&root, &id, &rev, worktree)?;
-            let _ = writeln!(out, "state: {}", comment.state);
-            if let Some(context) = &comment.context {
-                let _ = writeln!(out, "context: {context}");
-            }
-            if let Some(parent) = &comment.parent {
-                let _ = writeln!(out, "parent: {parent}");
+            let view = ents_forge::present::view(&comment);
+            for line in &view.lines {
+                let _ = writeln!(out, "{}: {}", line.name, line.value);
             }
             if let Some((anchor, projection)) = projected {
                 let _ = writeln!(out, "path: {}", anchor.path);
@@ -342,7 +360,9 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
                 };
                 let _ = writeln!(out, "projection at {target}: {}{detail}", projection.label());
             }
-            let _ = writeln!(out, "body: {}", comment.body);
+            if let Some(body) = &view.body {
+                let _ = writeln!(out, "{}: {}", body.name, body.value);
+            }
         }
     }
     Ok(())
@@ -351,29 +371,24 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
 fn run_issue(action: IssueAction, out: &mut impl std::io::Write) -> Result<()> {
     let root = LocalRoot::discover(".")?;
     match action {
-        IssueAction::List => {
-            for (id, issue) in commands::issue::list(&root)? {
-                let _ = writeln!(
-                    out,
-                    "{}\t{}\t{}",
-                    ents_forge::abbreviate_id(&id),
-                    issue.state,
-                    issue.title
-                );
+        IssueAction::List { porcelain } => {
+            let rows = commands::issue::list(&root)?;
+            if porcelain {
+                let _ = write!(out, "{}", ents_forge::present::porcelain(&rows));
+            } else {
+                for (id, issue) in rows {
+                    let _ = writeln!(
+                        out,
+                        "{}\t{}",
+                        ents_forge::abbreviate_id(&id),
+                        ents_forge::present::columns(&issue).join("\t")
+                    );
+                }
             }
         }
         IssueAction::Show { id } => {
             let issue = commands::issue::show(&root, &id)?;
-            let _ = writeln!(out, "title: {}", issue.title);
-            let _ = writeln!(out, "state: {}", issue.state);
-            if !issue.assignees.is_empty() {
-                let names: Vec<_> = issue.assignees.iter().map(ToString::to_string).collect();
-                let _ = writeln!(out, "assignees: {}", names.join(", "));
-            }
-            if !issue.labels.is_empty() {
-                let _ = writeln!(out, "labels: {}", issue.labels.join(", "));
-            }
-            let _ = writeln!(out, "body: {}", issue.body);
+            let _ = write!(out, "{}", ents_forge::present::view(&issue));
         }
         IssueAction::New {
             title,
@@ -383,6 +398,7 @@ fn run_issue(action: IssueAction, out: &mut impl std::io::Write) -> Result<()> {
             assignee,
             key,
         } => {
+            let (title, body) = crate::compose::title_body::<IssueAction>("New", title, body)?;
             let id = commands::issue::new(&root, title, body, state, label, assignee, key)?;
             let _ = writeln!(out, "opened {id}");
         }
@@ -481,7 +497,7 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
             let new = ents_forge::review::NewReview {
                 target,
                 verdict: verdict.parse()?,
-                body,
+                body: crate::compose::body::<ReviewAction>("New", body)?,
             };
             let target = commands::review::new(&root, new, key)?;
             let _ = writeln!(out, "reviewed {}", ents_forge::abbreviate_id(&target));
@@ -490,33 +506,36 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
             let target = commands::review::withdraw(&root, target, key)?;
             let _ = writeln!(out, "withdrew {}", ents_forge::abbreviate_id(&target));
         }
-        ReviewAction::List { target } => {
-            for ((review_target, member), review) in commands::review::list(&root, target)? {
-                let _ = writeln!(
-                    out,
-                    "{}\t{member}\t{}\t{}",
-                    ents_forge::abbreviate_id(&review_target),
-                    ents_forge::abbreviate_id(&review.target().to_string()),
-                    review.verdict
-                );
+        ReviewAction::List { target, porcelain } => {
+            let rows = commands::review::list(&root, target)?;
+            if porcelain {
+                let rows: Vec<_> = rows
+                    .into_iter()
+                    .map(|((review_target, member), review)| {
+                        (format!("{review_target} {member}"), review)
+                    })
+                    .collect();
+                let _ = write!(out, "{}", ents_forge::present::porcelain(&rows));
+            } else {
+                for ((review_target, member), review) in rows {
+                    let _ = writeln!(
+                        out,
+                        "{}\t{member}\t{}",
+                        ents_forge::abbreviate_id(&review_target),
+                        ents_forge::present::columns(&review).join("\t")
+                    );
+                }
             }
         }
         ReviewAction::Show { target, member } => {
             let (review, thread) = commands::review::show(&root, &target, &member)?;
-            let _ = writeln!(
-                out,
-                "target: {}",
-                ents_forge::abbreviate_id(&review.target().to_string())
-            );
-            let _ = writeln!(out, "verdict: {}", review.verdict);
-            let _ = writeln!(out, "body: {}", review.body);
+            let _ = write!(out, "{}", ents_forge::present::view(&review));
             for (comment_id, comment) in thread {
                 let _ = writeln!(
                     out,
-                    "comment {}\t{}\t{}",
+                    "comment {}\t{}",
                     ents_forge::abbreviate_id(&comment_id),
-                    comment.state,
-                    comment.body
+                    ents_forge::present::columns(&comment).join("\t")
                 );
             }
         }

@@ -49,6 +49,22 @@ impl Fixture {
     }
 }
 
+/// Write an executable script at `path` that overwrites its one argument
+/// (the scratch file a composing command opens) with `contents` — a
+/// stand-in for a real `$EDITOR`, exercising the same spawn-and-read-back
+/// path a real editor would.
+pub fn write_fake_editor(path: &Path, contents: &str) {
+    let script = format!("#!/bin/sh\ncat > \"$1\" <<'EOF'\n{contents}\nEOF\n");
+    std::fs::write(path, script).expect("write fake editor");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).expect("chmod");
+    }
+}
+
 /// Write a deterministic key inside `dir` (as `.id_ed25519`) and return its
 /// path — for tests that need a key living alongside a specific working
 /// directory (a clone) rather than a [`Fixture`]'s own repo directory.
