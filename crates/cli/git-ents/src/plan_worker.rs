@@ -43,6 +43,18 @@
 //! drafting is read-only context gathering, not a code change, so there is
 //! no result branch to push and nothing to clean up before an object write
 //! that never happens.
+//!
+//! # The BYOK credential seam (`roots.config-isolation`, Phase 6)
+//!
+//! Drafting a plan is itself an agent run against the session's own member
+//! (`AgentSession::meta::member`), so it needs that member's credential
+//! injected exactly like `agent_worker::run_agent_exec` does — looked up
+//! *before* anything about the drafting attempt happens (no workdir, no
+//! prompt file written). A member with no configured credential is not an
+//! infrastructure hiccup (`effect.result-taxonomy`): it is recorded through
+//! the same [`record_result`] path a failed drafting attempt already takes,
+//! `Fail` on this effect's own results ref, the session left untouched and
+//! still dispatchable once the deployment gets a credential configured.
 
 use std::path::{Path, PathBuf};
 
@@ -57,6 +69,7 @@ use gix_object::{CommitRef, Find, Kind, Write};
 use gix_ref_store::RefStore;
 
 use crate::commands::commit_tree;
+use crate::credentials::CredentialStore;
 use crate::error::{Error, Result};
 
 /// `agent-plan`'s own effect name — re-exported so a caller deciding which
@@ -121,7 +134,7 @@ pub enum AgentPlanOutcome {
 /// untouched, and the queue's own retry policy is what revisits it,
 /// `effect.result-taxonomy`), reading back the drafted plan file, or
 /// building and sending the finalize proposal.
-// @relation(effect.execution, effect.results-writeback, effect.result-taxonomy, receive.multi-ref-atomicity, scope=function)
+// @relation(effect.execution, effect.results-writeback, effect.result-taxonomy, receive.multi-ref-atomicity, roots.config-isolation, scope=function)
 #[expect(
     clippy::too_many_arguments,
     reason = "one input per materialization/identity step, mirrors run_agent_exec's own shape"
@@ -138,6 +151,7 @@ pub fn run_agent_plan<O>(
     author: &gix::actor::Signature,
     sign: &dyn Fn(&[u8]) -> String,
     mode: Mode,
+    credentials: &CredentialStore,
 ) -> Result<AgentPlanOutcome>
 where
     O: Find + Write,
@@ -167,6 +181,27 @@ where
         author: None,
         sign,
     };
+
+    // BYOK: this session's own member must have a configured credential
+    // before a drafting attempt happens at all — no workdir, no prompt
+    // file. Missing is a deterministic deployment property, not a
+    // transient hiccup, so it is recorded exactly like a drafting command
+    // that ran and reported failure (`effect.result-taxonomy`).
+    let Some(credential) = credentials.get(&session.meta.member) else {
+        record_result(
+            refs,
+            objects,
+            events,
+            &results_ref,
+            oid,
+            ResultStatus::Fail,
+            author,
+            sign,
+            mode,
+        )?;
+        return Ok(AgentPlanOutcome::DraftFailed);
+    };
+    let env = [(credential.var.clone(), credential.secret.clone())];
 
     // Read-only context gathering against the declared base ref: no output
     // tree is ever captured back from this checkout (unlike `agent-exec`'s
@@ -209,6 +244,7 @@ where
         workdir: &workdir,
         toolchains,
         command,
+        env: &env,
     };
     // An `Err` here is an infrastructure failure the sandbox itself never
     // turned into a completed pass/fail: it propagates as-is, past every
@@ -223,6 +259,12 @@ where
         // ever moving it toward a terminal `Status::Failed` — that variant
         // names a session's own run failing, not a drafting attempt that
         // may simply be retried on a future commit.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best-effort cleanup; a failure here is not actionable and must not fail an \
+                      otherwise-recorded result"
+        )]
+        let _ = std::fs::remove_dir_all(&workdir);
         record_result(
             refs,
             objects,
@@ -242,6 +284,18 @@ where
         path: draft_path.clone(),
         source,
     })?;
+
+    // The workdir's job is done once the draft is read back: wipe it
+    // rather than leave it (and whatever the sandbox's env or the
+    // command's own output wrote into it) sitting on disk for the rest of
+    // this process's life. Best-effort, like `agent_worker`'s identical
+    // cleanup.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best-effort cleanup; a failure here is not actionable and must not fail an \
+                  otherwise-successful draft"
+    )]
+    let _ = std::fs::remove_dir_all(&workdir);
 
     let (draft_transition, draft_tip) = match ents_forge::agent::draft_plan_transition(
         refs,
@@ -523,6 +577,19 @@ mod tests {
             &*self.sign
         }
 
+        /// A credential store configured for `planning_session`'s own
+        /// member (`jdc`) — every test that expects drafting to actually
+        /// reach the sandbox uses this rather than [`CredentialStore::empty`].
+        fn credentials(&self) -> CredentialStore {
+            CredentialStore::from_pairs([(
+                MemberId::new("jdc"),
+                crate::credentials::Credential {
+                    var: "ANTHROPIC_API_KEY".to_owned(),
+                    secret: "sk-ant-test-token".to_owned(),
+                },
+            )])
+        }
+
         /// A brand-new, `planning` session with a prompt and no plan — the
         /// only precondition [`super::run_agent_plan`]'s
         /// [`PlanDispatch::Draft`] arm runs against.
@@ -593,6 +660,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &CredentialStore::empty(),
         )
         .expect("dispatch never touches the sandbox for a no-op");
         assert!(matches!(run, AgentPlanOutcome::NoOp));
@@ -639,6 +707,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect("drafts and finalizes");
         let AgentPlanOutcome::Drafted {
@@ -675,6 +744,77 @@ mod tests {
             facet_git_tree::deserialize(&result_tree, &fixture.objects).expect("decodes");
         assert_eq!(record.status, ResultStatus::Pass);
         assert_eq!(record.target(), oid);
+
+        // The scratch workdir this drafting run used is cleaned up
+        // afterward, mirroring `agent_worker::run_agent_exec`'s identical
+        // guarantee.
+        assert!(
+            !scratch.path().join(oid.to_string()).exists(),
+            "the drafting run's own scratch workdir must not survive the run"
+        );
+    }
+
+    /// A member with no configured credential (`roots.config-isolation`)
+    /// never reaches the sandbox at all: recorded as a completed `fail` on
+    /// this effect's own results ref, the session left untouched — the same
+    /// outcome shape [`AgentPlanOutcome::DraftFailed`] already covers for a
+    /// drafting command that ran and failed, since a missing credential is
+    /// exactly as deterministic and exactly as retry-proof.
+    #[rstest]
+    // @relation(roots.config-isolation, effect.result-taxonomy, scope=function, role=Verifies)
+    fn a_member_with_no_configured_credential_never_runs_the_sandbox() {
+        struct PanicsIfRun;
+        impl Executor for PanicsIfRun {
+            #[expect(
+                clippy::panic_in_result_fn,
+                reason = "the panic itself is this test's assertion: drafting must never run a \
+                          sandbox"
+            )]
+            fn run(
+                &self,
+                _inputs: &SandboxInputs<'_>,
+            ) -> ents_effect::Result<ents_effect::RunOutput> {
+                panic!("drafting must never launch a sandbox without a configured credential");
+            }
+        }
+
+        let fixture = Fixture::new();
+        let (oid, id) = fixture.planning_session();
+
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let author = fixture.author();
+        let run = run_agent_plan(
+            &fixture.refs,
+            &fixture.objects,
+            &NullEventSink,
+            &PanicsIfRun,
+            scratch.path(),
+            &[],
+            "true",
+            oid,
+            &author,
+            fixture.sign_fn(),
+            Mode::Advisory,
+            &CredentialStore::empty(),
+        )
+        .expect("a missing credential is a completed result, not an error");
+        assert!(matches!(run, AgentPlanOutcome::DraftFailed));
+
+        let session = ents_forge::agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+        assert_eq!(session.meta.status, ents_forge::agent::Status::Planning);
+        assert!(session.plan.is_none());
+
+        let results_ref =
+            ents_model::namespace::result_ref(AGENT_PLAN_NAME, &short_oid(oid)).expect("valid");
+        let result_tip = fixture
+            .refs
+            .get(results_ref.as_ref())
+            .expect("readable")
+            .expect("result landed");
+        let result_tree = commit_tree(&fixture.objects, result_tip).expect("tree");
+        let record: ResultRecord =
+            facet_git_tree::deserialize(&result_tree, &fixture.objects).expect("decodes");
+        assert_eq!(record.status, ResultStatus::Fail);
     }
 
     #[rstest]
@@ -701,6 +841,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect("runs");
         assert!(matches!(run, AgentPlanOutcome::DraftFailed));
@@ -742,6 +883,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect_err("an infra failure must propagate, not silently finalize");
         assert!(matches!(error, Error::Effect(_)));
@@ -800,6 +942,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect("a lost race is not an error");
         assert!(matches!(run, AgentPlanOutcome::DraftLost));

@@ -260,6 +260,7 @@ pub fn post_receive(
                 &author,
                 &|payload| signer.sign(payload),
                 Mode::Mandatory,
+                &root.credentials,
             )?;
         } else if effect_name == crate::plan_worker::AGENT_PLAN_NAME {
             // The `agent-plan` effect (`docs/agent-sessions-plan.adoc`'s
@@ -279,6 +280,7 @@ pub fn post_receive(
                 &author,
                 &|payload| signer.sign(payload),
                 Mode::Mandatory,
+                &root.credentials,
             )?;
         } else if effect_name == crate::review_worker::AGENT_REVIEW_NAME {
             // The `agent-review` effect (`docs/agent-sessions-plan.adoc`'s

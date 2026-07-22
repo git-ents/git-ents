@@ -55,6 +55,22 @@
 //! branch's tree reflects genuine sandbox output; this is called out again
 //! in the module-level doc of `ents-effect`'s `sprite` module as a known
 //! gap, not silently assumed away here.
+//!
+//! # The BYOK credential seam (`roots.config-isolation`, Phase 6)
+//!
+//! A session's own `meta.member` names whose credential is injected: BYOK
+//! means each member's runs are billed and rate-limited against their own
+//! Anthropic account, never a shared one. [`credentials`] is looked up
+//! *after* the claim succeeds (so the claim itself — "this worker owns this
+//! session now" — is unconditional) but *before* anything else about the
+//! run happens: no workdir is checked out, no plan file written, nothing
+//! executed. A member with no configured credential is not retried as an
+//! infrastructure hiccup — which member has which credential is a fixed
+//! property of this deployment, not a transient failure, so retrying the
+//! exact same run changes nothing (`effect.result-taxonomy`'s own
+//! pass/fail split: this is a genuine, deterministic `fail`, landed via the
+//! ordinary finalize with no result branch, since no sandbox ever ran to
+//! produce one).
 
 use std::path::{Path, PathBuf};
 
@@ -71,6 +87,7 @@ use gix_object::{CommitRef, Find, Kind, Write, WriteTo as _};
 use gix_ref_store::RefStore;
 
 use crate::commands::commit_tree;
+use crate::credentials::CredentialStore;
 use crate::error::{Error, Result};
 
 /// `agent-exec`'s own effect name — re-exported so a caller deciding
@@ -140,7 +157,7 @@ pub enum AgentRunOutcome {
 /// session stays `Running`, and the queue's own retry policy is what
 /// revisits it (`effect.result-taxonomy`) — or building and sending the
 /// finalize proposal.
-// @relation(effect.execution, effect.results-writeback, effect.result-taxonomy, receive.multi-ref-atomicity, scope=function)
+// @relation(effect.execution, effect.results-writeback, effect.result-taxonomy, receive.multi-ref-atomicity, roots.config-isolation, scope=function)
 #[expect(
     clippy::too_many_arguments,
     reason = "one input per materialization/identity step, mirrors ents_effect::run::run_one's \
@@ -160,6 +177,7 @@ pub fn run_agent_exec<O>(
     author: &gix::actor::Signature,
     sign: &dyn Fn(&[u8]) -> String,
     mode: Mode,
+    credentials: &CredentialStore,
 ) -> Result<AgentRunOutcome>
 where
     O: Find + Write,
@@ -204,6 +222,31 @@ where
         return Ok(AgentRunOutcome::ClaimLost);
     }
 
+    // BYOK: this session's own member must have a configured credential
+    // before anything else about the run happens — no workdir, no plan
+    // file, no sandbox launch. Missing is a deterministic property of this
+    // deployment, not a transient hiccup a retry would fix, so it lands as
+    // an ordinary completed `fail`, exactly like the sandbox reporting a
+    // nonzero exit below, just without ever having produced a result
+    // branch (`roots.config-isolation`, `effect.result-taxonomy`).
+    let Some(credential) = credentials.get(&session.meta.member) else {
+        return finish_without_running(
+            refs,
+            objects,
+            events,
+            &results_ref,
+            oid,
+            &id,
+            format!(
+                "no credential configured for member {}",
+                session.meta.member
+            ),
+            &identity,
+            mode,
+        );
+    };
+    let env = [(credential.var.clone(), credential.secret.clone())];
+
     // 3. Run the sandbox against the declared base ref's tip.
     let base_ref: gix::refs::FullName =
         session
@@ -240,6 +283,7 @@ where
         workdir: &workdir,
         toolchains,
         command,
+        env: &env,
     };
     // An `Err` here is an infrastructure failure the sandbox itself never
     // turned into a completed pass/fail (`effect.result-taxonomy`): it
@@ -259,6 +303,18 @@ where
     )]
     let _ = std::fs::remove_file(&plan_path);
     let output_tree = ents_effect::materialize::write_tree(objects, &workdir)?;
+
+    // The workdir's job is done once its tree is captured: wipe it rather
+    // than leave it sitting on disk under `scratch` for the rest of this
+    // process's life (a BYOK credential may have reached it via the
+    // sandbox's own env, `SandboxInputs::env`, or a file the command
+    // wrote). Best-effort, like the plan-file removal above.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best-effort cleanup; a failure here is not actionable and must not fail an \
+                  otherwise-successful run"
+    )]
+    let _ = std::fs::remove_dir_all(&workdir);
 
     let branch_name = result_branch_name(&session.meta.member, &id);
     let branch_ref: gix::refs::FullName =
@@ -321,6 +377,60 @@ where
     };
     let outcome = ents_receive::receive(refs, objects, events, &proposal, mode)?;
     Ok(AgentRunOutcome::Finished { id, outcome })
+}
+
+/// Finalize a claimed session as `Failed` *without ever running the
+/// sandbox at all* — the BYOK missing-credential path
+/// (`roots.config-isolation`): no workdir is checked out, so there is no
+/// output tree and no result branch (`FinishAgentSession::result_branch`
+/// stays `None` — nothing ran to produce one). Lands the session's
+/// terminal state and this effect's own `fail` result atomically, exactly
+/// like [`run_agent_exec`]'s own finalize minus the branch transition.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one input per identity/write step, mirrors run_agent_exec's own finalize shape"
+)]
+fn finish_without_running<O: Find + Write>(
+    refs: &dyn RefStore,
+    objects: &O,
+    events: &dyn EventSink,
+    results_ref: &gix::refs::FullName,
+    oid: ObjectId,
+    id: &str,
+    detail: String,
+    identity: &Identity<'_>,
+    mode: Mode,
+) -> Result<AgentRunOutcome> {
+    let finish = FinishAgentSession {
+        outcome: FinishOutcome::Failed(detail.clone()),
+        result_branch: None,
+        thread: vec![detail.into_bytes()],
+    };
+    let (finish_transition, finish_tip) =
+        ents_forge::agent::finish_transition(refs, objects, id, finish, identity)?;
+
+    let record = ResultRecord::new(AGENT_EXEC_NAME, oid, ResultStatus::Fail);
+    let (result_transition, result_tip) = ents_receive::entity_transition(
+        refs,
+        objects,
+        results_ref,
+        &record,
+        identity,
+        "Record agent-exec result",
+    )?;
+
+    // Finalize = one atomic multi-ref proposal, same as the ordinary case,
+    // just two transitions instead of three (`receive.multi-ref-atomicity`).
+    let proposal = Proposal {
+        transitions: vec![finish_transition, result_transition],
+        objects: vec![finish_tip, result_tip],
+        auth: None,
+    };
+    let outcome = ents_receive::receive(refs, objects, events, &proposal, mode)?;
+    Ok(AgentRunOutcome::Finished {
+        id: id.to_owned(),
+        outcome,
+    })
 }
 
 /// Record a cheap `pass` for `oid` on the canonical `agent-exec` results
@@ -586,6 +696,19 @@ mod tests {
             &*self.sign
         }
 
+        /// A credential store configured for `queued_session`'s own member
+        /// (`jdc`) — every test that expects the run to actually reach the
+        /// sandbox uses this rather than [`CredentialStore::empty`].
+        fn credentials(&self) -> CredentialStore {
+            CredentialStore::from_pairs([(
+                MemberId::new("jdc"),
+                crate::credentials::Credential {
+                    var: "ANTHROPIC_API_KEY".to_owned(),
+                    secret: "sk-ant-test-token".to_owned(),
+                },
+            )])
+        }
+
         /// A brand-new, queued session (ready, plan confirmed) — the only
         /// precondition [`super::run_agent_exec`]'s `Dispatch::Claim` arm
         /// runs against.
@@ -686,6 +809,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &CredentialStore::empty(),
         )
         .expect("dispatch never touches the sandbox for a no-op");
         assert!(matches!(run, AgentRunOutcome::NoOp));
@@ -739,6 +863,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &CredentialStore::empty(),
         )
         .expect("a lost race is not an error");
         assert!(matches!(run, AgentRunOutcome::ClaimLost));
@@ -777,6 +902,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect("runs and finalizes");
         let AgentRunOutcome::Finished {
@@ -840,6 +966,15 @@ mod tests {
             !checkout_dir.path().join(AGENT_PLAN_FILE).exists(),
             "the sideband plan file must never leak into the pushed branch"
         );
+
+        // (d) the scratch workdir this run used is cleaned up afterward —
+        // nothing about a completed run should sit on disk for the rest of
+        // this process's life (see `run_agent_exec`'s own `remove_dir_all`
+        // after `write_tree`).
+        assert!(
+            !scratch.path().join(oid.to_string()).exists(),
+            "the run's own scratch workdir must not survive the run"
+        );
     }
 
     #[rstest]
@@ -868,6 +1003,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect("runs and finalizes");
 
@@ -876,6 +1012,76 @@ mod tests {
             session.meta.status,
             ents_forge::agent::Status::Failed(_)
         ));
+
+        let results_ref =
+            ents_model::namespace::result_ref(AGENT_EXEC_NAME, &short_oid(oid)).expect("valid");
+        let result_tip = fixture
+            .refs
+            .get(results_ref.as_ref())
+            .expect("readable")
+            .expect("result landed");
+        let result_tree = commit_tree(&fixture.objects, result_tip).expect("tree");
+        let record: ResultRecord =
+            facet_git_tree::deserialize(&result_tree, &fixture.objects).expect("decodes");
+        assert_eq!(record.status, ResultStatus::Fail);
+    }
+
+    /// A member with no configured credential (`roots.config-isolation`)
+    /// gets a completed, deterministic `fail` — never a retryable
+    /// infrastructure error, and the sandbox is never even invoked
+    /// (`StubExecutor::run` would panic-visibly via its mutation if
+    /// called; instead this test hands a `panic`-on-run executor to prove
+    /// it never runs).
+    #[rstest]
+    // @relation(roots.config-isolation, effect.result-taxonomy, scope=function, role=Verifies)
+    fn a_member_with_no_configured_credential_fails_without_ever_running_the_sandbox() {
+        struct PanicsIfRun;
+        impl Executor for PanicsIfRun {
+            #[expect(
+                clippy::panic_in_result_fn,
+                reason = "the panic itself is this test's assertion: the sandbox must never run"
+            )]
+            fn run(
+                &self,
+                _inputs: &SandboxInputs<'_>,
+            ) -> ents_effect::Result<ents_effect::RunOutput> {
+                panic!("the sandbox must never launch without a configured credential");
+            }
+        }
+
+        let fixture = Fixture::new();
+        let (oid, id) = fixture.queued_session();
+
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let author = fixture.author();
+        let run = run_agent_exec(
+            &fixture.refs,
+            &fixture.objects,
+            &NullEventSink,
+            &PanicsIfRun,
+            scratch.path(),
+            &[],
+            "true",
+            oid,
+            MemberId::new("worker"),
+            "sprite-1".to_owned(),
+            &author,
+            fixture.sign_fn(),
+            Mode::Advisory,
+            &CredentialStore::empty(),
+        )
+        .expect("a missing credential is a completed finalize, not an error");
+        assert!(matches!(run, AgentRunOutcome::Finished { .. }));
+
+        let session = ents_forge::agent::show(&fixture.refs, &fixture.objects, &id).expect("shows");
+        assert!(
+            matches!(session.meta.status, ents_forge::agent::Status::Failed(_)),
+            "a missing credential must land the session as Failed, not leave it Running"
+        );
+        assert!(
+            session.meta.result_branch.is_none(),
+            "no sandbox ran, so there is nothing for a result branch to carry"
+        );
 
         let results_ref =
             ents_model::namespace::result_ref(AGENT_EXEC_NAME, &short_oid(oid)).expect("valid");
@@ -912,6 +1118,7 @@ mod tests {
             &author,
             fixture.sign_fn(),
             Mode::Advisory,
+            &fixture.credentials(),
         )
         .expect_err("an infra failure must propagate, not silently finalize");
         assert!(matches!(error, Error::Effect(_)));

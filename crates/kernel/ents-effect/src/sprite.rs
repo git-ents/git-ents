@@ -25,7 +25,7 @@ use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
 use crate::executor::{
-    Executor, RunOutput, SandboxInputs, activate, parse_exit_marker, wrap_exit_marker,
+    Executor, RunOutput, SandboxInputs, activate, inject_env, parse_exit_marker, wrap_exit_marker,
 };
 
 /// Where the workdir is unpacked inside the Sprite.
@@ -273,13 +273,19 @@ impl SpriteExecutor {
 }
 
 /// The in-Sprite script for one run: enter the synced workdir, run the
-/// activated command wrapped by [`wrap_exit_marker`]. A `cd` failure (the
-/// workdir sync silently lost) exits before the marker can print, so it
-/// surfaces as infrastructure, not as a recorded `fail` — the same
-/// discrimination the marker gives a dying transport
-/// (`effect.result-taxonomy`).
-fn run_script(activated: &str) -> String {
-    format!("cd {WORKDIR} || exit 70\n{}", wrap_exit_marker(activated))
+/// activated command — with `env`'s pairs exported first
+/// ([`inject_env`], `roots.config-isolation`: a per-member BYOK credential
+/// the composition root resolved, injected only here, at sandbox launch,
+/// never written to any tree this crate builds) — wrapped by
+/// [`wrap_exit_marker`]. A `cd` failure (the workdir sync silently lost)
+/// exits before the marker can print, so it surfaces as infrastructure, not
+/// as a recorded `fail` — the same discrimination the marker gives a dying
+/// transport (`effect.result-taxonomy`).
+fn run_script(activated: &str, env: &[(String, String)]) -> String {
+    format!(
+        "cd {WORKDIR} || exit 70\n{}",
+        wrap_exit_marker(&inject_env(activated, env))
+    )
 }
 
 impl Executor for SpriteExecutor {
@@ -296,7 +302,7 @@ impl Executor for SpriteExecutor {
             sandbox_dirs.push((toolchain_name.clone(), sandbox_dir));
         }
 
-        let script = run_script(&activate(inputs.command, &sandbox_dirs));
+        let script = run_script(&activate(inputs.command, &sandbox_dirs), inputs.env);
         let output = Command::new("sprite")
             .args(["exec", "-s", &self.name, "--", "sh", "-c", &script])
             .output()
@@ -340,12 +346,20 @@ mod tests {
     #[rstest]
     // @relation(effect.result-taxonomy, scope=function, role=Verifies)
     fn run_script_gates_the_exit_marker_on_a_successful_cd() {
-        let script = run_script("cargo test");
+        let script = run_script("cargo test", &[]);
         // A failed cd exits before the marker can print, so a lost workdir
         // sync surfaces as infrastructure, never as a recorded fail.
         assert!(script.starts_with("cd /work || exit 70\n"));
         assert!(script.contains(crate::executor::EXIT_MARKER));
         assert!(script.contains("cargo test"));
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn run_script_exports_env_before_the_activated_command() {
+        let env = vec![("ANTHROPIC_API_KEY".to_owned(), "sk-ant-abc".to_owned())];
+        let script = run_script("cargo test", &env);
+        assert!(script.contains("export ANTHROPIC_API_KEY='sk-ant-abc'; cargo test"));
     }
 
     #[rstest]

@@ -29,6 +29,14 @@ pub struct SandboxInputs<'a> {
     /// The run command, exactly as stored on the effect definition
     /// (`model.effect-definition`).
     pub command: &'a str,
+    /// Extra environment variables to inject into the launched command,
+    /// deployment state a composition root resolves (a per-member BYOK
+    /// credential, `roots.config-isolation`) and hands down for exactly
+    /// this one run — never read from repository data, never written back
+    /// to it. Every backend injects these the same way it launches the
+    /// command at all; empty for every ordinary effect run, which has
+    /// nothing to inject.
+    pub env: &'a [(String, String)],
 }
 
 /// What a completed run reported. Only `Pass` or `Fail`
@@ -83,7 +91,7 @@ pub struct RunOutput {
 /// }
 ///
 /// let dir = tempfile::tempdir().expect("tempdir");
-/// let inputs = SandboxInputs { workdir: dir.path(), toolchains: &[], command: "true" };
+/// let inputs = SandboxInputs { workdir: dir.path(), toolchains: &[], command: "true", env: &[] };
 /// let output = AlwaysPass.run(&inputs).expect("infallible");
 /// assert_eq!(output.status, RunStatus::Pass);
 /// ```
@@ -123,6 +131,49 @@ pub fn activate(command: &str, dirs: &[(String, String)]) -> String {
         .collect::<Vec<_>>()
         .join(":");
     format!("export PATH={path}:$PATH; {command}")
+}
+
+/// Prefix `command` with an `export` for each of `env`'s pairs, single-quoted
+/// so an arbitrary secret value (a BYOK credential,
+/// [`SandboxInputs::env`]) round-trips through a `sh -c` script unmodified
+/// regardless of its own content — used by every backend that ships the
+/// command as one shell-script string to a remote or containerized shell
+/// ([`crate::sprite::SpriteExecutor`], [`crate::docker::DockerExecutor`]).
+/// The unsandboxed backend needs no such quoting: it sets the child
+/// process's environment directly via `Command::envs`, never folding a
+/// secret into shell source at all.
+///
+/// # Examples
+///
+/// ```
+/// use ents_effect::executor::inject_env;
+///
+/// let env = vec![("ANTHROPIC_API_KEY".to_owned(), "sk-ant-abc".to_owned())];
+/// assert_eq!(
+///     inject_env("run-agent", &env),
+///     "export ANTHROPIC_API_KEY='sk-ant-abc'; run-agent"
+/// );
+/// assert_eq!(inject_env("run-agent", &[]), "run-agent");
+/// ```
+#[must_use]
+pub fn inject_env(command: &str, env: &[(String, String)]) -> String {
+    if env.is_empty() {
+        return command.to_owned();
+    }
+    let exports = env
+        .iter()
+        .map(|(var, secret)| format!("export {var}={}", shell_single_quote(secret)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("{exports}; {command}")
+}
+
+/// Single-quote `value` for a POSIX shell, escaping any embedded `'` by
+/// closing the quote, emitting an escaped literal quote, and reopening it —
+/// the standard `'\''` trick, so a credential containing an apostrophe (or
+/// any other shell metacharacter) still round-trips as one literal string.
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
 }
 
 /// The sentinel [`wrap_exit_marker`] appends after the wrapped command, so
@@ -225,6 +276,38 @@ mod tests {
     // @relation(effect.execution, scope=function, role=Verifies)
     fn activate_is_identity_with_no_toolchains() {
         assert_eq!(activate("run", &[]), "run");
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn inject_env_is_identity_with_no_env() {
+        assert_eq!(inject_env("run", &[]), "run");
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn inject_env_exports_every_pair_before_the_command() {
+        let env = vec![
+            ("A".to_owned(), "one".to_owned()),
+            ("B".to_owned(), "two".to_owned()),
+        ];
+        assert_eq!(
+            inject_env("run", &env),
+            "export A='one'; export B='two'; run"
+        );
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn inject_env_round_trips_a_secret_with_an_embedded_quote_through_a_real_shell() {
+        let env = vec![("SECRET".to_owned(), "it's a secret".to_owned())];
+        let script = inject_env("printf '%s' \"$SECRET\"", &env);
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("sh runs");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "it's a secret");
     }
 
     #[rstest]

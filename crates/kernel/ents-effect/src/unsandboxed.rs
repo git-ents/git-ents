@@ -31,6 +31,13 @@ impl Executor for UnsandboxedExecutor {
             .arg("-c")
             .arg(activate(inputs.command, &dirs))
             .current_dir(inputs.workdir)
+            // Set directly on the child's environment rather than folded
+            // into the shell script `activate` built above: a secret (a
+            // BYOK credential, `SandboxInputs::env`) never needs shell
+            // quoting at all this way, unlike the sandboxed backends that
+            // must ship the whole command as one script string
+            // (`crate::executor::inject_env`).
+            .envs(inputs.env.iter().cloned())
             .output()
             .map_err(|e| Error::Spawn {
                 program: "sh".to_owned(),
@@ -65,6 +72,7 @@ mod tests {
             workdir: dir.path(),
             toolchains: &[],
             command: "true",
+            env: &[],
         };
         let output = UnsandboxedExecutor.run(&inputs).expect("runs");
         assert_eq!(output.status, RunStatus::Pass);
@@ -78,6 +86,7 @@ mod tests {
             workdir: dir.path(),
             toolchains: &[],
             command: "false",
+            env: &[],
         };
         let output = UnsandboxedExecutor
             .run(&inputs)
@@ -96,9 +105,25 @@ mod tests {
             workdir: dir.path(),
             toolchains: &toolchains,
             command: "echo $PATH",
+            env: &[],
         };
         let output = UnsandboxedExecutor.run(&inputs).expect("runs");
         assert!(output.log.contains("bin"));
         let _: Vec<(String, PathBuf)> = toolchains;
+    }
+
+    #[rstest]
+    // @relation(roots.config-isolation, scope=function, role=Verifies)
+    fn unsandboxed_injects_env_directly_on_the_child_process() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = vec![("ENTS_TEST_CREDENTIAL".to_owned(), "sk-ant-test".to_owned())];
+        let inputs = SandboxInputs {
+            workdir: dir.path(),
+            toolchains: &[],
+            command: "printf '%s' \"$ENTS_TEST_CREDENTIAL\"",
+            env: &env,
+        };
+        let output = UnsandboxedExecutor.run(&inputs).expect("runs");
+        assert_eq!(output.log, "sk-ant-test");
     }
 }

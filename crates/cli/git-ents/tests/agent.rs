@@ -322,6 +322,17 @@ fn mobile_end_to_end_prompt_to_headless_draft_to_confirm_to_claim() {
     assert_eq!(planning.meta.status, Status::Planning);
     assert!(planning.plan.is_none());
 
+    // BYOK (`roots.config-isolation`): both the headless draft and the
+    // exec run below need this session's own member's credential
+    // configured, or they fail closed rather than run.
+    let credentials = git_ents::credentials::CredentialStore::from_pairs([(
+        planning.meta.member.clone(),
+        git_ents::credentials::Credential {
+            var: "ANTHROPIC_API_KEY".to_owned(),
+            secret: "sk-ant-test-token".to_owned(),
+        },
+    )]);
+
     // 2. The `agent-plan` effect drafts headlessly.
     let session_ref = ents_model::namespace::agent_session_ref(&id).expect("valid");
     let tip = root
@@ -351,6 +362,7 @@ fn mobile_end_to_end_prompt_to_headless_draft_to_confirm_to_claim() {
         &worker_author,
         &|payload| signer.sign(payload),
         root.mode(),
+        &credentials,
     )
     .expect("drafts");
     assert!(matches!(
@@ -397,6 +409,7 @@ fn mobile_end_to_end_prompt_to_headless_draft_to_confirm_to_claim() {
         &worker_author,
         &|payload| signer.sign(payload),
         Mode::Advisory,
+        &credentials,
     )
     .expect("claims and runs");
     assert!(matches!(
