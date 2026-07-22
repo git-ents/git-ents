@@ -104,6 +104,12 @@ where
             get(pages::issues::show::<O>).post(pages::issues::edit::<O>),
         )
         .route("/issues/{id}/comment", post(pages::issues::comment::<O>))
+        .route(
+            "/agents",
+            get(pages::agents::list::<O>).post(pages::agents::create::<O>),
+        )
+        .route("/agents/{id}", get(pages::agents::show::<O>))
+        .route("/agents/{id}/confirm", post(pages::agents::confirm::<O>))
         .route("/inbox", get(pages::inbox::list::<O>))
         .route("/style.css", get(style))
         .route("/ents.js", get(script))

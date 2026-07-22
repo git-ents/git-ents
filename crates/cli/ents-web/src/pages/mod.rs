@@ -15,14 +15,16 @@
 //! [`effects`], [`toolchains`], [`redactions`], and [`inbox`] additionally
 //! share one `meta` rail item and `META_SECTIONS` rail rather than each
 //! carrying its own top-level entry (see `Tab`'s own doc); [`meta`] is that
-//! group's `GET /meta` landing page. [`commits`] and [`issues`] are rail
-//! items of their own -- `Tab::Commits` (Review) and `Tab::Issues`
-//! (Issues) in [`layout`]'s icon rail, alongside the dashboard, code,
-//! threads, and meta items. [`search`] renders with no rail item active at
-//! all; it is reached from the `.wb-bar`'s own `.palette` search form
-//! rather than any rail item.
+//! group's `GET /meta` landing page. [`commits`], [`issues`], and
+//! [`agents`] are rail items of their own -- `Tab::Commits` (Review),
+//! `Tab::Issues` (Issues), and `Tab::Agents` (Agents,
+//! `docs/agent-sessions-plan.adoc`'s Phase 3) in [`layout`]'s icon rail,
+//! alongside the dashboard, code, threads, and meta items. [`search`]
+//! renders with no rail item active at all; it is reached from the
+//! `.wb-bar`'s own `.palette` search form rather than any rail item.
 
 pub mod account;
+pub mod agents;
 pub mod comments;
 pub mod commits;
 pub mod dashboard;
@@ -112,7 +114,8 @@ pub(crate) fn commit_authorship(objects: &impl Find, oid: ObjectId) -> Result<(S
 /// the horizontal tab strip became the vertical icon rail, but the
 /// "handler names its own section" contract is unchanged). The rail reads,
 /// top to bottom: Dashboard (`Overview`), Code (`Files`), Review
-/// (`Commits`), Issues, Threads (`Comments`); then, past the
+/// (`Commits`), Issues, Agents (`docs/agent-sessions-plan.adoc`'s Phase 3),
+/// Threads (`Comments`); then, past the
 /// spacer, Repo & governance (`Meta`) and Account. `Meta` covers five page
 /// families ([`super::members`], [`super::effects`], [`super::toolchains`],
 /// [`super::redactions`], [`super::inbox`]) behind one rail item and the
@@ -126,6 +129,7 @@ pub(crate) enum Tab {
     Files,
     Commits,
     Issues,
+    Agents,
     Comments,
     Meta,
     Account,
@@ -260,8 +264,8 @@ fn rail_link(active: Tab, tab: Tab, href: &str, title: &str, icon: &str) -> Mark
 
 /// The workbench shell itself (the "Proposal C" chrome,
 /// `docs/web-workbench-plan.adoc`): a `.wb` grid pairing the sticky icon
-/// `.rail` (Dashboard / Code / Review / Issues / Threads, then governance
-/// and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
+/// `.rail` (Dashboard / Code / Review / Issues / Agents / Threads, then
+/// governance and account past the spacer -- see [`Tab`]'s own doc) with a `.wb-main`
 /// column whose sticky `.wb-bar` top bar names the served repository and
 /// its branch pill, carries the `.palette` search form (a plain GET to
 /// `/search` for now -- the `⌘K` kbd is a hint at the palette phase, not
@@ -296,6 +300,7 @@ pub(crate) fn layout_shell(
                         (rail_link(active, Tab::Files, "/files", "Code", "i-files"))
                         (rail_link(active, Tab::Commits, "/commits", "Review", "i-commit"))
                         (rail_link(active, Tab::Issues, "/issues", "Issues", "i-issue"))
+                        (rail_link(active, Tab::Agents, "/agents", "Agents", "i-agent"))
                         (rail_link(active, Tab::Comments, "/comments", "Threads", "i-comment"))
                         span.spacer {}
                         (rail_link(active, Tab::Meta, "/meta", "Repo & governance", "i-meta"))
