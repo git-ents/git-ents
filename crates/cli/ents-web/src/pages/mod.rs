@@ -19,12 +19,17 @@
 //! and [`agents`] are rail items of their own -- `Tab::Commits`,
 //! `Tab::Reviews`, `Tab::Issues`, and `Tab::Agents` (Agents,
 //! `docs/agent-sessions-plan.adoc`'s Phase 3) in [`layout`]'s icon rail,
-//! alongside the dashboard, code, threads, and meta items. `reviews::list`
-//! (`GET /reviews`) is a read-only aggregate across every commit's own
-//! reviews (`commits::reviews_section` renders the same
-//! [`ents_forge::review`] entities scoped to one commit; this module has no
-//! writes of its own -- every mutation still posts through `commits`'s own
-//! routes). [`search`]
+//! alongside the dashboard, code, threads, and meta items. [`reviews`]'s
+//! `list` (`GET /reviews`) and `show` (`GET /reviews/{target}/{member}`)
+//! are a read-only aggregate and a per-review detail page over the same
+//! [`ents_forge::review`] entities [`commits::reviews_section`] renders
+//! scoped to one commit; starting a review still only ever posts through
+//! `commits`'s own route (`POST /commit/{oid}/review`), but withdrawing one
+//! (`POST /reviews/{target}/{member}/withdraw`) and commenting on one
+//! (`POST /reviews/{target}/{member}/comment`, `commits::review_comment`)
+//! are reachable from either page -- a review's own page and its home
+//! commit's page render the identical thread and composer, never two.
+//! [`search`]
 //! renders with no rail item active at all; it is reached from the
 //! `.wb-bar`'s own `.palette` search form rather than any rail item.
 
@@ -650,4 +655,40 @@ pub(crate) fn scope_class(scope: &str) -> String {
         acc.wrapping_mul(31).wrapping_add(u32::from(byte))
     });
     format!("scope-c{}", hash.checked_rem(6).unwrap_or(0))
+}
+
+/// The acting session's member id -- the composite review key's
+/// `<member>` segment -- resolved the same way
+/// [`account::resolve_member_by_key`] does, falling back to a short hash of
+/// the public key when no enrolled member matches: mirrors
+/// `git_ents::commands::serve::build_state`'s identical fallback
+/// (`roots.web-signing`: an unenrolled local identity may still review or
+/// withdraw a review, exactly as it may still browse and comment). Shared
+/// by [`super::commits`] (starting a review) and [`super::reviews`]
+/// (withdrawing one) -- both need the same "which member is this session,
+/// as far as the review namespace is concerned" answer, so it lives here
+/// rather than in either page module.
+pub(crate) fn reviewer_member_id<O: Find>(state: &AppState<O>) -> ents_model::MemberId {
+    let pubkey = state.identity.public_openssh();
+    account::resolve_member_by_key(state, &pubkey)
+        .map(|(id, _member)| id)
+        .unwrap_or_else(|_source| ents_model::MemberId::new(short_key_fingerprint(&pubkey)))
+}
+
+/// The first twelve characters of `pubkey`'s key-material token --
+/// mirrors `git_ents::commands::short_fingerprint`'s identical fallback
+/// label. [`reviewer_member_id`]'s own helper.
+fn short_key_fingerprint(pubkey: &str) -> String {
+    let hex: String = pubkey
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or(pubkey)
+        .chars()
+        .take(12)
+        .collect();
+    if hex.is_empty() {
+        "member".to_owned()
+    } else {
+        hex
+    }
 }

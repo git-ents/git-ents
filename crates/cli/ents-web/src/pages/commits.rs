@@ -534,8 +534,11 @@ fn reviews_section<O: Find + Write>(
 /// The comment-on-this-review form (`POST /reviews/{target}/{member}/comment`):
 /// a contextual comment naming `reviews/<target>/<member>`
 /// (`model.comment-context`), so a review's discussion can start from the
-/// web and not only the CLI or lens.
-fn review_comment_form(
+/// web and not only the CLI or lens. Shared with
+/// [`super::reviews::show`]'s own review detail page -- the same composer,
+/// not a second one, whether the review's thread renders on its home
+/// commit's page or on its own.
+pub(crate) fn review_comment_form(
     session: &Session,
     target: &str,
     member: &ents_model::MemberId,
@@ -771,7 +774,7 @@ where
     O: Find + Write + Send + 'static,
 {
     super::require_csrf(&session, &form.csrf)?;
-    let member = reviewer_member_id(&state);
+    let member = super::reviewer_member_id(&state);
     let identity = state.identity.as_ref();
     let new = ents_forge::review::NewReview {
         target: oid.clone(),
@@ -792,37 +795,6 @@ where
     )?;
     crate::error::outcome_to_result(outcome)?;
     Ok(Redirect::to(&format!("/commit/{oid}")))
-}
-
-/// The acting session's member id -- the composite review key's
-/// `<member>` segment -- resolved the same way
-/// [`super::account::resolve_member_by_key`] does, falling back to a short
-/// hash of the public key when no enrolled member matches: mirrors
-/// `git_ents::commands::serve::build_state`'s identical fallback
-/// (`roots.web-signing`: an unenrolled local identity may still review,
-/// exactly as it may still browse and comment).
-fn reviewer_member_id<O: Find>(state: &AppState<O>) -> ents_model::MemberId {
-    let pubkey = state.identity.public_openssh();
-    super::account::resolve_member_by_key(state, &pubkey)
-        .map(|(id, _member)| id)
-        .unwrap_or_else(|_source| ents_model::MemberId::new(short_key_fingerprint(&pubkey)))
-}
-
-/// The first twelve characters of `pubkey`'s key-material token -- mirrors
-/// `git_ents::commands::short_fingerprint`'s identical fallback label.
-fn short_key_fingerprint(pubkey: &str) -> String {
-    let hex: String = pubkey
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or(pubkey)
-        .chars()
-        .take(12)
-        .collect();
-    if hex.is_empty() {
-        "member".to_owned()
-    } else {
-        hex
-    }
 }
 
 /// Validate `text` as a full, well-formed object id -- hex characters only,
