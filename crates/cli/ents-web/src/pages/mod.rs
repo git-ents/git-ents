@@ -662,14 +662,11 @@ pub(crate) fn status_chip_labeled(label: &str, class: &str) -> Markup {
     html! { span class={ "status status-" (class) } { (label) } }
 }
 
-/// The `.status-<word>` chip for a closed pass/fail/error [`ents_model::Status`].
+/// The `.status-<word>` chip for a closed pass/fail/error [`ents_model::Status`],
+/// its word taken straight from the type's own `Display`.
 pub(crate) fn status_chip(status: ents_model::Status) -> Markup {
-    let word = match status {
-        ents_model::Status::Pass => "pass",
-        ents_model::Status::Fail => "fail",
-        ents_model::Status::Error => "error",
-    };
-    status_chip_labeled(word, word)
+    let word = status.to_string();
+    status_chip_labeled(&word, &word)
 }
 
 /// A `.verdict-<word>` chip for a review's own [`ents_forge::review::Verdict`].

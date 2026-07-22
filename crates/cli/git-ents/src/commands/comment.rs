@@ -228,12 +228,13 @@ fn porcelain_projection(
     anchor: &ents_anchor::Anchor,
 ) -> (String, String) {
     use ents_anchor::Projection;
-    match projection {
-        Projection::Current => ("current".to_owned(), location(&anchor.path, anchor.lines)),
-        Projection::Relocated { path, lines } => ("relocated".to_owned(), location(path, *lines)),
-        Projection::Outdated { path } => ("outdated".to_owned(), location(path, None)),
-        Projection::Deleted => ("deleted".to_owned(), "-".to_owned()),
-    }
+    let location = match projection {
+        Projection::Current => location(&anchor.path, anchor.lines),
+        Projection::Relocated { path, lines } => location(path, *lines),
+        Projection::Outdated { path } => location(path, None),
+        Projection::Deleted => "-".to_owned(),
+    };
+    (projection.label().to_owned(), location)
 }
 
 fn location(path: &str, lines: Option<ents_anchor::LineRange>) -> String {

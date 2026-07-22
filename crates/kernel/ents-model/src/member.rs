@@ -83,6 +83,15 @@ pub enum MemberState {
     Revoked,
 }
 
+impl std::fmt::Display for MemberState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Active => "active",
+            Self::Revoked => "revoked",
+        })
+    }
+}
+
 /// How a member came to be enrolled.
 ///
 /// `model.member-provenance` ties authorization for canonical refs to this
@@ -235,6 +244,14 @@ mod tests {
         assert_eq!(member.state, MemberState::Revoked);
         member.unrevoke();
         assert_eq!(member.state, MemberState::Active);
+    }
+
+    #[rstest]
+    #[case::active(MemberState::Active, "active")]
+    #[case::revoked(MemberState::Revoked, "revoked")]
+    // @relation(model.member-revocation, scope=function, role=Verifies)
+    fn member_state_displays_lowercase(#[case] state: MemberState, #[case] expected: &str) {
+        assert_eq!(state.to_string(), expected);
     }
 
     #[rstest]

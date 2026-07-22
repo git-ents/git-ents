@@ -253,7 +253,8 @@ fn line_label(lines: Option<LineRange>) -> String {
 }
 
 /// One human sentence for a projection result (`anchor.projection`) --
-/// never the enum's `Debug` form.
+/// never the enum's `Debug` form; the outdated case names
+/// [`Projection::label`]'s own word rather than repeating it as a literal.
 fn projection_label(projection: &Projection) -> String {
     match projection {
         Projection::Current => "anchored lines unchanged".to_owned(),
@@ -261,7 +262,10 @@ fn projection_label(projection: &Projection) -> String {
             format!("moved to {path}{}", line_label(*lines))
         }
         Projection::Outdated { path } => {
-            format!("outdated \u{2014} the anchored lines in {path} have been edited")
+            format!(
+                "{} \u{2014} the anchored lines in {path} have been edited",
+                projection.label()
+            )
         }
         Projection::Deleted => "the anchored file no longer exists".to_owned(),
     }

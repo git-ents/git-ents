@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use ents_model::{Member, MemberState, Provenance};
+use ents_model::{Member, Provenance};
 use gix_object::{Find, Write};
 use maud::{Markup, html};
 
@@ -118,7 +118,7 @@ pub(crate) fn member_card(username: &str, member: &Member, link: bool) -> Markup
                 @if let Some(key_type) = key_type {
                     span.key-badge { (key_type) }
                 }
-                span.badge { (state_label(member.state)) }
+                span.badge { (member.state) }
                 span.badge { (provenance_label(member.provenance)) }
             }
             div.member-key {
@@ -159,14 +159,6 @@ fn truncate_middle(material: &str) -> String {
     let head: String = material.chars().take(HEAD).collect();
     let tail: String = material.chars().skip(count.saturating_sub(TAIL)).collect();
     format!("{head}\u{2026}{tail}")
-}
-
-/// [`MemberState`] as its badge text.
-fn state_label(state: MemberState) -> &'static str {
-    match state {
-        MemberState::Active => "active",
-        MemberState::Revoked => "revoked",
-    }
 }
 
 /// [`Provenance`] as its badge text.

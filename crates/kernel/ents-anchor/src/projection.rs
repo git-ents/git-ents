@@ -55,6 +55,21 @@ pub enum Projection {
     Deleted,
 }
 
+impl Projection {
+    /// The outcome's canonical lowercase keyword -- the porcelain grammar's
+    /// own vocabulary (`current`, `relocated`, `outdated`, `deleted`), shared
+    /// by every surface that names an outcome without narrating its payload.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Relocated { .. } => "relocated",
+            Self::Outdated { .. } => "outdated",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
 /// Project `anchor` onto `target` (a revision in `repo`), degrading to
 /// [`project_from_context`] once `anchor`'s own commit has been garbage
 /// collected (`anchor.fuzzy-fallback`) — the one entry point most callers
@@ -454,6 +469,16 @@ mod tests {
 
     fn range(start: u64, end: u64) -> Option<LineRange> {
         Some(LineRange { start, end })
+    }
+
+    #[rstest]
+    #[case::current(Projection::Current, "current")]
+    #[case::relocated(Projection::Relocated { path: "f".to_owned(), lines: None }, "relocated")]
+    #[case::outdated(Projection::Outdated { path: "f".to_owned() }, "outdated")]
+    #[case::deleted(Projection::Deleted, "deleted")]
+    // @relation(anchor.projection, scope=function, role=Verifies)
+    fn label_is_the_porcelain_keyword(#[case] projection: Projection, #[case] expected: &str) {
+        assert_eq!(projection.label(), expected);
     }
 
     /// One post-capture edit per taxonomy row of

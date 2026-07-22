@@ -36,6 +36,16 @@ pub enum Status {
     Error,
 }
 
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Error => "error",
+        })
+    }
+}
+
 /// A recorded result: the outcome of running one effect against one
 /// commit, living at `refs/meta/results/<effect>/<short-oid>`
 /// (`namespace::result_ref`) or the self-run mirror.
@@ -113,6 +123,15 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::pass(Status::Pass, "pass")]
+    #[case::fail(Status::Fail, "fail")]
+    #[case::error(Status::Error, "error")]
+    // @relation(model.result-taxonomy, scope=function, role=Verifies)
+    fn status_displays_lowercase(#[case] status: Status, #[case] expected: &str) {
+        assert_eq!(status.to_string(), expected);
+    }
 
     #[rstest]
     #[case::pass(Status::Pass)]

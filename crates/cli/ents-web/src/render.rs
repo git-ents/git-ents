@@ -26,10 +26,11 @@ pub type FieldRow = (&'static str, String);
 /// pair per field, in declaration order.
 ///
 /// A field's value renders via its own `Display` impl when it has one
-/// (plain text, no `Type::Foo(...)` wrapper -- what a `String` or a
-/// `MemberId` newtype gives), and falls back to `Debug` otherwise (every
-/// entity struct in `ents-model`/`ents-forge`/`ents-kiln` derives `Debug`,
-/// so an enum field like [`ents_model::MemberState`] still renders its
+/// (plain text, no `Type::Foo(...)` wrapper -- what a `String`, a
+/// `MemberId` newtype, or an enum like [`ents_model::MemberState`] with its
+/// own canonical `Display` gives), and falls back to `Debug` otherwise
+/// (every entity struct in `ents-model`/`ents-forge`/`ents-kiln` derives
+/// `Debug`, so a field of an enum with no `Display` still renders its
 /// variant name rather than an opaque placeholder). A field this crate
 /// cannot even walk as a struct (called on a non-struct `T`) renders as an
 /// empty list, not a panic -- reflection is a UI convenience, never a
@@ -46,7 +47,7 @@ pub type FieldRow = (&'static str, String);
 /// assert_eq!(rows[1].0, "key");
 /// assert!(rows[1].1.contains("ssh-ed25519"));
 /// assert_eq!(rows[2].0, "state");
-/// assert_eq!(rows[2].1, "Active");
+/// assert_eq!(rows[2].1, "active");
 /// ```
 #[must_use]
 pub fn fields<T: Facet<'static>>(value: &T) -> Vec<FieldRow> {
@@ -344,7 +345,7 @@ mod tests {
             .iter()
             .find(|(name, _)| *name == "state")
             .expect("state field");
-        assert_eq!(state, "Active");
+        assert_eq!(state, "active");
         assert_eq!(member.state, MemberState::Active);
     }
 

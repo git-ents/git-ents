@@ -119,7 +119,7 @@ fn run_members(action: MembersAction, out: &mut impl std::io::Write) -> Result<(
             for (username, member) in commands::members::list(&root.refs, &root.objects)? {
                 let _ = writeln!(
                     out,
-                    "{username}\t{:?}\t{:?}",
+                    "{username}\t{}\t{:?}",
                     member.state, member.provenance
                 );
             }
@@ -146,7 +146,7 @@ fn run_members(action: MembersAction, out: &mut impl std::io::Write) -> Result<(
         }
         MembersAction::Check { key } => match commands::members::check(&root, key)? {
             Some((username, state)) => {
-                let _ = writeln!(out, "{username}\t{state:?}");
+                let _ = writeln!(out, "{username}\t{state}");
             }
             None => {
                 let _ = writeln!(out, "not a member");
@@ -184,7 +184,11 @@ fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()>
             let (effect, status) = commands::effect::show(&root, &name, at)?;
             let _ = writeln!(out, "trigger: {}", effect.trigger);
             let _ = writeln!(out, "run: {}", effect.run);
-            let _ = writeln!(out, "result: {status:?}");
+            let _ = writeln!(
+                out,
+                "result: {}",
+                status.map_or_else(|| "none".to_owned(), |status| status.to_string())
+            );
         }
         EffectAction::Add {
             name,
@@ -204,7 +208,7 @@ fn run_effect(action: EffectAction, out: &mut impl std::io::Write) -> Result<()>
         }
         EffectAction::Log { name } => {
             for (oid, status) in commands::effect::log(&root, &name)? {
-                let _ = writeln!(out, "{oid}\t{status:?}");
+                let _ = writeln!(out, "{oid}\t{status}");
             }
         }
     }
@@ -325,7 +329,18 @@ fn run_comment(action: CommentAction, out: &mut impl std::io::Write) -> Result<(
             if let Some((anchor, projection)) = projected {
                 let _ = writeln!(out, "path: {}", anchor.path);
                 let target = if worktree { "worktree" } else { rev.as_str() };
-                let _ = writeln!(out, "projection at {target}: {projection:?}");
+                let detail = match &projection {
+                    ents_anchor::Projection::Relocated {
+                        path,
+                        lines: Some(range),
+                    } => format!(" ({path}:{}-{})", range.start, range.end),
+                    ents_anchor::Projection::Relocated { path, lines: None }
+                    | ents_anchor::Projection::Outdated { path } => format!(" ({path})"),
+                    ents_anchor::Projection::Current | ents_anchor::Projection::Deleted => {
+                        String::new()
+                    }
+                };
+                let _ = writeln!(out, "projection at {target}: {}{detail}", projection.label());
             }
             let _ = writeln!(out, "body: {}", comment.body);
         }
@@ -481,14 +496,18 @@ fn run_review(action: ReviewAction, out: &mut impl std::io::Write) -> Result<()>
                     out,
                     "{}\t{member}\t{}\t{}",
                     ents_forge::abbreviate_id(&review_target),
-                    review.target(),
+                    ents_forge::abbreviate_id(&review.target().to_string()),
                     review.verdict
                 );
             }
         }
         ReviewAction::Show { target, member } => {
             let (review, thread) = commands::review::show(&root, &target, &member)?;
-            let _ = writeln!(out, "target: {}", review.target());
+            let _ = writeln!(
+                out,
+                "target: {}",
+                ents_forge::abbreviate_id(&review.target().to_string())
+            );
             let _ = writeln!(out, "verdict: {}", review.verdict);
             let _ = writeln!(out, "body: {}", review.body);
             for (comment_id, comment) in thread {
