@@ -376,7 +376,6 @@ git ents toolchain list|import|view|log
 git ents comment list|add|reply|resolve|reopen|show
 git ents issue list|show|new|edit
 git ents review new|withdraw|list|show
-git ents agent new|plan|confirm|list|show
 git ents inbox list|adopt
 git ents redact list|add <oid>
 git ents login
