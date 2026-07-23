@@ -92,7 +92,7 @@ impl PreFlight {
 /// let admin = Keypair::from_seed(1);
 /// enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
 /// let config: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
-/// write_meta_entity(&refs, &objects, config, &ents_gate::Config { epoch: Some(200), ..ents_gate::Config::default() }, Some(&admin), 200);
+/// write_meta_entity(&refs, &objects, config, &ents_gate::Config { epoch: Some(200) }, Some(&admin), 200);
 ///
 /// // A self-attested contributor's canonical issue push fails pre-flight,
 /// // and the inbox route is offered at once.

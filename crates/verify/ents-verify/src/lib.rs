@@ -26,10 +26,6 @@
 //!   exception to "skeleton, not solution").
 //! - [`effects`] — Phase 4 skeleton: trigger/dedup/results state shape.
 //! - [`durability`] — Phase 5 skeleton: crash/durability ordering.
-//! - [`agent_session`] — `docs/agent-sessions-plan.adoc` Phase 1b: a
-//!   fully-built (not skeleton) model of the agent-session lifecycle —
-//!   `planning ⇄ ready → running → done | failed` plus the confirm-binding
-//!   derived predicates Phase 1's `ents_forge::agent` module establishes.
 //!
 //! # The bounded universe
 //!
@@ -41,7 +37,6 @@
 //! this small is what makes exhaustive search (Phase 0.5) and bounded
 //! model checking (Phases 3-5) tractable at all.
 
-pub mod agent_session;
 pub mod durability;
 pub mod effects;
 pub mod receive;

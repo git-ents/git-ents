@@ -115,7 +115,6 @@ pub mod form;
 pub mod identity;
 pub(crate) mod markdown;
 pub mod pages;
-pub mod planner;
 pub mod render;
 pub mod router;
 pub mod session;

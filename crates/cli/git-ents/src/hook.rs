@@ -327,10 +327,9 @@ pub fn post_receive(
         let Some(effect) = read_effect(&root.refs, &root.objects, &effect_name)? else {
             continue;
         };
-        // `run_one`/`run_agent_exec` no longer resolve toolchain names
-        // themselves: resolve and materialize this effect's declared
-        // toolchains here, before handing the run loop an
-        // already-materialized slice.
+        // `run_one` no longer resolves toolchain names itself: resolve and
+        // materialize this effect's declared toolchains here, before
+        // handing the run loop an already-materialized slice.
         let mut toolchains = Vec::with_capacity(effect.toolchains.len());
         for toolchain_name in &effect.toolchains {
             let (_, recipe) =
@@ -339,83 +338,20 @@ pub fn post_receive(
             toolchains.push((toolchain_name.clone(), bin));
         }
 
-        // The `agent-exec` effect (`docs/agent-sessions-plan.adoc`'s Phase
-        // 2) needs the bespoke dispatch/claim/finalize handling
-        // `crate::agent_worker::run_agent_exec` provides — a plain
-        // pass/fail result on a single ref, `run_one`'s own contract,
-        // cannot express "claim, run a sandbox, and land the session's
-        // terminal state, its result, and its result branch atomically."
-        // Every other effect keeps the ordinary single-ref path.
-        if effect_name == crate::agent_worker::AGENT_EXEC_NAME {
-            crate::agent_worker::run_agent_exec(
-                &root.refs,
-                &root.objects,
-                &root.events,
-                executor,
-                scratch,
-                &toolchains,
-                &effect.run,
-                oid,
-                ents_model::MemberId::new(crate::root::HOSTED_WORKER_NAME),
-                crate::root::HOSTED_WORKER_NAME.to_owned(),
-                &author,
-                &|payload| signer.sign(payload),
-                Mode::Mandatory,
-                &root.credentials,
-            )?;
-        } else if effect_name == crate::plan_worker::AGENT_PLAN_NAME {
-            // The `agent-plan` effect (`docs/agent-sessions-plan.adoc`'s
-            // Phase 4) needs the same bespoke handling `agent-exec` does,
-            // for the same reason: a plain pass/fail result on a single
-            // ref cannot express "draft a plan and land it atomically with
-            // this effect's own result."
-            crate::plan_worker::run_agent_plan(
-                &root.refs,
-                &root.objects,
-                &root.events,
-                executor,
-                scratch,
-                &toolchains,
-                &effect.run,
-                oid,
-                &author,
-                &|payload| signer.sign(payload),
-                Mode::Mandatory,
-                &root.credentials,
-            )?;
-        } else if effect_name == crate::review_worker::AGENT_REVIEW_NAME {
-            // The `agent-review` effect (`docs/agent-sessions-plan.adoc`'s
-            // Phase 5) needs its own bespoke handling too, but for the
-            // opposite reason `agent-exec`/`agent-plan` do: it runs no
-            // sandboxed command at all (`crate::review_worker`'s own doc),
-            // so `executor`/`toolchains`/`effect.run` — resolved above for
-            // every effect uniformly — are simply unused for this one.
-            crate::review_worker::run_agent_review(
-                &root.refs,
-                &root.objects,
-                &root.events,
-                oid,
-                ents_model::MemberId::new(crate::root::HOSTED_WORKER_NAME),
-                &author,
-                &|payload| signer.sign(payload),
-                Mode::Mandatory,
-            )?;
-        } else {
-            run_one(
-                &root.refs,
-                &root.objects,
-                &root.events,
-                executor,
-                scratch,
-                &toolchains,
-                oid,
-                &effect,
-                result_ref,
-                &author,
-                |payload| signer.sign(payload),
-                Mode::Mandatory,
-            )?;
-        }
+        run_one(
+            &root.refs,
+            &root.objects,
+            &root.events,
+            executor,
+            scratch,
+            &toolchains,
+            oid,
+            &effect,
+            result_ref,
+            &author,
+            |payload| signer.sign(payload),
+            Mode::Mandatory,
+        )?;
         ran = ran.saturating_add(1);
     }
     Ok(ran)

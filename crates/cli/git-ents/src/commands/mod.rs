@@ -9,7 +9,6 @@
 )]
 
 pub mod account;
-pub mod agent;
 pub mod bootstrap;
 pub mod comment;
 pub mod effect;

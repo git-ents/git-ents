@@ -68,7 +68,7 @@
 //! // Enroll (bootstrap) and turn verification on by setting the epoch.
 //! enroll_member(&refs, &objects, "jdc", &jdc, Provenance::AdminRegistered, 100);
 //! let config: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
-//! write_meta_entity(&refs, &objects, config, &Config { epoch: Some(200), ..Config::default() }, Some(&jdc), 200);
+//! write_meta_entity(&refs, &objects, config, &Config { epoch: Some(200) }, Some(&jdc), 200);
 //!
 //! let issue = Issue {
 //!     title: "t".into(), body: "b".into(), state: "open".into(),

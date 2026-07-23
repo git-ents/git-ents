@@ -1,25 +1,17 @@
-//! The verification epoch and designated-worker roster, read from
-//! `refs/meta/config` (`gate.epoch`, and this crate's own doc on
-//! "Finer-grained, config-stored refname rules").
+//! The verification epoch, read from `refs/meta/config` (`gate.epoch`).
 
 use facet::Facet;
 use gix_hash::ObjectId;
 use gix_object::Find;
 use gix_ref_store::RefStoreRead;
 
-use ents_model::MemberId;
-
 use crate::error::{Error, Result};
 use crate::object::expect_commit;
 
 /// The slice of `refs/meta/config`'s typed tree the gate consults: the
-/// verification epoch (`gate.epoch`) and the designated-worker roster this
-/// crate's own module doc names as "a later, additive narrowing" —
-/// `docs/agent-sessions-plan.adoc`'s Phase 2a is the first consumer,
-/// narrowing agent-session advance authorization
-/// (`ents-gate`'s `owner_mutation`); a future narrowing of canonical
-/// `refs/meta/results/<effect>/*` (`effect.official`) would read the same
-/// field.
+/// verification epoch (`gate.epoch`). A later, additive narrowing (e.g. a
+/// designated-worker roster for `effect.official`) would read the same
+/// tree, alongside this field.
 ///
 /// `model.sdoc` defines no Config entity yet, so this struct is the
 /// first (and currently only) definition of the config tree's shape; it
@@ -41,7 +33,7 @@ use crate::object::expect_commit;
 /// ```
 /// use ents_gate::Config;
 ///
-/// let config = Config { epoch: Some(1_700_000_000), ..Config::default() };
+/// let config = Config { epoch: Some(1_700_000_000) };
 /// let (root, store) = facet_git_tree::serialize(&config).expect("serialize");
 /// let back: Config = facet_git_tree::deserialize(&root, &store).expect("deserialize");
 /// assert_eq!(back, config);
@@ -52,15 +44,6 @@ pub struct Config {
     /// When the tip invariant came into force, seconds since the Unix
     /// epoch; `None` while verification has never been enabled.
     pub epoch: Option<u64>,
-    /// Members trusted, alongside an entity's genesis signer and any
-    /// admin-registered member, to advance an owner-mutation-gated
-    /// namespace on another member's behalf — today, an agent session's
-    /// claim/finish advance (`docs/agent-sessions-plan.adoc`'s Phase 2a);
-    /// eventually the same roster narrowing `refs/meta/results/<effect>/*`
-    /// per `effect.official`'s "designated worker keys", once that
-    /// narrowing lands. Empty by default: no worker is designated until a
-    /// signed config write adds one.
-    pub workers: Vec<MemberId>,
 }
 
 /// The config recorded by the tree of the commit at `oid`, or an
@@ -105,17 +88,4 @@ fn current_config(refs: &dyn RefStoreRead, objects: &dyn Find) -> Result<Config>
 // @relation(gate.epoch, gate.policy-as-state, scope=function)
 pub(crate) fn current_epoch(refs: &dyn RefStoreRead, objects: &dyn Find) -> Result<Option<u64>> {
     Ok(current_config(refs, objects)?.epoch)
-}
-
-/// The designated-worker roster currently in force, read from
-/// `refs/meta/config`'s tip; empty when the config ref does not exist or
-/// designates no workers — [`crate::verify::verify`]'s AgentSession advance
-/// rule ORs this into the existing genesis-signer/admin check
-/// (`docs/agent-sessions-plan.adoc`'s Phase 2a).
-// @relation(gate.policy-as-state, scope=function)
-pub(crate) fn designated_workers(
-    refs: &dyn RefStoreRead,
-    objects: &dyn Find,
-) -> Result<Vec<MemberId>> {
-    Ok(current_config(refs, objects)?.workers)
 }

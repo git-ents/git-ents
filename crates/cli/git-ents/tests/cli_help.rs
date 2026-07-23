@@ -40,7 +40,6 @@ fn help_names_every_subcommand_family() {
         "toolchain",
         "comment",
         "issue",
-        "agent",
         "review",
         "inbox",
         "redact",

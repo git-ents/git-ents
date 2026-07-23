@@ -73,18 +73,14 @@
 //! assert!(root.refs.get(name.as_ref()).expect("reads").is_some());
 //! ```
 
-pub mod agent_worker;
 pub mod cli;
 pub mod commands;
 pub mod compose;
-pub mod credentials;
 pub mod error;
 pub mod exe;
 pub mod hook;
 pub mod mutate;
 pub mod package;
-pub mod plan_worker;
-pub mod review_worker;
 pub mod root;
 pub mod sign;
 

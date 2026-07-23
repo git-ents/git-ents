@@ -61,26 +61,6 @@ pub fn comment_ref(id: &str) -> Result<FullName> {
     build(format!("refs/meta/comments/{id}"))
 }
 
-/// The ref holding the agent session named `id` — `refs/meta/agent-sessions/<id>`
-/// (`meta-ref.granularity`), where `<id>` is the oid of the session's own
-/// genesis commit — the same sign-then-name shape [`issue_ref`] and
-/// [`comment_ref`] bind by (`meta-ref.identity-binding`); `ents_forge::agent`
-/// (`docs/agent-sessions-plan.adoc`'s Phase 1) carries the entity and
-/// extracts `id` from the proposed ref the same way `ents-forge`'s own
-/// `genesis_id` does for a comment or issue.
-///
-/// [`classify`] routes this namespace to [`Namespace::AgentSession`]
-/// (`docs/agent-sessions-plan.adoc`'s Phase 1b), which `ents-gate`'s
-/// identity-binding and owner-mutation checks treat exactly like
-/// [`Namespace::Comment`] and [`Namespace::Issue`]: hash-identified by the
-/// genesis oid, mutable only by the genesis signer or an admin. The
-/// still-unwritten `meta-ref.adoc` namespace entry and `model.agent-session`
-/// section remain owner spec text (`docs/agent-sessions-plan.adoc`'s "Owner
-/// spec text needed").
-pub fn agent_session_ref(id: &str) -> Result<FullName> {
-    build(format!("refs/meta/agent-sessions/{id}"))
-}
-
 /// The ref holding one reviewer's review of one commit —
 /// `refs/meta/reviews/<target>/<member>` (`meta-ref.granularity`,
 /// `model.review`), where `<target>` is the oid of the first commit the
@@ -383,11 +363,6 @@ pub enum Namespace {
     Issue,
     /// `refs/meta/comments/*`.
     Comment,
-    /// `refs/meta/agent-sessions/*` — hash-identified by the session's own
-    /// genesis commit oid, the same shape as [`Namespace::Comment`] and
-    /// [`Namespace::Issue`] (`docs/agent-sessions-plan.adoc`'s Phase 1
-    /// [`agent_session_ref`], Phase 1b for this classification).
-    AgentSession,
     /// `refs/meta/reviews/*`.
     Review,
     /// `refs/meta/pins/*` — retention pins (`model.review-pin`,
@@ -469,7 +444,6 @@ pub fn classify(name: &FullNameRef) -> Option<Namespace> {
         "member" => Some(Namespace::Member),
         "issues" => Some(Namespace::Issue),
         "comments" => Some(Namespace::Comment),
-        "agent-sessions" => Some(Namespace::AgentSession),
         "reviews" => Some(Namespace::Review),
         "pins" => Some(Namespace::Pin),
         "effects" => Some(Namespace::Effect),
@@ -543,7 +517,6 @@ mod tests {
     #[case::outside_meta("refs/heads/main", None)]
     #[case::unrecognized("refs/meta/index/abc", Some(Namespace::Unknown))]
     #[case::novel_namespace("refs/meta/widgets/7", Some(Namespace::Unknown))]
-    #[case::agent_session("refs/meta/agent-sessions/deadbeef", Some(Namespace::AgentSession))]
     // @relation(meta-ref.namespace, meta-ref.granularity, scope=function, role=Verifies)
     fn classify_matches_the_namespace_table(
         #[case] refname: &str,
@@ -605,7 +578,6 @@ mod tests {
             member_ref(&id).expect("valid"),
             issue_ref("42").expect("valid"),
             comment_ref("abc").expect("valid"),
-            agent_session_ref("abc").expect("valid"),
             review_ref("deadbeef", &id).expect("valid"),
             review_pin_ref("deadbeef", &id).expect("valid"),
             effect_ref("unit").expect("valid"),

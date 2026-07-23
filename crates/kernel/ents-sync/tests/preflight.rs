@@ -99,10 +99,7 @@ fn forge() -> (MemRefStore, ObjectStore, Keypair, Keypair) {
         &refs,
         &objects,
         config,
-        &Config {
-            epoch: Some(200),
-            ..Config::default()
-        },
+        &Config { epoch: Some(200) },
         Some(&admin),
         200,
     );

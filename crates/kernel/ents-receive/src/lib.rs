@@ -70,7 +70,7 @@
 //! enroll_member(&refs, &objects, "admin", &admin, Provenance::AdminRegistered, 100);
 //! let config_ref: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
 //! let tip = write_meta_entity(
-//!     &refs, &objects, config_ref.clone(), &Config { epoch: Some(200), ..Config::default() }, Some(&admin), 200,
+//!     &refs, &objects, config_ref.clone(), &Config { epoch: Some(200) }, Some(&admin), 200,
 //! );
 //!
 //! // The fixture already moved the ref; re-propose the same tip through

@@ -72,14 +72,11 @@
 //! (`effect.admin-only`), and self-attested members are refused
 //! canonical refs until promoted (`model.member-provenance`).
 //! Finer-grained, config-stored refname rules are a later, additive
-//! narrowing read from the same [`Config`] the epoch already lives on
-//! (`Config::workers`): `docs/agent-sessions-plan.adoc`'s Phase 2a is the
-//! first one, admitting a designated worker to advance any member's agent
-//! session (∪ genesis signer, ∪ admins) — `verify::owner_mutation`'s
-//! `Namespace::AgentSession` arm. Designating worker keys for one effect's
-//! canonical results namespace (`effect.official`) is the same roster,
-//! unbuilt until a caller needs it; `Config` itself moves to `ents-model`
-//! only once configuration grows fields no gate rule reads.
+//! narrowing read from the same [`Config`] the epoch already lives on —
+//! e.g. designating worker keys for one effect's canonical results
+//! namespace (`effect.official`) — unbuilt until a caller needs it;
+//! `Config` itself moves to `ents-model` only once configuration grows
+//! fields no gate rule reads.
 //!
 //! Acceptance-time semantics: a signature is judged against the member
 //! entity *currently in force* — the member ref's tip in the same
@@ -116,7 +113,7 @@
 //! // 2. The epoch-setting commit is the first gated tip of refs/meta/config.
 //! let config_ref: gix::refs::FullName = namespace::CONFIG_REF.try_into().expect("valid");
 //! let epoch_tip = write_meta_entity(
-//!     &refs, &objects, config_ref, &Config { epoch: Some(200), ..Config::default() }, Some(&key), 200,
+//!     &refs, &objects, config_ref, &Config { epoch: Some(200) }, Some(&key), 200,
 //! );
 //!
 //! // 3. From here on, every meta-ref update is judged by the tip invariant.

@@ -59,20 +59,6 @@
 //!   canonical infrastructure, which needs more trust than an ordinary
 //!   append).
 //!
-//! A second rule grows the set again, for Phase 1b of
-//! `docs/agent-sessions-plan.adoc` (the agent-sessions plan)'s lifecycle
-//! invariants, restated over three new session-specific facts
-//! ([`session_running`], [`session_plan_hash`], [`session_confirm_hash`]):
-//!
-//! - [`running_violation`](GateRules::running_violation) — a commit whose
-//!   agent-session meta status is `Running` must descend from a parent
-//!   whose own tree recorded a confirm leaf binding that parent's
-//!   plan-leaf hash; absent that parent, a session could reach `Running`
-//!   without ever having been confirmed against the plan a worker is about
-//!   to execute (`docs/agent-sessions-plan.adoc`'s Phase 1b: "a commit
-//!   whose meta status is running requires a parent whose tree contains a
-//!   confirm leaf binding that parent's plan-leaf hash").
-//!
 //! Two invariants are deliberately *not* encoded here, the gap marked
 //! rather than papered over:
 //!
@@ -161,20 +147,6 @@ ascent! {
     relation context(Oid, Oid);
     /// Objects the repository already has, or that arrive in this pack.
     relation object_exists(Oid);
-    /// A commit whose decoded agent-session meta status is `Running`
-    /// (`ents_forge::agent::Status::Running`,
-    /// `docs/agent-sessions-plan.adoc`'s Phase 1b) — the fact a real
-    /// extractor would derive from the commit's typed tree.
-    relation session_running(Oid);
-    /// (commit, plan-leaf content hash) — the agent session's plan-leaf
-    /// hash as recorded in this commit's own tree
-    /// (`AgentSession::plan_hash`), absent when the tree carries no plan
-    /// leaf.
-    relation session_plan_hash(Oid, Oid);
-    /// (commit, bound hash) — the plan-leaf hash this commit's own confirm
-    /// leaf binds (`AgentSession::confirm`), absent when the tree carries
-    /// no confirm leaf.
-    relation session_confirm_hash(Oid, Oid);
 
     // ---- IDB: derived relations ----
 
@@ -210,15 +182,6 @@ ascent! {
     /// A commit signed by an admin-registered member specifically.
     relation admin_signed(Oid);
     admin_signed(c.clone()) <-- signed_by(c, k), member(k, Role::Admin);
-
-    /// A `Running` commit whose immediate parent's own tree carries a
-    /// confirm leaf binding that same parent's plan-leaf hash — the parent
-    /// was `queued` the instant before the claim that produced this commit
-    /// (`docs/agent-sessions-plan.adoc`'s Phase 1b).
-    relation session_running_confirmed(Oid);
-    session_running_confirmed(c.clone()) <--
-        session_running(c), parent(c, p),
-        session_confirm_hash(p, h), session_plan_hash(p, h);
 
     // ---- Denial rules: any row here rejects the transaction ----
 
@@ -266,14 +229,6 @@ ascent! {
     effect_admin_violation(r.clone(), c.clone()) <--
         introduced(r, c), if r.starts_with("refs/meta/effects/"),
         !admin_signed(c);
-
-    /// A commit whose agent-session meta status is `Running` must have a
-    /// parent whose own tree carries a confirm leaf binding that parent's
-    /// plan-leaf hash — otherwise the session reached `Running` without a
-    /// confirmed plan (`docs/agent-sessions-plan.adoc`'s Phase 1b).
-    relation running_violation(Ref, Oid);
-    running_violation(r.clone(), c.clone()) <--
-        introduced(r, c), session_running(c), !session_running_confirmed(c);
 }
 
 /// Facts for one proposed transaction. In the real system these would be
@@ -296,12 +251,6 @@ pub struct Facts {
     pub context: Vec<(Oid, Oid)>,
     /// See [`GateRules::object_exists`].
     pub object_exists: Vec<(Oid,)>,
-    /// See [`GateRules::session_running`].
-    pub session_running: Vec<(Oid,)>,
-    /// See [`GateRules::session_plan_hash`].
-    pub session_plan_hash: Vec<(Oid, Oid)>,
-    /// See [`GateRules::session_confirm_hash`].
-    pub session_confirm_hash: Vec<(Oid, Oid)>,
 }
 
 /// Run every denial rule to a fixpoint over `facts`. An empty result means
@@ -317,9 +266,6 @@ pub fn gate(facts: Facts) -> Vec<String> {
         anchor: facts.anchor,
         context: facts.context,
         object_exists: facts.object_exists,
-        session_running: facts.session_running,
-        session_plan_hash: facts.session_plan_hash,
-        session_confirm_hash: facts.session_confirm_hash,
         ..GateRules::default()
     };
     rules.run();
@@ -350,12 +296,6 @@ pub fn gate(facts: Facts) -> Vec<String> {
             "effect-admin: {r}: {c} not signed by an admin-registered member"
         ));
     }
-    for (r, c) in &rules.running_violation {
-        out.push(format!(
-            "session-running: {r}: {c}'s session status is Running but no parent's confirm \
-             leaf binds that parent's plan-leaf hash"
-        ));
-    }
     out.sort();
     out
 }
@@ -367,7 +307,6 @@ mod tests {
     const ISSUE: &str = "refs/meta/issues/g";
     const COMMENT: &str = "refs/meta/comments/g2";
     const EFFECT: &str = "refs/meta/effects/ci";
-    const AGENT_SESSION: &str = "refs/meta/agent-sessions/g";
 
     fn base() -> Facts {
         Facts {
@@ -499,66 +438,5 @@ mod tests {
         let v = gate(f);
         assert!(v.iter().any(|m| m.starts_with("effect-admin:")), "{v:?}");
         assert!(!v.iter().any(|m| m.starts_with("signature:")), "{v:?}");
-    }
-
-    // ---- Agent-session lifecycle: `running_violation` ----
-    // (`docs/agent-sessions-plan.adoc`'s Phase 1b).
-
-    /// RED: `c1` claims the session (its status decodes as `Running`), but
-    /// its parent `g`'s tree carries no confirm leaf at all — `g` was never
-    /// queued, so the claim should never have been admitted.
-    #[test]
-    fn a_claim_whose_parent_was_never_confirmed_is_rejected() {
-        let mut f = base();
-        f.ref_update = vec![(AGENT_SESSION.into(), Some("g".into()), "c1".into())];
-        f.parent = vec![("c1".into(), "g".into())];
-        f.signed_by = vec![("c1".into(), "key:joey".into())];
-        f.session_running = vec![("c1".into(),)];
-        f.session_plan_hash = vec![("g".into(), "hash:plan-a".into())];
-        // No session_confirm_hash at all: `g` is awaiting confirmation, not
-        // queued.
-        let v = gate(f);
-        assert!(
-            v.iter()
-                .any(|m| m.starts_with("session-running:") && m.contains("c1")),
-            "{v:?}"
-        );
-    }
-
-    /// RED (the stale-confirm variant): `g`'s confirm leaf binds an older
-    /// plan hash than the one `g`'s own plan leaf now carries — a revision
-    /// that should have dropped the confirm, per
-    /// `ents_forge::agent::command::revise_plan`'s contract, evidently did
-    /// not. The claim built on top of it is still rejected.
-    #[test]
-    fn a_claim_whose_parent_confirm_binds_a_stale_plan_hash_is_rejected() {
-        let mut f = base();
-        f.ref_update = vec![(AGENT_SESSION.into(), Some("g".into()), "c1".into())];
-        f.parent = vec![("c1".into(), "g".into())];
-        f.signed_by = vec![("c1".into(), "key:joey".into())];
-        f.session_running = vec![("c1".into(),)];
-        f.session_plan_hash = vec![("g".into(), "hash:plan-b".into())];
-        f.session_confirm_hash = vec![("g".into(), "hash:plan-a".into())];
-        let v = gate(f);
-        assert!(
-            v.iter()
-                .any(|m| m.starts_with("session-running:") && m.contains("c1")),
-            "{v:?}"
-        );
-    }
-
-    /// GREEN: `c1` claims a session whose parent `g` was queued — `g`'s
-    /// confirm leaf binds exactly `g`'s own plan-leaf hash. The rule's
-    /// relation is empty; nothing else in the base fixture fires either.
-    #[test]
-    fn a_claim_whose_parent_was_confirmed_against_its_own_plan_passes() {
-        let mut f = base();
-        f.ref_update = vec![(AGENT_SESSION.into(), Some("g".into()), "c1".into())];
-        f.parent = vec![("c1".into(), "g".into())];
-        f.signed_by = vec![("c1".into(), "key:joey".into())];
-        f.session_running = vec![("c1".into(),)];
-        f.session_plan_hash = vec![("g".into(), "hash:plan-a".into())];
-        f.session_confirm_hash = vec![("g".into(), "hash:plan-a".into())];
-        assert!(gate(f).is_empty());
     }
 }

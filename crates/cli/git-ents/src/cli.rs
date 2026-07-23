@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use facet::Facet;
 use figue::{self as args, FigueBuiltins};
 
-pub use ents_forge::agent::AgentAction;
 pub use ents_forge::comment::CommentAction;
 pub use ents_forge::issue::IssueAction;
 pub use ents_forge::review::ReviewAction;
@@ -128,16 +127,6 @@ pub enum Top {
         /// The issue action to run.
         #[facet(args::subcommand)]
         action: IssueAction,
-    },
-    /// Manage agent sessions at `refs/meta/agent-sessions/<id>`: start one,
-    /// draft or redraft its plan, and confirm it for execution
-    /// (`docs/agent-sessions-plan.adoc`). Claiming and running a queued
-    /// session is the effect worker's job (`git-ents hook post-receive` on
-    /// the hosted root), not a subcommand here.
-    Agent {
-        /// The agent action to run.
-        #[facet(args::subcommand)]
-        action: AgentAction,
     },
     /// Review a commit: a verdict plus a body at
     /// `refs/meta/reviews/<target>/<member>`, with a retention pin at

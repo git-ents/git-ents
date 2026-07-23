@@ -53,7 +53,6 @@ use ents_effect::Executor;
 use ents_receive::{Mode, NullEventSink};
 use gix_ref_store::LooseRefStore;
 
-use crate::credentials::CredentialStore;
 use crate::error::{Error, Result};
 
 /// A real, on-disk object store: the repository's own odb, opened for
@@ -189,12 +188,6 @@ pub struct HostedRoot {
     /// The fixed `Executor` this root wires (`roots.single-node-hosted`): a
     /// `SpriteExecutor` targeting [`HOSTED_WORKER_NAME`].
     pub executor: Box<dyn Executor>,
-    /// Per-member BYOK credentials (`roots.config-isolation`), read once
-    /// from [`crate::credentials::CREDENTIALS_FILE_VAR`] — the seam
-    /// [`crate::agent_worker::run_agent_exec`]/
-    /// [`crate::plan_worker::run_agent_plan`] resolve a session's own
-    /// member's credential from before injecting it into a sandbox launch.
-    pub credentials: CredentialStore,
 }
 
 /// The Sprite name (and commit author name) the single-node hosted root's
@@ -215,23 +208,19 @@ impl HostedRoot {
     ///
     /// [`Error::Repo`] or [`Error::Refs`] if `path` is not a git
     /// repository; [`Error::Receive`] if the reconciliation scan itself
-    /// fails to read repository state; [`Error::Io`]/[`Error::InvalidArgument`]
-    /// if [`crate::credentials::CREDENTIALS_FILE_VAR`] names a credentials
-    /// file that cannot be read or is malformed.
+    /// fails to read repository state.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
         let refs = LooseRefStore::open(&path)?;
         let objects = QuarantineObjects::open(&path)?;
         let events = ents_receive::MemoryEventSink::default();
         ents_receive::reconcile(&refs, &objects, &events)?;
-        let credentials = CredentialStore::from_env()?;
         Ok(Self {
             path,
             refs,
             objects,
             events,
             executor: Box::new(ents_effect::SpriteExecutor::new(HOSTED_WORKER_NAME)),
-            credentials,
         })
     }
 

@@ -40,53 +40,6 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    // @relation(meta-ref.typed-tree, scope=function, role=Verifies)
-    #[test]
-    fn agent_session_round_trips_for_any_fields_and_collection_lengths(
-        member in any::<String>(),
-        created in any::<i64>(),
-        model in any::<String>(),
-        toolchain_names in prop::collection::vec(any::<String>(), 0..4),
-        base_ref in any::<String>(),
-        plan in proptest::option::of(any::<String>()),
-        thread in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..4),
-    ) {
-        use ents_forge::agent::{AgentSession, Confirm, ReviewPolicy, SessionMeta, ToolchainPin};
-
-        let toolchains: Vec<ToolchainPin> = toolchain_names
-            .into_iter()
-            .map(|name| ToolchainPin::new(name, gix_hash::ObjectId::null(gix_hash::Kind::Sha1)))
-            .collect();
-        let meta = SessionMeta::new(
-            MemberId::new(member),
-            created,
-            model,
-            toolchains,
-            base_ref,
-            ReviewPolicy::Manual,
-            None,
-        );
-        // A confirm can only exist alongside a plan in practice (the command
-        // layer refuses otherwise), but the typed tree itself places no such
-        // constraint on what round-trips — exercised here as `plan`'s own
-        // hash, present only when `plan` is.
-        let confirm = plan
-            .as_deref()
-            .map(|text| Confirm::new(
-                gix_object::compute_hash(gix_hash::Kind::Sha1, gix_object::Kind::Blob, text.as_bytes())
-                    .expect("hashing cannot fail"),
-                ReviewPolicy::Auto,
-            ));
-        let session = AgentSession { meta, plan, confirm, thread };
-        let (id, store) = serialize(&session).expect("serialize");
-        let back: AgentSession = deserialize(&id, &store).expect("deserialize");
-        prop_assert_eq!(back, session);
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-
     // @relation(meta-ref.typed-tree, model.comment, scope=function, role=Verifies)
     #[test]
     fn comment_round_trips_for_any_fields(
