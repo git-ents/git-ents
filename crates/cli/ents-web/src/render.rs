@@ -54,6 +54,7 @@ pub type FieldRow = (&'static str, String);
 /// assert_eq!(rows[2].0, "state");
 /// assert_eq!(rows[2].1, "active");
 /// ```
+// @relation(model.presentation, scope=function)
 #[must_use]
 pub fn fields<T: Facet<'static>>(value: &T) -> Vec<FieldRow> {
     let walked = ents_forge::present::fields(value);
@@ -405,7 +406,7 @@ mod tests {
     /// refname-bound name, `ents::skip_empty` hides an empty set, and the
     /// list narrows to the declared `ents::col` columns.
     #[rstest]
-    // @relation(roots.web-agnostic, scope=function, role=Verifies)
+    // @relation(model.presentation, roots.web-agnostic, scope=function, role=Verifies)
     fn ents_attributes_govern_the_view_and_the_list_columns() {
         let effect = Effect {
             name: "unit".to_owned(),

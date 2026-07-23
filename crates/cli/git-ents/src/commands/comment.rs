@@ -192,6 +192,9 @@ pub fn show(
 /// (`path` alone for a whole-file anchor) and `-` when there is no anchor
 /// or the file is gone. Records are separated by one blank line — a blank
 /// body line renders as a lone tab, so it can never terminate a record.
+/// This is the record grammar every other family's porcelain shares
+/// (`lens.porcelain`, via [`ents_forge::present::record`]).
+// @relation(lens.porcelain, scope=function)
 #[must_use]
 pub fn porcelain(rows: &[Listed]) -> String {
     let mut out = String::new();

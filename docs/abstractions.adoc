@@ -367,17 +367,25 @@ Two correctness anchors: `git effect run` shares the identical materialization a
 Porcelain:
 
 ....
-git ents setup
+git ents setup [--hosted]
+git ents bootstrap <username>
 git ents members list|add|remove|revoke|unrevoke|check
-git ents account create|link
-git ents effect ...
-git ents toolchain ...
-git ents comment ...
+git ents account show|create
+git ents effect list|show|add|run|log
+git ents toolchain list|import|view|log
+git ents comment list|add|reply|resolve|reopen|show
+git ents issue list|show|new|edit
+git ents review new|withdraw|list|show
+git ents agent new|plan|confirm|list|show
 git ents inbox list|adopt
-git ents redact <oid>
+git ents redact list|add <oid>
 git ents login
-git ents serve | server
+git ents serve [--hosted]
+git ents lsp
+git ents hook pre-receive|post-receive|reconcile  # plumbing for git's own hooks
 ....
+
+The entity listings (`comment list`, `issue list`, `review list`, `effect list`, `effect log`) take `--porcelain`, emitting one shared machine-readable record grammar — the format `git ents comment list --porcelain` established — rather than a per-family format.
 
 Revocation is a state on the member entity, not deletion — a revoked key must be explicitly rejected, whereas deletion would merely make old signatures unverifiable.
 

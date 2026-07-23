@@ -21,6 +21,26 @@ cannot parse; only the clients that interpret a given entity type need
 to recompile.
 --
 
+[role="requirement", id="model.presentation"]
+.Presentation Policy Lives on the Shape
+--
+An entity's presentation policy — which fields render and in what
+order, which lead a listing, which are omitted when empty, which
+values are ids (abbreviated for humans, full in machine-readable
+output), and which field is the body — MUST be declared once, as
+`ents` attributes on the fields of the entity's own `#[derive(Facet)]`
+shape (<<model.extensibility>>), and every surface MUST consume it by
+walking that shape generically: no surface may re-encode per-entity
+presentation policy in its own code, and rendering MUST NOT branch on
+the concrete entity type.
+A surface MAY append a genuinely domain-specific line — a comment's
+projected anchor, a review's thread — beside the generic walk, never
+in place of it.
+An action field composed in the editor when its flag is omitted MUST
+likewise be declared on the action's own shape; the same declaration
+selects the web form's long-text control (<<lens.forms>>).
+--
+
 '''''
 
 === Member

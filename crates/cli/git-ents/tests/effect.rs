@@ -28,7 +28,7 @@ fn run(fixture: &common::Fixture, args: &[&str]) -> String {
 /// (`lens.parity`): a `<name>` head line, then `trigger`, `toolchains`
 /// (omitted when empty), and `run` keyed lines, records blank-line
 /// separated; the human listing stays `<name>\t<trigger>`.
-// @relation(lens.parity, model.effect-definition, roots.local, scope=function, role=Verifies)
+// @relation(lens.porcelain, lens.parity, model.effect-definition, roots.local, scope=function, role=Verifies)
 #[test]
 fn effect_list_porcelain_emits_one_record_per_definition() {
     let fixture = common::Fixture::new(1);
@@ -67,7 +67,7 @@ fn effect_list_porcelain_emits_one_record_per_definition() {
 /// `git ents effect log --porcelain` emits one `<commit> <status>` record
 /// per judged commit, the commit's full oid (`model.result-identity`,
 /// `lens.parity`); the human listing abbreviates it like git does.
-// @relation(lens.parity, model.result-identity, roots.local, scope=function, role=Verifies)
+// @relation(lens.porcelain, lens.parity, model.result-identity, roots.local, scope=function, role=Verifies)
 #[test]
 fn effect_log_porcelain_carries_the_full_judged_commit_oid() {
     let fixture = common::Fixture::new(2);

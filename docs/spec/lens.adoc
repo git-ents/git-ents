@@ -99,3 +99,37 @@ projected location, and body, sufficient for an agent to enumerate and
 resolve every open comment in the working tree without any editor
 attached.
 --
+
+[role="requirement", id="lens.porcelain"]
+.One Record Grammar for Every Porcelain
+--
+Every entity family's `--porcelain` listing MUST emit the one record
+grammar `git ents comment list --porcelain` established
+(<<lens.parity>>), never a format of its own: a head line of
+space-separated tokens leading with the record's id, one
+`<field> <value>` line per remaining field — omitted when the field is
+declared hide-when-empty and is empty (<<model.presentation>>) — each
+body line prefixed with one tab, and records separated by exactly one
+blank line.
+A blank body line MUST render as a lone tab, so only the record
+separator is ever a true blank line.
+Every id in machine-readable output MUST be full, never the abbreviated
+form human listings use (<<model.issue>>).
+--
+
+[role="requirement", id="lens.forms"]
+.Web Forms Derive from the Action Shape
+--
+A web form for an entity action MUST derive its controls from the same
+`#[derive(Facet)]` action shape whose flags the CLI grammar parses —
+one field list, declared on the action variant, obeyed by both
+frontends — and parsing the posted form MUST produce that same action
+shape, dispatched to the same library operation the CLI calls
+(<<lens.parity>>).
+A field the web cannot supply (a value bound into the route's own path,
+a local signing-key path) MUST be excluded by what its declaration
+says, never by a per-route field list; an unposted field MUST take the
+declaration's own default, exactly as the CLI defaults an omitted flag.
+A page MAY override a single field's control (a state picker, a
+verdict picker), but the override MUST feed the same parse.
+--

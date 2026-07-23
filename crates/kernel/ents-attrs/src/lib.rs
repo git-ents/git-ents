@@ -11,6 +11,7 @@
 
 extern crate self as ents_attrs;
 
+// @relation(model.presentation, scope=file)
 facet::define_attr_grammar! {
     ns "ents";
     crate_path ::ents_attrs;

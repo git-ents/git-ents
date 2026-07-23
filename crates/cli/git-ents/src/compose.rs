@@ -70,7 +70,9 @@ pub fn body<T: Facet<'static>>(variant: &str, body: Option<String>) -> Result<St
 
 /// Refuse unless `T`'s variant marks `field` with `ents::compose` — the
 /// attribute on the action enum, not this module, is what licenses the
-/// editor fallback; an unmarked omitted flag is simply a missing argument.
+/// editor fallback (`model.presentation`); an unmarked omitted flag is
+/// simply a missing argument.
+// @relation(model.presentation, scope=function)
 fn require_compose<T: Facet<'static>>(variant: &str, field: &str) -> Result<()> {
     let marked = match T::SHAPE.ty {
         Type::User(UserType::Enum(shape)) => shape

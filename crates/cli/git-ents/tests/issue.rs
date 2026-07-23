@@ -108,7 +108,7 @@ fn issue_new_aborts_on_an_empty_editor_message() {
 /// (`lens.parity`, `model.issue`): full ids on a space-separated head
 /// line, `title`/`assignees`/`labels` keyed lines (empties omitted), the
 /// body tab-prefixed line by line, records blank-line separated.
-// @relation(lens.parity, model.issue, roots.local, scope=function, role=Verifies)
+// @relation(lens.porcelain, lens.parity, model.issue, roots.local, scope=function, role=Verifies)
 #[test]
 fn issue_list_porcelain_emits_full_id_records() {
     let fixture = common::Fixture::new(5);

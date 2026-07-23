@@ -287,7 +287,7 @@ fn withdraw_preserves_verdict_and_body_and_flips_only_state() {
 /// (`lens.parity`, `model.review`): a head line of full target segment,
 /// member, full reviewed oid, verdict, and state, then the body
 /// tab-prefixed — and a withdrawal shows up as the state token.
-// @relation(lens.parity, model.review, roots.local, scope=function, role=Verifies)
+// @relation(lens.porcelain, lens.parity, model.review, roots.local, scope=function, role=Verifies)
 #[test]
 fn review_list_porcelain_emits_full_id_records() {
     let fixture = common::Fixture::new(6);

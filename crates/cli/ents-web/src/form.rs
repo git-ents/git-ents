@@ -44,6 +44,7 @@ pub struct Spec<'a> {
 /// Render the form `T`'s variant `variant` declares: one derived control
 /// per web-suppliable field in declaration order, `spec.overrides`
 /// slotted in place, the session's CSRF hidden field leading.
+// @relation(lens.forms, scope=function)
 #[must_use]
 pub fn action_form<T: Facet<'static>>(variant: &str, session: &Session, spec: &Spec<'_>) -> Markup {
     let fields = variant_fields::<T>(variant).unwrap_or_default();
@@ -80,6 +81,7 @@ pub fn action_form<T: Facet<'static>>(variant: &str, session: &Session, spec: &S
 ///
 /// [`Error::InvalidArgument`] if `T` has no such variant, a field's shape
 /// is not one this mapping speaks, or the value cannot be set.
+// @relation(lens.forms, scope=function)
 pub fn parse_action<T: Facet<'static>>(variant: &str, pairs: &[(String, String)]) -> Result<T> {
     let malformed = |source: &dyn std::fmt::Display| {
         Error::InvalidArgument(format!("malformed {variant} form: {source}"))
@@ -242,7 +244,7 @@ mod tests {
     /// field is a textarea, a `Vec` a comma input, a `PathBuf` (`--key`)
     /// and a positional id never render, and an override slots in place.
     #[rstest]
-    // @relation(lens.parity, scope=function, role=Verifies)
+    // @relation(lens.forms, lens.parity, scope=function, role=Verifies)
     fn action_form_derives_controls_from_the_variant_shape() {
         let markup = action_form::<IssueAction>(
             "New",
@@ -282,7 +284,7 @@ mod tests {
     /// and whitespace, an empty optional is `None`, the unposted `--key`
     /// defaults, and unknown pairs (csrf) are ignored.
     #[rstest]
-    // @relation(lens.parity, scope=function, role=Verifies)
+    // @relation(lens.forms, lens.parity, scope=function, role=Verifies)
     fn parse_action_reads_the_posted_pairs_into_the_variant() {
         let action: IssueAction = parse_action(
             "New",
@@ -318,7 +320,7 @@ mod tests {
     /// An unposted field takes the declaration's own default — the same
     /// `default = "open"` the CLI applies to an omitted flag.
     #[rstest]
-    // @relation(lens.parity, scope=function, role=Verifies)
+    // @relation(lens.forms, lens.parity, scope=function, role=Verifies)
     fn parse_action_defaults_an_unposted_field_from_the_declaration() {
         let action: ReviewAction =
             parse_action("New", &pairs(&[("verdict", "approve")])).expect("parses");

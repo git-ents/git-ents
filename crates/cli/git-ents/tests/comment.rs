@@ -190,8 +190,8 @@ fn comment_add_aborts_on_an_empty_editor_body() {
 
 /// Two records separate with exactly one blank line, and an unanchored
 /// reply renders `-` for projection and location — the porcelain grammar
-/// an agent parses (`lens.parity`).
-// @relation(lens.parity, scope=function, role=Verifies)
+/// an agent parses (`lens.porcelain`, `lens.parity`).
+// @relation(lens.porcelain, lens.parity, scope=function, role=Verifies)
 #[test]
 fn porcelain_separates_records_and_renders_unanchored_comments() {
     let fixture = common::Fixture::new(1);

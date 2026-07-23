@@ -7,6 +7,7 @@
 //! comment's projected anchor, a review's thread) appends it beside this
 //! module's output rather than reaching into the walk.
 
+// @relation(model.presentation, scope=file)
 use facet::{Facet, Field, Peek};
 
 /// One rendered field: its declared name and display value.
@@ -112,7 +113,7 @@ pub fn columns<T: Facet<'static>>(value: &T) -> Vec<String> {
 /// `id` then each `ents::head` field's value, space-separated; one
 /// `<name> <value>` line per remaining field (omitted when
 /// `ents::skip_empty` and empty); the `ents::body` field's lines each
-/// tab-prefixed. Ids render full, never abbreviated.
+/// tab-prefixed. Ids render full, never abbreviated (`lens.porcelain`).
 ///
 /// # Examples
 ///
@@ -128,6 +129,7 @@ pub fn columns<T: Facet<'static>>(value: &T) -> Vec<String> {
 ///     "unit\ntrigger rev(refs/heads/main)\nrun cargo test\n"
 /// );
 /// ```
+// @relation(lens.porcelain, scope=function)
 #[must_use]
 pub fn record<T: Facet<'static>>(id: &str, value: &T) -> String {
     let rows = rows(value, Audience::Porcelain);
@@ -197,7 +199,9 @@ pub fn fields<T: Facet<'static>>(value: &T) -> Vec<PresentedField> {
 }
 
 /// [`record`] over every `(id, entity)` row, records separated by one
-/// blank line — the whole `--porcelain` output for a listing.
+/// blank line — the whole `--porcelain` output for a listing
+/// (`lens.porcelain`).
+// @relation(lens.porcelain, scope=function)
 #[must_use]
 pub fn porcelain<T: Facet<'static>>(rows: &[(String, T)]) -> String {
     rows.iter()
@@ -363,7 +367,7 @@ mod tests {
     /// an issue and a comment with each one's own field policy, no branch
     /// on the concrete type anywhere in this module.
     #[rstest]
-    // @relation(model.issue, model.comment, scope=function, role=Verifies)
+    // @relation(model.presentation, model.issue, model.comment, scope=function, role=Verifies)
     fn view_orders_lines_by_declaration_with_the_body_last_and_empties_skipped() {
         let rendered = view(&issue()).to_string();
         assert_eq!(
@@ -387,7 +391,7 @@ mod tests {
     /// `model.issue`: human columns abbreviate id-valued fields the way
     /// git abbreviates oids; head columns lead, then plain columns.
     #[rstest]
-    // @relation(model.issue, model.review, scope=function, role=Verifies)
+    // @relation(model.presentation, model.issue, model.review, scope=function, role=Verifies)
     fn columns_lead_with_head_fields_and_abbreviate_ids() {
         assert_eq!(
             columns(&issue()),
@@ -410,7 +414,7 @@ mod tests {
     /// id and full field values on a space-separated head line, keyed
     /// lines for the rest, and the body tab-prefixed line by line.
     #[rstest]
-    // @relation(lens.parity, model.issue, model.review, scope=function, role=Verifies)
+    // @relation(lens.porcelain, lens.parity, model.issue, model.review, scope=function, role=Verifies)
     fn record_renders_full_ids_keyed_lines_and_a_tab_prefixed_body() {
         let id = "89abcdef0123456789abcdef0123456789abcdef";
         assert_eq!(
@@ -429,7 +433,7 @@ mod tests {
     /// Records separate with exactly one blank line, mirroring the comment
     /// porcelain grammar.
     #[rstest]
-    // @relation(lens.parity, scope=function, role=Verifies)
+    // @relation(lens.porcelain, lens.parity, scope=function, role=Verifies)
     fn porcelain_separates_records_with_one_blank_line() {
         let rows = vec![
             ("a".repeat(40), issue()),
